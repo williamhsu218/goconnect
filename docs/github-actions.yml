@@ -1,0 +1,36 @@
+name: Source checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: Transport/go.mod
+          cache-dependency-path: Transport/go.sum
+      - name: Swift tests and application build
+        run: swift test
+      - name: Go tests with race detector
+        working-directory: Transport
+        run: go test -race -count=1 -timeout 120s ./...
+      - name: Go static checks and module integrity
+        working-directory: Transport
+        run: |
+          go vet ./...
+          go mod verify
+      - name: Known Go vulnerability scan
+        working-directory: Transport
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
