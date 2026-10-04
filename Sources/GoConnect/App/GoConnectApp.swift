@@ -12,7 +12,7 @@ struct GoConnectApp: App {
         }
         .defaultSize(width: 980, height: 700)
         .windowResizability(.contentMinSize)
-        .windowStyle(.hiddenTitleBar)
+        .windowStyle(.titleBar)
         .commands {
             SidebarCommands()
             CommandGroup(replacing: .newItem) {
@@ -33,7 +33,7 @@ struct GoConnectApp: App {
         }
         Settings {
             PreferencesView(showMenuBar: { delegate.menuBar?.restoreAndShow() })
-                .frame(width: 440, height: 280)
+                .frame(width: 480, height: 480)
         }
     }
 }

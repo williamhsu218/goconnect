@@ -26,16 +26,21 @@ struct ProfilesView: View {
         HStack(spacing: 0) {
             // Master Pane (Left)
             masterPane
-                .frame(width: 290)
-                .background(Color(nsColor: .windowBackgroundColor))
+                .frame(width: 260)
 
             Divider()
 
             // Detail Pane (Right)
             detailPane
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(nsColor: .windowBackgroundColor))
         }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button("新建线路", systemImage: "plus") { createNewProfile() }
+                    .disabled(!store.configurationReadable || store.configuration.connections.count >= 64)
+            }
+        }
+        .searchable(text: $searchText, prompt: "搜索线路")
         .onAppear {
             ensureProfileSelected()
         }
@@ -91,37 +96,9 @@ struct ProfilesView: View {
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Button("新建线路", systemImage: "plus") {
-                        createNewProfile()
-                    }
-                    .appActionStyle(primary: true)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .disabled(!store.configurationReadable || store.configuration.connections.count >= 64)
+
                 }
 
-                // Search field
-                HStack(spacing: 6) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                    TextField("搜索线路…", text: $searchText)
-                        .textFieldStyle(.plain)
-                        .font(.callout)
-                    if !searchText.isEmpty {
-                        Button {
-                            searchText = ""
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
-                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(AppTheme.subtleBorder, lineWidth: 0.5))
 
                 if store.busy {
                     HStack(spacing: 6) {
@@ -140,21 +117,22 @@ struct ProfilesView: View {
             Divider()
 
             // List of profile cards
-            ScrollView {
-                LazyVStack(spacing: 8) {
+            List(selection: Binding<UUID?>(get: { selectedProfileID }, set: { id in
+                if let id { selectProfileItem(id) }
+            })) {
                     if let draft = store.profileDraft, draft.isNew {
-                        newDraftCard(draft: draft)
+                        newDraftCard(draft: draft).tag(draft.id)
                     }
 
+                    if filteredConnections.isEmpty {
+                        ContentUnavailableView.search(text: searchText)
+                    }
                     ForEach(filteredConnections) { connection in
                         ProfileMasterCard(
                             connection: connection,
                             isSelected: selectedProfileID == connection.id && store.profileDraft?.isNew != true,
                             isActive: connection.id == store.configuration.activeProfileID,
                             isBusy: store.busy,
-                            onSelect: {
-                                selectProfileItem(connection.id)
-                            },
                             onUse: {
                                 useProfileForConnection(connection.id)
                             },
@@ -166,11 +144,11 @@ struct ProfilesView: View {
                             },
                             canDelete: (!store.busy || connection.id != store.configuration.activeProfileID) && store.configuration.connections.count > 1 && store.configurationReadable
                         )
+                        .tag(connection.id)
                     }
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
             }
+            .listStyle(.inset)
+            .scrollContentBackground(.hidden)
         }
     }
 
@@ -342,7 +320,6 @@ private struct ProfileMasterCard: View {
     let isSelected: Bool
     let isActive: Bool
     let isBusy: Bool
-    let onSelect: () -> Void
     let onUse: () -> Void
     let onDuplicate: () -> Void
     let onDelete: () -> Void
@@ -360,14 +337,11 @@ private struct ProfileMasterCard: View {
     }
 
     var body: some View {
-        Button {
-            onSelect()
-        } label: {
-            VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 7) {
                 HStack(alignment: .center, spacing: 8) {
                     Image(systemName: connection.subscription != nil ? "arrow.triangle.swap" : "network")
                         .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(isSelected || isActive ? AppTheme.accent : .secondary)
+                        .foregroundStyle(.secondary)
                         .frame(width: 18)
 
                     Text(connection.displayName)
@@ -394,24 +368,14 @@ private struct ProfileMasterCard: View {
                 HStack(spacing: 6) {
                     ModeBadge(mode: connection.routingMode)
                     Spacer()
-                    Text("\(connection.directDomains.count) 规则 · \(connection.excludedApplications.count) 直连")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
+                    Text("\(connection.directDomains.count) 条规则 · \(connection.excludedApplications.count) 个直连")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(
-                RoundedRectangle(cornerRadius: AppTheme.itemRadius, style: .continuous)
-                    .fill(isSelected ? AppTheme.selectedBackground : Color.clear)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: AppTheme.itemRadius, style: .continuous)
-                    .strokeBorder(isSelected ? AppTheme.accent.opacity(0.35) : AppTheme.subtleBorder.opacity(0.6), lineWidth: isSelected ? 1.5 : 1)
-            )
+            .padding(.vertical, 8)
             .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+            .accessibilityElement(children: .combine)
         .contextMenu {
             Button("用于连接") {
                 onUse()

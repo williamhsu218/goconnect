@@ -5,11 +5,11 @@ enum AppTheme {
     static let accent = Color.accentColor
     static let success = Color.green
     static let warning = Color.orange
-    static let cardRadius: CGFloat = 14
-    static let itemRadius: CGFloat = 9
+    static let cardRadius: CGFloat = 18
+    static let itemRadius: CGFloat = 10
     static let buttonRadius: CGFloat = 8
     static let pagePadding: CGFloat = 24
-    static let sectionSpacing: CGFloat = 16
+    static let sectionSpacing: CGFloat = 20
     static let contentWidth: CGFloat = 980
     static let actionHeight: CGFloat = 30
 
@@ -71,23 +71,14 @@ enum NetworkFormatters {
     }
 }
 
-struct AppBrandIcon: View {
-    var size: CGFloat = 42
-
-    var body: some View {
-        Image(nsImage: AppBranding.icon).resizable().interpolation(.high).scaledToFit()
-            .frame(width: size, height: size).accessibilityHidden(true)
-    }
-}
-
 private struct CardSurface: ViewModifier {
     var emphasized = false
-    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var contrast
     func body(content: Content) -> some View {
         content
             .background(AppTheme.controlBackground, in: RoundedRectangle(cornerRadius: AppTheme.cardRadius, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: AppTheme.cardRadius, style: .continuous)
-                .strokeBorder(emphasized ? AppTheme.accent.opacity(0.45) : AppTheme.subtleBorder, lineWidth: emphasized ? 1.5 : 1))
+                .strokeBorder(contrast == .increased ? Color.primary.opacity(0.5) : (emphasized ? AppTheme.accent.opacity(0.25) : Color.clear), lineWidth: 1))
     }
 }
 
@@ -103,7 +94,7 @@ struct Surface<Content: View>: View {
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 0) { content }
-            .padding(16).frame(maxWidth: .infinity, alignment: .leading)
+            .padding(20).frame(maxWidth: .infinity, alignment: .leading)
             .cardSurface(emphasized: emphasized)
     }
 }
@@ -113,16 +104,20 @@ private struct AppActionButtonModifier: ViewModifier {
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if primary {
+        if #available(macOS 26.0, *) {
+            if primary {
+                content.buttonStyle(.glassProminent).controlSize(.regular)
+            } else {
+                content.buttonStyle(.bordered).controlSize(.regular)
+            }
+        } else if primary {
             content
                 .buttonStyle(.borderedProminent)
-                .buttonBorderShape(.roundedRectangle(radius: AppTheme.buttonRadius))
                 .controlSize(.regular)
                 .frame(minHeight: AppTheme.actionHeight)
         } else {
             content
                 .buttonStyle(.bordered)
-                .buttonBorderShape(.roundedRectangle(radius: AppTheme.buttonRadius))
                 .controlSize(.regular)
                 .frame(minHeight: AppTheme.actionHeight)
         }
@@ -147,6 +142,25 @@ extension View {
     func appInlineActionStyle() -> some View {
         modifier(AppInlineActionModifier())
     }
+
+    /// Floating feedback lives in the control layer; data surfaces stay opaque.
+    func appFloatingSurface() -> some View {
+        modifier(FloatingSurface())
+    }
+}
+
+private struct FloatingSurface: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @ViewBuilder func body(content: Content) -> some View {
+        if reduceTransparency {
+            content.background(AppTheme.controlBackground, in: RoundedRectangle(cornerRadius: AppTheme.cardRadius))
+                .overlay(RoundedRectangle(cornerRadius: AppTheme.cardRadius).strokeBorder(AppTheme.subtleBorder))
+        } else if #available(macOS 26.0, *) {
+            content.glassEffect(.regular, in: RoundedRectangle(cornerRadius: AppTheme.cardRadius))
+        } else {
+            content.background(.regularMaterial, in: RoundedRectangle(cornerRadius: AppTheme.cardRadius))
+        }
+    }
 }
 
 struct PageHeading: View {
@@ -154,7 +168,7 @@ struct PageHeading: View {
     let subtitle: String
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.system(size: 24, weight: .semibold))
+            Text(title).font(.title2.weight(.semibold))
             Text(subtitle).font(.callout).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -162,30 +176,11 @@ struct PageHeading: View {
     }
 }
 
-struct PageHeader<Action: View>: View {
-    let title: String
-    let subtitle: String
-    @ViewBuilder let action: () -> Action
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 16) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(.system(size: 24, weight: .semibold))
-                Text(subtitle).font(.callout).foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            action()
-        }
-    }
-}
-
 struct CardIcon: View {
     let symbol: String
     var body: some View {
         Image(systemName: symbol).font(.system(size: 17, weight: .semibold))
-            .foregroundStyle(AppTheme.accent).frame(width: 36, height: 36)
-            .background(AppTheme.accent.opacity(0.09), in: RoundedRectangle(cornerRadius: AppTheme.itemRadius))
+            .foregroundStyle(.secondary).frame(width: 32, height: 32)
     }
 }
 
@@ -195,41 +190,16 @@ struct StatusPill: View {
     var color: Color = AppTheme.accent
 
     var body: some View {
-        Label(title, systemImage: symbol)
+        HStack(spacing: 5) {
+            Image(systemName: symbol).foregroundStyle(color)
+            Text(title).foregroundStyle(.primary)
+        }
             .font(.caption.weight(.semibold))
-            .foregroundStyle(color)
             .padding(.horizontal, 9)
             .padding(.vertical, 5)
             .background(color.opacity(0.1), in: Capsule())
             .fixedSize()
-    }
-}
-
-struct NoticeBanner: View {
-    let message: String
-    let isError: Bool
-    let dismiss: () -> Void
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                .foregroundStyle(isError ? AppTheme.warning : AppTheme.success)
-                .padding(.top, 1)
-            Text(message)
-                .font(.callout)
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
-            Button(action: dismiss) { Image(systemName: "xmark") }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .accessibilityLabel("关闭提示")
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .frame(maxWidth: 430, alignment: .leading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.primary.opacity(0.1)))
-        .shadow(color: .black.opacity(0.12), radius: 16, y: 6)
+            .accessibilityElement(children: .combine)
     }
 }
 
@@ -265,26 +235,9 @@ struct CountBadge: View {
 struct ModeBadge: View {
     let mode: RoutingMode
     var body: some View {
-        Text(mode.title).font(.caption.weight(.medium)).foregroundStyle(AppTheme.accent)
+        Text(mode.title).font(.caption.weight(.medium)).foregroundStyle(.secondary)
             .padding(.horizontal, 9).padding(.vertical, 5)
-            .background(AppTheme.accent.opacity(0.08), in: Capsule()).fixedSize()
-    }
-}
-
-struct ModeSettingButton: View {
-    let mode: RoutingMode
-    let action: () -> Void
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 7) {
-                Image(systemName: "slider.horizontal.3")
-                Text(mode.title).fontWeight(.medium)
-                Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold))
-            }.font(.callout).padding(.horizontal, 5).padding(.vertical, 4)
-        }
-        .appActionStyle()
-        .accessibilityLabel("分流模式：\(mode.title)，打开设置")
-        .help("查看或编辑这条线路的分流模式")
+            .background(.quaternary.opacity(0.5), in: Capsule()).fixedSize()
     }
 }
 

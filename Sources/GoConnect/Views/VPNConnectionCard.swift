@@ -5,7 +5,6 @@ import GoConnectCore
 struct VPNConnectionCard: View {
     @Bindable var store: AppStore
 
-    @State private var isPulsing = false
     @State private var lastReceived: UInt64 = 0
     @State private var lastSent: UInt64 = 0
     @State private var lastSampleTime: Date = Date()
@@ -53,9 +52,9 @@ struct VPNConnectionCard: View {
     var body: some View {
         Surface(emphasized: state == .connected) {
             VStack(alignment: .leading, spacing: 18) {
-                // Top header: Status icon with breathing glow, state titles, and connection Toggle
+                // Status and connection control share a stable row.
                 HStack(alignment: .center, spacing: 16) {
-                    statusGlowIcon
+                    statusIcon
 
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(spacing: 8) {
@@ -65,11 +64,8 @@ struct VPNConnectionCard: View {
                                 ProgressView()
                                     .controlSize(.small)
                             }
-                            if state == .connected {
-                                StatusPill(title: "已保护", symbol: "checkmark.shield.fill", color: AppTheme.success)
-                            }
                         }
-                        Text(store.connectionControlSubtitle)
+                        Text(state == .off || state == .connected ? "当前线路：\(store.configuration.activeConnection.displayName)" : store.connectionControlSubtitle)
                             .font(.callout)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -91,10 +87,15 @@ struct VPNConnectionCard: View {
                         .foregroundStyle(.secondary)
 
                     HStack(alignment: .center, spacing: 10) {
-                        SavedConnectionsView(store: store)
-                            .labelsHidden()
-                            .controlSize(.regular)
-                            .frame(maxWidth: .infinity)
+                        if store.busy || state.isOn {
+                            Text(store.configuration.activeConnection.displayName)
+                                .font(.body).foregroundStyle(.primary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        } else {
+                            SavedConnectionsView(store: store)
+                                .labelsHidden().controlSize(.regular)
+                                .frame(maxWidth: .infinity).help("选择已保存的线路")
+                        }
 
                         Button {
                             store.beginEditingProfile(store.configuration.activeProfileID)
@@ -104,6 +105,9 @@ struct VPNConnectionCard: View {
                         .appActionStyle()
                         .fixedSize(horizontal: true, vertical: false)
                         .help("当前分流模式：\(store.accessTitle)")
+                    }
+                    if store.busy || state.isOn {
+                        Text("结束连接或诊断后可切换线路").font(.caption).foregroundStyle(.secondary)
                     }
                 }
 
@@ -156,46 +160,18 @@ struct VPNConnectionCard: View {
         }
     }
 
-    private var statusGlowIcon: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(statusColor)
-                .frame(width: 52, height: 52)
-                .scaleEffect(isPulsing ? 1.25 : 0.95)
-                .opacity((state == .connected || state.isWorking) ? (isPulsing ? 0.35 : 0.12) : 0)
-                .blur(radius: isPulsing ? 8 : 3)
-                .animation(.easeInOut(duration: 0.3), value: state == .connected || state.isWorking)
-
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(statusColor.opacity(state == .off ? 0.08 : 0.15))
-                .frame(width: 50, height: 50)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(statusColor.opacity(state == .off ? 0.12 : 0.35), lineWidth: 1)
-                )
-
-            Image(systemName: state.symbol)
-                .font(.system(size: 22, weight: .semibold))
-                .foregroundStyle(statusColor)
-        }
-        .frame(width: 58, height: 58)
-        .onAppear {
-            withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true)) {
-                isPulsing = true
-            }
-        }
+    private var statusIcon: some View {
+        Image(systemName: state == .off ? "network" : state.symbol)
+            .font(.system(size: 26, weight: .medium))
+            .foregroundStyle(statusColor)
+            .frame(width: 52, height: 52)
+            .background(statusColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
+            .accessibilityHidden(true)
     }
 
     private var connectionToggle: some View {
         HStack(spacing: 12) {
-            VStack(alignment: .trailing, spacing: 2) {
-                Text(state.isOn ? "开启" : "断开")
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(state.isOn ? statusColor : .secondary)
-                Text(state.isOn ? "点击断开连接" : "点击开启线路")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            }
+            Text("VPN 连接").font(.subheadline.weight(.medium)).foregroundStyle(.primary)
 
             Toggle("VPN 连接", isOn: Binding(
                 get: { state.isOn },
@@ -207,8 +183,8 @@ struct VPNConnectionCard: View {
             ))
             .labelsHidden()
             .toggleStyle(.switch)
-            .controlSize(.large)
-            .tint(state.needsAttention ? .orange : (state == .connected ? AppTheme.success : AppTheme.accent))
+            .controlSize(.regular)
+            .tint(AppTheme.accent)
             .disabled(!state.canToggle || (!canStart && !state.isOn))
             .accessibilityLabel("VPN 连接开关")
             .accessibilityHint(state.isOn ? "关闭以断开连接" : "开启所选线路")
@@ -231,32 +207,28 @@ struct VPNConnectionCard: View {
     private var metricTiles: some View {
         MetricTile(
             title: "下行速率",
-            value: NetworkFormatters.formatRate(downRate),
-            secondary: "总接收 \(NetworkFormatters.formatBytes(store.received))",
-            symbol: "arrow.down.circle.fill",
-            symbolColor: .blue
+            value: state == .connected ? NetworkFormatters.formatRate(downRate) : "—",
+            secondary: "\(state == .connected ? "已接收" : "上次接收") \(NetworkFormatters.formatBytes(store.received))",
+            symbol: "arrow.down"
         )
         MetricTile(
             title: "上行速率",
-            value: NetworkFormatters.formatRate(upRate),
-            secondary: "总发送 \(NetworkFormatters.formatBytes(store.sent))",
-            symbol: "arrow.up.circle.fill",
-            symbolColor: .purple
+            value: state == .connected ? NetworkFormatters.formatRate(upRate) : "—",
+            secondary: "\(state == .connected ? "已发送" : "上次发送") \(NetworkFormatters.formatBytes(store.sent))",
+            symbol: "arrow.up"
         )
         MetricTile(
             title: "连接时长",
-            value: durationString,
+            value: state == .connected ? durationString : "—",
             secondary: state == .connected ? "会话活跃中" : "未建立会话",
-            symbol: "timer",
-            symbolColor: .orange
+            symbol: "timer"
         )
         MetricTile(
-            title: "出口 / 虚拟 IP",
+            title: "虚拟地址",
             value: addressSummary,
             secondary: store.addresses.isEmpty ? "待分配虚拟地址" : "\(store.addresses.count) 个活跃地址",
             symbol: "network",
-            symbolColor: .teal,
-            tooltip: store.addresses.isEmpty ? "未分配虚拟地址" : store.addresses.joined(separator: "\n")
+            tooltip: "隧道分配的虚拟地址，非公网出口 IP。\n" + (store.addresses.isEmpty ? "未分配虚拟地址" : store.addresses.joined(separator: "\n"))
         )
     }
 }
@@ -266,7 +238,6 @@ private struct MetricTile: View {
     let value: String
     let secondary: String
     let symbol: String
-    let symbolColor: Color
     var tooltip: String? = nil
 
     var body: some View {
@@ -274,7 +245,7 @@ private struct MetricTile: View {
             HStack(spacing: 6) {
                 Image(systemName: symbol)
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(symbolColor)
+                    .foregroundStyle(.secondary)
                 Text(title)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -286,16 +257,13 @@ private struct MetricTile: View {
                 .minimumScaleFactor(0.8)
             Text(secondary)
                 .font(.caption2)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
         .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: AppTheme.itemRadius, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: AppTheme.itemRadius, style: .continuous)
-                .strokeBorder(AppTheme.subtleBorder, lineWidth: 1)
-        )
+        .frame(minWidth: 130, maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(title)，\(value)，\(secondary)")
         .help(tooltip ?? "\(title): \(value)")
     }
 }

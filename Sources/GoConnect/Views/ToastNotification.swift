@@ -8,24 +8,27 @@ struct ToastBanner: View {
     let onDismiss: () -> Void
 
     @State private var copied = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(alignment: .top, spacing: 10) {
             Image(systemName: isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
                 .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(isError ? AppTheme.warning : AppTheme.success)
+                .foregroundStyle(isError ? Color.red : AppTheme.success)
 
-            Text(message)
-                .font(.callout)
-                .lineLimit(3)
-                .foregroundStyle(.primary)
-                .textSelection(.enabled)
+            ViewThatFits(in: .vertical) {
+                messageText
+                ScrollView { messageText.frame(maxWidth: .infinity, alignment: .leading) }
+                    .scrollIndicators(.visible)
+            }
+            .frame(maxHeight: 120, alignment: .topLeading)
 
             if isError {
                 Button(action: copyError) {
                     Image(systemName: copied ? "checkmark" : "doc.on.doc")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(copied ? AppTheme.success : .secondary)
+                        .frame(width: 28, height: 28)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(copied ? "已复制" : "复制错误信息")
@@ -36,6 +39,7 @@ struct ToastBanner: View {
                 Image(systemName: "xmark")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.secondary)
+                    .frame(width: 28, height: 28)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("关闭提示")
@@ -43,31 +47,39 @@ struct ToastBanner: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-        .frame(maxWidth: 540)
-        .background(.regularMaterial, in: Capsule())
-        .overlay(
-            Capsule()
-                .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
-        )
-        .shadow(color: .black.opacity(0.14), radius: 12, x: 0, y: 5)
-        .task(id: message) {
+        .frame(width: 540)
+        .fixedSize(horizontal: false, vertical: true)
+        .appFloatingSurface()
+        .task(id: message + (isError ? "error" : "success")) {
+            if #available(macOS 14.0, *) {
+                AccessibilityNotification.Announcement(message).post()
+            }
             guard !isError else { return }
             try? await Task.sleep(nanoseconds: 3_000_000_000)
             guard !Task.isCancelled else { return }
-            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+            withAnimation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.8)) {
                 onDismiss()
             }
         }
     }
 
+    private var messageText: some View {
+        Text(message)
+            .font(.callout)
+            .fixedSize(horizontal: false, vertical: true)
+            .lineLimit(isError ? nil : 3)
+            .foregroundStyle(.primary)
+            .textSelection(.enabled)
+    }
+
     private func copyError() {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(message, forType: .string)
-        withAnimation(.easeInOut(duration: 0.15)) {
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.15)) {
             copied = true
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-            withAnimation(.easeInOut(duration: 0.15)) {
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.15)) {
                 copied = false
             }
         }
@@ -78,7 +90,6 @@ struct ToastNotificationView: View {
     let message: String
     let isError: Bool
     let onDismiss: () -> Void
-
     init(message: String, isError: Bool = false, onDismiss: @escaping () -> Void) {
         self.message = message
         self.isError = isError
@@ -88,32 +99,9 @@ struct ToastNotificationView: View {
     var body: some View {
         ToastBanner(message: message, isError: isError, onDismiss: onDismiss)
             .padding(.bottom, 20)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-            .transition(.asymmetric(
-                insertion: .move(edge: .bottom).combined(with: .opacity),
-                removal: .move(edge: .bottom).combined(with: .opacity)
-            ))
-            .animation(.spring(response: 0.35, dampingFraction: 0.8), value: message)
-    }
-}
-
-struct ToastNotificationModifier: ViewModifier {
-    let message: String?
-    let isError: Bool
-    let onDismiss: () -> Void
-
-    func body(content: Content) -> some View {
-        content.overlay(alignment: .bottom) {
-            if let message, !message.isEmpty {
-                ToastNotificationView(message: message, isError: isError, onDismiss: onDismiss)
-                    .zIndex(999)
-            }
-        }
-    }
-}
-
-extension View {
-    func toastNotification(message: String?, isError: Bool = false, onDismiss: @escaping () -> Void) -> some View {
-        modifier(ToastNotificationModifier(message: message, isError: isError, onDismiss: onDismiss))
+            .padding(.horizontal, 20)
+            .padding(.top, 8)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }

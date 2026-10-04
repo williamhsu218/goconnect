@@ -32,23 +32,20 @@ struct ApplicationsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: AppTheme.sectionSpacing) {
-            PageHeader(
+            PageHeading(
                 title: excluded ? "直连 App / 服务" : "应用 / 服务白名单",
-                subtitle: excluded ? "这些 App 和服务使用原网络，直连规则优先。" : "白名单模式仅让这些 App 和服务走 VPN，其它流量直连。"
-            ) {
-                Menu("添加…", systemImage: "plus") {
-                    Button("添加 App…", systemImage: "app.badge") { store.addApplication(excluded: excluded) }
-                    Button("添加可执行服务…", systemImage: "terminal") { store.addExecutableService(excluded: excluded) }
-                }
-                .appActionStyle(primary: true)
-                .fixedSize()
-                .disabled(!store.canEditApplications)
-            }
+                subtitle: excluded ? "这些 App 和服务使用原网络，直连规则优先。" : "白名单模式仅让名单中的 App 和服务走 VPN。"
+            )
 
             if store.busy {
                 Label("连接期间名单为只读；断开后修改，下次连接生效。", systemImage: "lock")
                     .font(.callout)
                     .foregroundStyle(.secondary)
+            }
+
+            if !excluded && store.configuration.routingMode == .global {
+                Label("当前使用全局模式；此白名单保留供切换模式后使用。", systemImage: "info.circle")
+                    .font(.callout).foregroundStyle(.secondary)
             }
 
             if let port = store.proxyPort {
@@ -60,21 +57,14 @@ struct ApplicationsView: View {
             }
 
             HStack(spacing: 12) {
-                filterBar
+                if #available(macOS 26.0, *) {
+                    filterBar.padding(.leading, 12)
+                } else {
+                    filterBar
+                }
 
                 Spacer()
 
-                CountBadge(count: (excluded ? store.configuration.excludedApplications : store.configuration.applications).count)
-                    .help("已保存的分流目标")
-
-                Button {
-                    store.scanApplications()
-                } label: {
-                    Label("刷新", systemImage: "arrow.clockwise")
-                }
-                .appActionStyle()
-                .fixedSize(horizontal: true, vertical: false)
-                .disabled(store.scanning)
             }
 
             ZStack {
@@ -105,7 +95,19 @@ struct ApplicationsView: View {
         .padding(AppTheme.pagePadding)
         .frame(maxWidth: AppTheme.contentWidth, maxHeight: .infinity, alignment: .topLeading)
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .searchable(text: $store.search, prompt: "搜索 App、服务或路径")
+        .searchable(text: $store.search, prompt: "搜索名称或路径")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button("刷新应用", systemImage: "arrow.clockwise") { store.scanApplications() }
+                    .disabled(store.scanning)
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Menu("添加…", systemImage: "plus") {
+                    Button("添加 App…", systemImage: "app.badge") { store.addApplication(excluded: excluded) }
+                    Button("添加可执行服务…", systemImage: "terminal") { store.addExecutableService(excluded: excluded) }
+                }.disabled(!store.canEditApplications)
+            }
+        }
         .onAppear {
             if store.catalog.isEmpty {
                 store.scanApplications()
@@ -152,7 +154,7 @@ struct ApplicationsView: View {
                     Text("·")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
-                    Text(excluded ? "原网络直连" : "白名单模式下走线路")
+                    Text(store.selected(app, excluded: excluded) ? (excluded ? "已加入直连名单" : "已加入白名单") : "未加入名单")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -161,7 +163,7 @@ struct ApplicationsView: View {
             Spacer()
 
             Toggle(
-                "保存 \(app.name)",
+                "将 \(app.name) 加入\(excluded ? "直连名单" : "白名单")",
                 isOn: Binding(
                     get: { store.selected(app, excluded: excluded) },
                     set: { _ in store.toggle(app, excluded: excluded) }
@@ -215,40 +217,15 @@ struct ApplicationsView: View {
     }
 
     private var filterBar: some View {
-        HStack(spacing: 3) {
+        Picker("目标类型", selection: $filter) {
             ForEach(ApplicationFilter.allCases) { item in
-                Button {
-                    withAnimation(.easeOut(duration: 0.16)) {
-                        filter = item
-                    }
-                } label: {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .fill(filter == item ? AppTheme.accent : Color.white.opacity(0.001))
-
-                        Text(item.rawValue)
-                            .font(.callout.weight(filter == item ? .semibold : .medium))
-                            .foregroundStyle(filter == item ? Color.white : Color.secondary)
-                            .lineLimit(1)
-                            .padding(.horizontal, 10)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 28)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .contentShape(Rectangle())
-                .accessibilityLabel("筛选：\(item.rawValue)")
-                .accessibilityAddTraits(filter == item ? .isSelected : [])
+                Text(item.rawValue).tag(item)
             }
         }
-        .padding(3)
-        .frame(maxWidth: 420)
-        .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(AppTheme.subtleBorder.opacity(0.8), lineWidth: 0.5)
-        )
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .frame(maxWidth: 340)
+        .accessibilityLabel("目标类型")
     }
 
     private var cliIconView: some View {
@@ -267,19 +244,8 @@ struct ApplicationsView: View {
     }
 
     private var emptyStateView: some View {
-        VStack(spacing: 12) {
-            Image(systemName: emptyIcon)
-                .font(.system(size: 36))
-                .foregroundStyle(.tertiary)
-            Text(emptyTitle)
-                .font(.body)
-                .foregroundStyle(.secondary)
-            if !store.scanning {
-                Text("可直接从 Finder 拖拽 .app 或终端可执行文件到此处添加")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-            }
-        }
+        ContentUnavailableView(emptyTitle, systemImage: emptyIcon,
+            description: Text(store.scanning ? "请稍候" : "调整搜索条件，或从 Finder 拖入 App 和可执行文件。"))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding()
     }

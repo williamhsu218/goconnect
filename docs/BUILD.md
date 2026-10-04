@@ -13,6 +13,8 @@ brew install go openconnect mihomo
 
 当前检查环境：Apple Silicon、macOS 27、Swift 6.4、Go 1.26.6。Homebrew 的组件版本会变化；打包结果会记录实际版本和最低 macOS 要求。较老系统或 Intel 构建需要单独验证。
 
+当前构建脚本显式使用本机 macOS SDK 和 SwiftPM native 后端。Xcode 27 的默认后端在本项目中会把部署目标写成二进制的 SDK 版本，导致系统使用旧版控件外观；native 后端可正确记录 SDK 27 并启用 Liquid Glass。native 后端当前有弃用提示，升级工具链时需重新核对 `LC_BUILD_VERSION` 和实际窗口外观，再迁移构建方式。
+
 ## 构建应用
 
 ```sh
@@ -51,4 +53,4 @@ swift test
 
 本地打包使用 ad-hoc 签名，不需要付费 Apple Developer 账号，但不具备 Developer ID 身份或 Apple 公证。最终系统要求写入应用的 `Info.plist`，以所包含组件中最高的要求为准。
 
-打包会收集许可证、组件版本和 Homebrew SBOM。生成 ZIP 不代表已经满足第三方组件的二进制再分发要求；对外发布安装包前，还需准备对应源码和适用的构建材料。本仓库此次只发布项目源码。
+打包会收集许可证、组件版本和 Homebrew SBOM。生成 ZIP 不代表已经满足第三方组件的二进制再分发要求；对外发布安装包前，还需准备对应源码和适用的构建材料。当前 GitHub Releases 提供项目源码和 Apple Silicon 安装包，组件来源与许可说明见 [THIRD_PARTY.md](../THIRD_PARTY.md)。

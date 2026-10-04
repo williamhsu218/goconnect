@@ -9,8 +9,7 @@ struct RemoteNetworksEditor: View {
     @State private var address = ""
     @State private var error: String?
     var body: some View {
-        Surface {
-            Text("远端内网 · 系统连接").font(.headline)
+        Section("公司网段 · \(networks.count) 个") {
             Text("以下公司网段与应用流量共用本线路的 AnyConnect 会话，适用于 Finder SMB、SSH 等。")
                 .font(.callout).foregroundStyle(.secondary).padding(.top, 10)
             if !subscription {
@@ -23,9 +22,10 @@ struct RemoteNetworksEditor: View {
             }
             if !readOnly {
                 HStack {
-                    TextField("10.20.0.10 或 10.20.0.0/16", text: $address).textFieldStyle(.roundedBorder)
+                    TextField("公司网段", text: $address, prompt: Text("10.20.0.10 或 10.20.0.0/16"))
+                        .labelsHidden().textFieldStyle(.roundedBorder).frame(maxWidth: .infinity)
                         .accessibilityLabel("远端内网地址").onSubmit(add)
-                    Button("添加", systemImage: "plus", action: add).disabled(address.isEmpty)
+                    Button("添加", systemImage: "plus", action: add).appActionStyle().fixedSize(horizontal: true, vertical: false).disabled(address.isEmpty)
                 }.padding(.top, 16)
             }
             ForEach(networks, id: \.self) { network in
@@ -35,7 +35,7 @@ struct RemoteNetworksEditor: View {
                     if !readOnly { Button { networks.removeAll { $0 == network } } label: { Image(systemName: "trash") }.buttonStyle(.borderless).accessibilityLabel("移除远端内网 \(network)") }
                 }.padding(.top, 10)
             }
-            if let error { Text(error).font(.caption).foregroundStyle(.orange).padding(.top, 8) }
+            if let error { Label(error, systemImage: "exclamationmark.circle.fill").font(.caption).foregroundStyle(.primary).padding(.top, 8) }
             Text("范围随线路保存，重连后应用。所有进程访问这些地址均遵循公司路由，不按 App 或登录用户区分；公网默认路由和系统 DNS 保持原状。")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).padding(.top, 12)
         }

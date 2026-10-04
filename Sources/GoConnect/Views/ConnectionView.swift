@@ -32,16 +32,7 @@ struct ConnectionView: View {
                     )
                 }
 
-                ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .top, spacing: AppTheme.sectionSpacing) {
-                        ApplicationRoutingCard(store: store)
-                        DirectRoutingCard(store: store)
-                    }
-                    VStack(alignment: .leading, spacing: AppTheme.sectionSpacing) {
-                        ApplicationRoutingCard(store: store)
-                        DirectRoutingCard(store: store)
-                    }
-                }
+                ApplicationRoutingCard(store: store)
             }
             .padding(AppTheme.pagePadding)
             .frame(maxWidth: AppTheme.contentWidth, alignment: .topLeading)

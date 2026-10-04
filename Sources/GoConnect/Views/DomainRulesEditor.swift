@@ -10,21 +10,29 @@ struct DomainRulesEditor: View {
     @State private var error: String?
 
     var body: some View {
-        Surface {
-            HStack { Text("直连域名与 IP").font(.headline); CountBadge(count: rules.count); Spacer() }
+        Section("直连域名与 IP · \(rules.count) 条") {
             Text("匹配这些域名、IP 或网段时直连，优先于 App 分流模式。").font(.callout).foregroundStyle(.secondary).padding(.top, 10)
             if !readOnly {
                 HStack(spacing: 12) {
-                    TextField("example.com 或 192.168.2.0/24", text: $domain).textFieldStyle(.roundedBorder).controlSize(.large)
+                    TextField("域名或 IP", text: $domain, prompt: Text("example.com 或 192.168.2.0/24"))
+                        .labelsHidden().textFieldStyle(.roundedBorder).controlSize(.large)
+                        .frame(maxWidth: .infinity)
                         .accessibilityLabel("添加直连域名或 IP").onSubmit(add)
                     Button("添加规则", systemImage: "plus", action: add)
-                        .appActionStyle(primary: true)
+                        .appActionStyle()
+                        .fixedSize(horizontal: true, vertical: false)
                         .disabled(domain.isEmpty)
                 }.padding(.top, 18)
                 Toggle("包含子域名", isOn: $subdomains).font(.callout).padding(.top, 12)
                     .disabled((try? DomainRule(domain).isAddress) == true)
                 Text("添加后点击“保存线路”一起保存；取消编辑不会改变原配置。").font(.caption).foregroundStyle(.secondary).padding(.top, 8)
-                if let error { Label(error, systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.orange).padding(.top, 8) }
+                if let error {
+                    Label {
+                        Text(error).foregroundStyle(.primary)
+                    } icon: {
+                        Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red)
+                    }.font(.caption).padding(.top, 8)
+                }
             }
             if rules.isEmpty {
                 Text("尚未设置自定义规则；本地和 Tailscale 例外保留，其它流量按 App 模式分流。").font(.callout).foregroundStyle(.secondary).padding(.vertical, 20)
@@ -33,13 +41,12 @@ struct DomainRulesEditor: View {
                     ForEach(rules) { rule in
                         Divider()
                         HStack(spacing: 12) {
-                            Image(systemName: rule.isAddress ? "network" : "globe").foregroundStyle(AppTheme.accent)
+                            Image(systemName: rule.isAddress ? "network" : "globe").foregroundStyle(.secondary)
                             VStack(alignment: .leading, spacing: 5) {
                                 Text(rule.domain).font(.body.weight(.medium)).textSelection(.enabled)
                                 Text(rule.isAddress ? (rule.domain.contains("/") ? "IP 网段" : "IP 地址") : (rule.includeSubdomains ? "域名及子域名" : "仅完整域名")).font(.caption).foregroundStyle(.secondary)
                             }
                             Spacer()
-                            Text("直连").font(.caption.weight(.medium)).foregroundStyle(.green).padding(.horizontal, 9).padding(.vertical, 5).background(Color.green.opacity(0.09), in: Capsule())
                             if !readOnly {
                                 Button { rules.removeAll { $0.id == rule.id } } label: { Image(systemName: "trash") }
                                     .buttonStyle(.borderless).accessibilityLabel("移除 \(rule.domain)")

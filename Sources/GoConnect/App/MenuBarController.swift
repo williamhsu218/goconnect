@@ -94,7 +94,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         add(connection.displayName, symbol: "server.rack", enabled: false)
         add(connection.connectionSummary, enabled: false)
         do {
-            add("应用配置记录：\(connection.applications.count) 个", enabled: false)
+            add(connection.routingMode == .global ? "直连 App / 服务：\(connection.excludedApplications.count) 个" : "白名单 App / 服务：\(connection.applications.count) 个", enabled: false)
             if let port = store.proxyPort {
                 add("复制代理地址 · 127.0.0.1:\(port)", symbol: "doc.on.doc") { [weak self] in self?.store.copyProxyEndpoint() }
             }

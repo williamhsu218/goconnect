@@ -3,21 +3,16 @@ import GoConnectCore
 
 struct DiagnosticsView: View {
     let store: AppStore
+    @State private var clearingLogs = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: AppTheme.sectionSpacing) {
-                PageHeader(title: "连接诊断", subtitle: "查看本地环境和本次运行状态。") {
-                    Button("导出摘要", systemImage: "square.and.arrow.up") {
-                        store.exportDiagnostics()
-                    }
-                    .appActionStyle()
-                    .fixedSize()
-                }
+                PageHeading(title: "连接诊断", subtitle: "查看本地环境和本次运行状态。")
 
                 NetworkServiceCard(store: store)
 
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 280), spacing: AppTheme.sectionSpacing)], alignment: .leading, spacing: AppTheme.sectionSpacing) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 280), spacing: AppTheme.sectionSpacing, alignment: .topLeading)], alignment: .leading, spacing: AppTheme.sectionSpacing) {
                     Surface {
                         HStack {
                             Text("运行环境").font(.headline)
@@ -33,13 +28,13 @@ struct DiagnosticsView: View {
                             statusRow("运行组件", value: store.localReady ? "已内置" : "缺少组件", good: store.localReady)
                                 .padding(.vertical, 8)
                             Divider()
-                            statusRow("连接模式", value: store.accessTitle, good: true)
+                            statusRow("连接模式", value: store.accessTitle, good: nil)
                                 .padding(.vertical, 8)
                             Divider()
-                            statusRow("Tailscale", value: store.routeSnapshot?.tailscaleActive == true ? "已识别" : "未发现", good: true)
+                            statusRow("Tailscale", value: store.routeSnapshot.map { $0.tailscaleActive == true ? "已识别" : "未发现" } ?? "暂无会话数据", good: nil)
                                 .padding(.vertical, 8)
                             Divider()
-                            statusRow("网络接管", value: "系统路由 → TUN", good: true)
+                            statusRow("网络接管", value: store.routeSnapshot?.captureMode == "transparent-routes" ? "系统路由 → TUN" : "暂无接管数据", good: nil)
                                 .padding(.vertical, 8)
                             if let snapshot = store.routeSnapshot {
                                 Divider()
@@ -68,7 +63,7 @@ struct DiagnosticsView: View {
                         .padding(.top, 6)
 
                         HStack(spacing: 10) {
-                            Button("重新检测", systemImage: "arrow.clockwise") {
+                            Button("检测环境", systemImage: "arrow.clockwise") {
                                 store.refreshEnvironment()
                             }
                             .appActionStyle()
@@ -101,7 +96,7 @@ struct DiagnosticsView: View {
                             .disabled(store.busy && !store.testOnly)
 
                             if !store.addresses.isEmpty {
-                                Text(store.addresses.joined(separator: " · "))
+                                Text("虚拟地址：" + store.addresses.joined(separator: " · "))
                                     .font(.caption.monospacedDigit())
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
@@ -127,7 +122,7 @@ struct DiagnosticsView: View {
                         Spacer()
                         if !store.activity.isEmpty {
                             Button(role: .destructive) {
-                                store.activity.removeAll()
+                                clearingLogs = true
                             } label: {
                                 Label("清空日志", systemImage: "trash")
                             }
@@ -143,7 +138,7 @@ struct DiagnosticsView: View {
                             .foregroundStyle(.secondary)
                             .padding(.vertical, 16)
                     } else {
-                        VStack(spacing: 0) {
+                        LazyVStack(spacing: 0) {
                             ForEach(store.activity) { entry in
                                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                                     Text(entry.date.formatted(date: .omitted, time: .standard))
@@ -153,12 +148,12 @@ struct DiagnosticsView: View {
 
                                     Image(systemName: entry.isError ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
                                         .font(.system(size: 11, weight: .semibold))
-                                        .foregroundStyle(entry.isError ? AppTheme.warning : AppTheme.success.opacity(0.85))
+                                        .foregroundStyle(entry.isError ? Color.red : AppTheme.success.opacity(0.85))
                                         .frame(width: 14)
 
                                     Text(entry.message)
                                         .font(.callout)
-                                        .foregroundStyle(entry.isError ? AppTheme.warning : Color.primary)
+                                        .foregroundStyle(.primary)
                                         .textSelection(.enabled)
                                         .lineSpacing(2)
                                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -183,18 +178,29 @@ struct DiagnosticsView: View {
             .frame(maxWidth: AppTheme.contentWidth, alignment: .topLeading)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button("导出摘要", systemImage: "square.and.arrow.up") { store.exportDiagnostics() }
+            }
+        }
+        .confirmationDialog("清空本次运行记录？", isPresented: $clearingLogs) {
+            Button("清空记录", role: .destructive) { store.activity.removeAll() }
+            Button("取消", role: .cancel) { }
+        } message: { Text("如需保留本次记录，请先导出摘要。磁盘诊断日志不会删除。") }
     }
 
-    private func statusRow(_ title: String, value: String, good: Bool) -> some View {
+    private func statusRow(_ title: String, value: String, good: Bool?) -> some View {
         HStack {
             Text(title).font(.callout)
             Spacer()
             HStack(spacing: 5) {
-                Image(systemName: good ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-                    .foregroundStyle(good ? AppTheme.success : AppTheme.warning)
+                if let good {
+                    Image(systemName: good ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                        .foregroundStyle(good ? AppTheme.success : AppTheme.warning)
+                }
                 Text(value)
                     .font(.callout)
-                    .foregroundStyle(good ? .secondary : AppTheme.warning)
+                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -202,12 +208,13 @@ struct DiagnosticsView: View {
 
 struct NetworkServiceCard: View {
     let store: AppStore
+    @State private var uninstalling = false
 
     var body: some View {
         let service = store.networkService
         let isReady = service.status.ready
 
-        Surface(emphasized: !isReady) {
+        Surface {
             VStack(alignment: .leading, spacing: 14) {
                 // Security Panel Header
                 HStack(spacing: 14) {
@@ -256,7 +263,7 @@ struct NetworkServiceCard: View {
                 // Security Details Info
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 8) {
-                        Image(systemName: isReady ? "lock.open.fill" : "lock.fill")
+                        Image(systemName: isReady ? "checkmark.shield" : "lock.fill")
                             .font(.system(size: 13))
                             .foregroundStyle(isReady ? AppTheme.success : AppTheme.warning)
                             .frame(width: 16)
@@ -268,7 +275,7 @@ struct NetworkServiceCard: View {
                             "首次安装或后台组件升级时需要授权；普通连接无需重复输入管理员密码。"
                         )
                         .font(.callout)
-                        .foregroundStyle(isReady ? .secondary : AppTheme.warning)
+                        .foregroundStyle(.secondary)
                     }
 
                     HStack(spacing: 8) {
@@ -299,7 +306,7 @@ struct NetworkServiceCard: View {
                         .appActionStyle(primary: true)
                     }
 
-                    Button("重新检测", systemImage: "arrow.clockwise") {
+                    Button("检测服务", systemImage: "arrow.clockwise") {
                         service.refresh()
                     }
                     .appActionStyle()
@@ -308,12 +315,12 @@ struct NetworkServiceCard: View {
 
                     if service.status.state != "notInstalled" && service.status.state != "checking" {
                         Button(role: .destructive) {
-                            store.manageNetworkService(uninstall: true)
+                            uninstalling = true
                         } label: {
                             Label("卸载服务", systemImage: "trash")
                         }
-                        .buttonStyle(.borderless)
-                        .foregroundStyle(.red)
+                        .appActionStyle()
+                        .tint(.red)
                     }
                 }
                 .disabled(store.busy || service.working)
@@ -329,6 +336,10 @@ struct NetworkServiceCard: View {
                 }
             }
         }
+        .confirmationDialog("卸载本机网络服务？", isPresented: $uninstalling) {
+            Button("卸载服务", role: .destructive) { store.manageNetworkService(uninstall: true) }
+            Button("取消", role: .cancel) { }
+        } message: { Text("再次连接前需要重新安装并授权。保存的线路与名单会保留。") }
     }
 }
 
@@ -336,12 +347,16 @@ struct PreferencesView: View {
     var showMenuBar: () -> Void = {}
     var body: some View {
         Form {
-            Button("重新显示菜单栏快捷菜单", action: showMenuBar)
-            LabeledContent("版本", value: Product.version)
-            LabeledContent("连接协议", value: "AnyConnect / Clash 订阅节点")
-            LabeledContent("运行方式", value: "透明 App 分流 / 无 PF")
-            Text("AnyConnect 密码保存在内存或钥匙串；订阅地址及节点凭据保存在仅当前用户可读的本机缓存。订阅更新会访问服务商地址，不记录访问网址。系统 DNS 沿用当前网络。")
-                .font(.callout).foregroundStyle(.secondary)
+            Section("菜单栏") { Button("重新显示菜单栏快捷菜单", action: showMenuBar) }
+            Section("关于 GoConnect") {
+                LabeledContent("版本", value: Product.version)
+                LabeledContent("连接协议", value: "AnyConnect / Clash 订阅节点")
+                LabeledContent("运行方式", value: "透明 App 分流")
+            }
+            Section("隐私与存储") {
+                Text("AnyConnect 密码保存在内存或钥匙串；订阅地址及节点凭据保存在仅当前用户可读的本机缓存。订阅更新会访问服务商地址，不记录访问网址。系统 DNS 沿用当前网络。")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
         }.formStyle(.grouped)
     }
 }

@@ -8,6 +8,10 @@ LAUNCH=1
 VERIFY=0
 LOGS=0
 DEBUG=0
+# Swift Build in Xcode 27 records the deployment target as the linked SDK for
+# this SwiftPM executable. The native backend records the actual SDK, which
+# macOS uses to enable its current control appearance (including Liquid Glass).
+SWIFT_BUILD_ARGS=(--build-system native --sdk "$(xcrun --sdk macosx --show-sdk-path)")
 for argument in "$@"; do
   case "$argument" in
     --verify) VERIFY=1; LAUNCH=0 ;;
@@ -21,11 +25,11 @@ for tool in swift go python3 brew openconnect mihomo; do
   command -v "$tool" >/dev/null || { echo "Missing $tool. Install Xcode and run: brew install go openconnect mihomo" >&2; exit 1; }
 done
 if [[ "$VERIFY" == 1 ]]; then
-  swift test
+  swift test "${SWIFT_BUILD_ARGS[@]}"
   (cd Transport && go test -race -timeout 60s ./...)
 fi
-swift build -c "$CONFIG"
-SWIFT_BIN="$(swift build -c "$CONFIG" --show-bin-path)/GoConnect"
+swift build "${SWIFT_BUILD_ARGS[@]}" -c "$CONFIG"
+SWIFT_BIN="$(swift build "${SWIFT_BUILD_ARGS[@]}" -c "$CONFIG" --show-bin-path)/GoConnect"
 mkdir -p Transport/bin
 (cd Transport && CGO_ENABLED=1 go build -trimpath -o bin/GoConnectTransport ./cmd/goconnect-transport)
 clang -O2 -Wall -Wextra -Werror Transport/launcher/main.c -o Transport/bin/GoConnectLauncher
