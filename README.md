@@ -19,9 +19,11 @@ GoConnect 是一款 macOS 网络连接工具。你可以接入公司的 AnyConne
 
 ## 开始使用
 
-目前仓库提供源码，尚未提供面向普通用户的安装包。熟悉开发工具的用户可以按[构建说明](docs/BUILD.md)生成应用。
+从 [Releases](https://github.com/williamhsu218/goconnect/releases/latest) 下载适用于 Apple Silicon 的安装包，解压后将 `GoConnect.app` 放入“应用程序”文件夹。当前发布包要求 macOS 27 或更新版本。
 
-构建后，将 `GoConnect.app` 放入“应用程序”文件夹并打开：
+更新前，请先断开 GoConnect 的 VPN 连接并退出应用，再替换旧版。熟悉开发工具的用户也可以按[构建说明](docs/BUILD.md)自行生成应用。
+
+打开 GoConnect 后：
 
 1. 在“线路配置”中填写 VPN 服务器和账号，或在“订阅管理”中添加 HTTPS 订阅地址。
 2. 选择“App 白名单”或“全局模式”，设置需要走 VPN 或保持直连的应用。
@@ -32,7 +34,7 @@ GoConnect 是一款 macOS 网络连接工具。你可以接入公司的 AnyConne
 
 ## 使用前需要知道
 
-**系统要求**：当前源码版本为 0.11.4。本次验证使用 Apple Silicon Mac 和 macOS 27；在这台机器生成的应用要求 macOS 27 或更新版本。虽然 Swift 项目最低目标设为 macOS 14，最终要求还取决于打包进去的网络组件。Intel Mac 和较早系统尚未完成本次验证。
+**系统要求**：当前源码版本为 0.11.5。本次验证使用 Apple Silicon Mac 和 macOS 27；在这台机器生成的应用要求 macOS 27 或更新版本。虽然 Swift 项目最低目标设为 macOS 14，最终要求还取决于打包进去的网络组件。Intel Mac 和较早系统尚未完成本次验证。
 
 **公司 VPN 和订阅用途不同**：普通订阅节点不能代替公司 VPN 访问公司内网。需要浏览器登录、复杂多因素认证或专用客户端功能的企业 VPN，也可能无法使用。
 

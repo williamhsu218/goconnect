@@ -126,7 +126,7 @@ for binary in [*copied.values(), STAGE / "Contents/MacOS/GoConnect", bin_dir / "
             minimum = value
 info = {"CFBundleIdentifier": "com.willhsu.GoConnect", "CFBundleName": "GoConnect",
         "CFBundleDisplayName": "GoConnect", "CFBundleExecutable": "GoConnect", "CFBundlePackageType": "APPL",
-        "CFBundleShortVersionString": "0.11.4", "CFBundleVersion": "41", "CFBundleIconFile": icon_name,
+        "CFBundleShortVersionString": "0.11.5", "CFBundleVersion": "42", "CFBundleIconFile": icon_name,
         "LSMinimumSystemVersion": minimum, "NSHighResolutionCapable": True,
         "NSHumanReadableCopyright": "GoConnect contributors. Includes open-source components."}
 with (STAGE / "Contents/Info.plist").open("wb") as stream:
@@ -160,7 +160,7 @@ STAGE.rename(APP)
 lsregister = Path("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister")
 if lsregister.exists() and os.environ.get("GOCONNECT_REGISTER_APP", "1") == "1":
     subprocess.run([str(lsregister), "-f", str(APP)], check=True)
-archive = DIST / f"GoConnect-0.11.4-macos-{os.uname().machine}.zip"
+archive = DIST / f"GoConnect-0.11.5-macos-{os.uname().machine}.zip"
 if archive.exists(): archive.unlink()
 subprocess.run(["/usr/bin/ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", str(APP), str(archive)], check=True)
 (DIST / "SHA256SUMS").write_text(hashlib.sha256(archive.read_bytes()).hexdigest() + "  " + archive.name + "\n")

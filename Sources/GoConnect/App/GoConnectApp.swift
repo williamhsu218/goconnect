@@ -75,6 +75,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     func applicationWillTerminate(_ notification: Notification) { FaultDiagnostics.shared.record(.appStopping); menuBar?.tearDown(); store.nodeLatency.stop(); store.disconnect() }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showMainWindow()
+        // The shared opener restores or creates the main window, including when
+        // another window (such as Settings) is still visible. Skip default handling.
+        return false
+    }
 }
 
 private struct MainWindowContent: View {
