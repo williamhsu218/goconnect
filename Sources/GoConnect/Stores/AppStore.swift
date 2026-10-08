@@ -250,7 +250,7 @@ final class AppStore {
                 } else if !FileManager.default.isExecutableFile(atPath: resolved.path) {
                     show("请选择有效的 .app 或可执行文件。", error: true)
                 } else {
-                    show("无法读取该服务，请选择真实路径下的普通可执行文件，不要选择符号链接。", error: true)
+                    show("无法解析该服务，请选择有效的可执行文件或固定入口。", error: true)
                 }
                 return
             }
@@ -300,7 +300,9 @@ final class AppStore {
     func addExecutableService(excluded: Bool = false) {
         guard canEditApplications else { return }
         let panel = NSOpenPanel(); panel.title = excluded ? "添加直连可执行服务" : "添加白名单可执行服务"
-        panel.allowedContentTypes = [.unixExecutable]; panel.allowsMultipleSelection = true
+        panel.allowedContentTypes = [.unixExecutable, .symbolicLink]; panel.allowsMultipleSelection = true
+        panel.resolvesAliases = false
+        panel.message = "可选择固定入口（如 /opt/homebrew/bin/claude），连接时会自动解析当前版本。"
         panel.canChooseFiles = true; panel.canChooseDirectories = false
         let preferred = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin")
         panel.directoryURL = FileManager.default.fileExists(atPath: preferred.path) ? preferred : FileManager.default.homeDirectoryForCurrentUser
@@ -322,6 +324,7 @@ final class AppStore {
             if configuration.activeConnection.subscription == nil { _ = try configuration.profile.validatedServer() }
             else if selectedSubscriptionNode == nil { show("当前节点已不存在，请在订阅管理中重新选择。", error: true); page = .subscriptions; return }
             guard localReady else { show("运行组件不完整，请重新运行项目构建脚本。", error: true); return }
+            if !test { _ = try ApplicationRoutingSupport.routingPaths(for: configuration.routingApplications) }
 
             if configuration.activeConnection.companyRoutesEnabled && (configuration.activeConnection.subscription != nil || configuration.activeConnection.remoteNetworks.isEmpty) {
                 show("公司内网模式仅支持 AnyConnect，请先在线路配置中填写明确的公司网段。", error: true); return

@@ -8,18 +8,16 @@ public enum ApplicationRoutingSupport {
         let path = app.path
         let url = URL(fileURLWithPath: path)
         let files = FileManager.default
+        if app.isExecutableService {
+            guard !requiresLauncher else { return "独立可执行服务不支持旧版 App 启动标记。" }
+            do { _ = try ExecutableRoutingPath().resolvedPath(for: path) }
+            catch { return error.localizedDescription }
+            return nil
+        }
         guard files.fileExists(atPath: path) else { return "分流目标已移除或移动，请重新选择。" }
         guard path.hasPrefix("/"), !path.contains(where: { ",\0\r\n".contains($0) }),
               url.standardizedFileURL.path == path, url.resolvingSymlinksInPath().path == path else {
             return "分流路径不受支持，请选择真实安装位置。"
-        }
-        if app.isExecutableService {
-            guard !requiresLauncher else { return "独立可执行服务不支持旧版 App 启动标记。" }
-            guard files.isExecutableFile(atPath: path),
-                  let values = try? url.resourceValues(forKeys: [.isRegularFileKey]), values.isRegularFile == true else {
-                return "服务文件无效、不可执行或已被替换，请重新选择。"
-            }
-            return nil
         }
         if requiresLauncher && (path.hasPrefix("/System/") || ["com.apple.Safari", "com.apple.SafariTechnologyPreview"].contains(app.bundleID)
             || ["Safari.app", "Safari Technology Preview.app"].contains(url.lastPathComponent)) {
@@ -55,6 +53,25 @@ public enum ApplicationRoutingSupport {
         for app in apps {
             if let issue = issue(for: app, requiresLauncher: requiresLauncher) { throw SupportError(message: "「\(app.name)」：\(issue)") }
         }
+    }
+
+    public static func routingPaths(for apps: [AllowedApplication]) throws -> [String] {
+        guard apps.count <= 256 else { throw SupportError(message: "每份名单最多支持 256 个 App 或服务。") }
+        var paths: [String] = []
+        for app in apps {
+            let path: String
+            if app.isExecutableService {
+                do { path = try ExecutableRoutingPath().resolvedPath(for: app.path) }
+                catch { throw SupportError(message: "「\(app.name)」：\(error.localizedDescription)") }
+            } else {
+                if let issue = issue(for: app, requiresLauncher: false) {
+                    throw SupportError(message: "「\(app.name)」：\(issue)")
+                }
+                path = app.path
+            }
+            if !paths.contains(path) { paths.append(path) }
+        }
+        return paths
     }
 
     private struct SupportError: LocalizedError {

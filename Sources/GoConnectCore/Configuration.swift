@@ -2,7 +2,7 @@ import Foundation
 
 public enum Product {
     public static let bundleID = "com.willhsu.GoConnect"
-    public static let version = "0.11.6"
+    public static let version = "0.11.7"
 }
 
 public enum AccessMode: String, Codable, CaseIterable, Identifiable, Sendable {
@@ -65,6 +65,9 @@ public struct AllowedApplication: Codable, Equatable, Identifiable, Sendable {
         URL(fileURLWithPath: path).pathExtension.lowercased() != "app"
     }
     public var targetTypeTitle: String { isExecutableService ? "可执行服务" : "App" }
+    fileprivate var routingIdentity: String {
+        isExecutableService ? ((try? ExecutableRoutingPath().resolvedPath(for: path)) ?? path) : path
+    }
     public init(name: String, bundleID: String, path: String) {
         self.name = name; self.bundleID = bundleID; self.path = path
     }
@@ -85,10 +88,12 @@ public struct SavedConnection: Codable, Equatable, Identifiable, Sendable {
     public var remoteNetworks: [String] = []
     public var subscription: SubscriptionSelection?
     public var conflictingApplications: [AllowedApplication] {
-        applications.filter { app in excludedApplications.contains { $0.path == app.path } }
+        let excluded = Set(excludedApplications.map(\.routingIdentity))
+        return applications.filter { excluded.contains($0.routingIdentity) }
     }
     public var effectiveVPNApplications: [AllowedApplication] {
-        applications.filter { app in !excludedApplications.contains { $0.path == app.path } }
+        let excluded = Set(excludedApplications.map(\.routingIdentity))
+        return applications.filter { !excluded.contains($0.routingIdentity) }
     }
     public var displayName: String { profile.name.isEmpty ? "未命名连接" : profile.name }
     public init(profile: VPNProfile = VPNProfile(), applications: [AllowedApplication] = [],

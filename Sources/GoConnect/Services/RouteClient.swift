@@ -15,11 +15,11 @@ final class RouteClient {
 
     func updateApplications(_ apps: [AllowedApplication]) throws -> UInt64 {
         guard let directory, !stopping, lastState == "ready" else { throw CocoaError(.executableNotLoadable) }
-        try ApplicationRoutingSupport.validate(apps, requiresLauncher: false)
+        let paths = try ApplicationRoutingSupport.routingPaths(for: apps)
         commandSequence += 1
         struct Command: Encodable { let sequence: UInt64; let appPaths: [String]; let action = "updateApps" }
         let url = directory.appendingPathComponent("command.json")
-        let data = try JSONEncoder().encode(Command(sequence: commandSequence, appPaths: apps.map(\.path)))
+        let data = try JSONEncoder().encode(Command(sequence: commandSequence, appPaths: paths))
         guard apps.count <= 256, data.count <= 65536 else { throw CocoaError(.fileWriteOutOfSpace) }
         try data.write(to: url, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
@@ -27,14 +27,14 @@ final class RouteClient {
     }
 
     func start(port: UInt16, token: String, apps: [AllowedApplication], gateway: String, runtime: URL, mode: RoutingMode, directDomains: [DomainRule] = [], remoteNetworks: [String] = [], remoteExcluded: [String] = []) throws {
-        try ApplicationRoutingSupport.validate(apps, requiresLauncher: false)
+        let paths = try ApplicationRoutingSupport.routingPaths(for: apps)
         guard directory == nil else { throw CocoaError(.executableLoad) }
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("GoConnect-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         directory = dir; stopping = false; lastState = ""; commandSequence = 0
         do {
             var session = RouteSession(ownerPID: ProcessInfo.processInfo.processIdentifier, controlDirectory: dir.path,
-                                       token: token, socksPort: port, appPaths: apps.map(\.path), gateway: gateway, routingMode: mode, directDomains: directDomains)
+                                       token: token, socksPort: port, appPaths: paths, gateway: gateway, routingMode: mode, directDomains: directDomains)
             session.remoteNetworks = try RemoteNetwork.validated(remoteNetworks)
             session.remoteExcluded = try RemoteNetwork.validated(remoteExcluded)
             let url = dir.appendingPathComponent("session.json")

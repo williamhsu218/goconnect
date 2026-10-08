@@ -81,12 +81,14 @@ final class ApplicationRoutingSupportTests: XCTestCase {
         XCTAssertTrue(ApplicationRoutingSupport.issue(for: service, requiresLauncher: false)?.contains("不可执行") == true)
     }
 
-    func testStandaloneExecutableSymlinkIsRejected() throws {
+    func testStandaloneExecutableSymlinkIsResolvedBeforeRouting() throws {
         let (url, _) = try executableFixture("agy-real")
         let link = url.deletingLastPathComponent().appendingPathComponent("agy-link")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: url)
         let service = AllowedApplication(name: "agy", bundleID: "executable.agy", path: link.path)
-        XCTAssertTrue(ApplicationRoutingSupport.issue(for: service, requiresLauncher: false)?.contains("真实安装位置") == true)
+        XCTAssertNil(ApplicationRoutingSupport.issue(for: service, requiresLauncher: false))
+        XCTAssertEqual(try ApplicationRoutingSupport.routingPaths(for: [service]), [url.path])
+        XCTAssertEqual(service.path, link.path)
     }
 
     func testNewSessionEnablesLiveRoutingAndAllowsEmptyWhitelist() throws {

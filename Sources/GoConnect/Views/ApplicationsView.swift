@@ -88,7 +88,7 @@ struct ApplicationsView: View {
                 handleDrop(providers: providers)
             }
 
-            Text("App 按包路径匹配；可执行服务按完整文件路径精确匹配。GoConnect 不会自动启动或重启目标。")
+            Text("App 按包路径匹配；CLI 可选择固定入口，连接时自动解析当前版本并精确匹配。连接期间升级 CLI 后需重新连接。GoConnect 不会自动启动或重启目标。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

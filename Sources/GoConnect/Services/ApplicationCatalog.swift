@@ -12,15 +12,12 @@ struct ApplicationCatalog {
     }
     static func executable(at url: URL) -> AllowedApplication? {
         let standardized = url.standardizedFileURL
-        let resolved = standardized.resolvingSymlinksInPath()
-        guard standardized.path == resolved.path, resolved.pathExtension.lowercased() != "app",
-              FileManager.default.isExecutableFile(atPath: resolved.path),
-              let values = try? resolved.resourceValues(forKeys: [.isRegularFileKey]), values.isRegularFile == true else {
+        guard let path = try? ExecutableRoutingPath().savedPath(for: standardized) else {
             return nil
         }
-        let name = resolved.lastPathComponent
+        let name = standardized.lastPathComponent
         guard !name.isEmpty else { return nil }
-        return AllowedApplication(name: name, bundleID: "executable." + name, path: resolved.path)
+        return AllowedApplication(name: name, bundleID: "executable." + name, path: path)
     }
     static func scan() -> [AllowedApplication] {
         let roots = [URL(fileURLWithPath: "/Applications"), FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications"), URL(fileURLWithPath: "/System/Applications")]
