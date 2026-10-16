@@ -393,6 +393,11 @@ func installNetworkService(rawUID string) (result error) {
 		}
 		*dest = data
 	}
+	// The capture lock is held and no worker owns these journals. Repairing an
+	// installation must also recover a dead transparent session, without user data.
+	if err = recoverAbandonedSessions(); err != nil {
+		return err
+	}
 	if err = stopInstalledService(); err != nil {
 		return err
 	}

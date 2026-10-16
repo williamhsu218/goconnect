@@ -8,9 +8,14 @@ final class TransportClient {
     private var stopping = false
     private var generation = UUID()
     private var readerTask: Task<Void, Never>?
+    private let runtimeOverride: URL?
+    private let diagnostics: FaultDiagnostics
+    init(runtimeURL: URL? = nil, diagnostics: FaultDiagnostics = .shared) {
+        runtimeOverride = runtimeURL; self.diagnostics = diagnostics
+    }
     var onEvent: ((TransportEvent) -> Void)?
     var isRunning: Bool { process != nil }
-    var runtimeURL: URL { Bundle.main.resourceURL!.appendingPathComponent("Runtime") }
+    var runtimeURL: URL { runtimeOverride ?? Bundle.main.resourceURL!.appendingPathComponent("Runtime") }
     var isAvailable: Bool { FileManager.default.isExecutableFile(atPath: runtimeURL.appendingPathComponent("bin/GoConnectTransport").path) && FileManager.default.isExecutableFile(atPath: runtimeURL.appendingPathComponent("bin/openconnect").path) }
 
     func start(profile: VPNProfile, password: String, token: String) throws {
@@ -36,9 +41,12 @@ final class TransportClient {
         p.standardInput = stdin; p.standardOutput = stdout; p.standardError = FileHandle.nullDevice
         // No user shell, no credentials in argv, no inherited DYLD/Go environment.
         p.environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "en_US.UTF-8"]
-        try p.run(); FaultDiagnostics.shared.record(.transportStarted, value: Int(p.processIdentifier)); process = p; input = stdin.fileHandleForWriting
+        try p.run(); diagnostics.record(.transportStarted, value: Int(p.processIdentifier))
+        diagnostics.record(.transportKind, value: command == "session" ? 1 : command == "subscription-session" ? 2 : 3)
+        process = p; input = stdin.fileHandleForWriting
         input?.write(message)
         let handle = stdout.fileHandleForReading
+        let diagnostics = diagnostics
         readerTask = Task.detached { [weak self] in
             var decoder = EventDecoder()
             while !Task.isCancelled {
@@ -48,11 +56,24 @@ final class TransportClient {
             }
             try? handle.close()
             p.waitUntilExit()
-            FaultDiagnostics.shared.record(.transportExited, value: Int(p.terminationStatus))
+            diagnostics.record(.transportExited, value: Int(p.terminationStatus))
+            if p.terminationReason == .uncaughtSignal { diagnostics.record(.transportExitSignal, value: Int(p.terminationStatus)) }
             await self?.finished(run: run)
         }
     }
-    private func deliver(_ event: TransportEvent, run: UUID) { guard generation == run, (!stopping || event.event == "quarantined") else { return }; if event.event == "error" { FaultDiagnostics.shared.record(.transportError) }; onEvent?(event) }
+    private func deliver(_ event: TransportEvent, run: UUID) {
+        guard generation == run else { return }
+        // Drain final core diagnostics even after the UI has begun cleanup.
+        if event.event == "diagnostic" {
+            guard let code = event.code, let known = FaultEvent(rawValue: code), DisconnectReason.isCoreDiagnostic(known) else { return }
+            diagnostics.record(known, value: event.value ?? 0)
+            onEvent?(event)
+            return
+        }
+        guard !stopping || event.event == "quarantined" else { return }
+        if event.event == "error" { diagnostics.record(.transportError) }
+        onEvent?(event)
+    }
     private func finished(run: UUID) {
         guard generation == run else { return }
         process = nil; input = nil
@@ -61,6 +82,7 @@ final class TransportClient {
     func stop() {
         guard !stopping, let p = process else { return }
         stopping = true
+        diagnostics.record(.transportStopRequested, value: Int(p.processIdentifier))
         let run = generation
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(10))

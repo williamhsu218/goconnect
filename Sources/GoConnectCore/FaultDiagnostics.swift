@@ -10,6 +10,19 @@ public enum FaultEvent: String, Sendable {
     case schedulerGap = "scheduler.gap", sleep = "system.sleep", wake = "system.wake"
     case pathSatisfied = "network.satisfied", pathUnsatisfied = "network.unsatisfied", pathRequiresConnection = "network.requires_connection"
     case transportStarted = "transport.started", transportExited = "transport.exited", transportError = "transport.error"
+    case transportKind = "transport.kind", transportExitSignal = "transport.exit_signal", transportStopRequested = "transport.stop_requested"
+    case disconnectRequested = "connection.disconnect_requested", unexpectedDisconnect = "connection.unexpected_disconnect"
+    case connectionDuration = "connection.duration_seconds", disconnectSource = "connection.disconnect_source"
+    case coreStarted = "openconnect.started", coreReady = "openconnect.ready", coreExitCode = "openconnect.exit_code", coreExitSignal = "openconnect.exit_signal"
+    case coreUnexpectedExit = "openconnect.unexpected_exit", coreOutputIncomplete = "openconnect.output_incomplete", coreConnectTimeout = "openconnect.connect_timeout"
+    case coreServerDisconnect = "openconnect.server_disconnect", coreIdleTimeout = "openconnect.idle_timeout", coreSessionExpired = "openconnect.session_expired"
+    case coreCookieRejected = "openconnect.cookie_rejected", coreDPDTimeout = "openconnect.dpd_timeout"
+    case coreTLSReadFailed = "openconnect.tls_read_failed", coreTLSWriteFailed = "openconnect.tls_write_failed", coreTLSFailed = "openconnect.tls_failed"
+    case coreReconnectStarted = "openconnect.reconnect_started", coreReconnectFailed = "openconnect.reconnect_failed"
+    case coreCertificateFailed = "openconnect.certificate_failed", coreAuthenticationFailed = "openconnect.authentication_failed"
+    case coreDPDSeconds = "openconnect.dpd_seconds", coreKeepaliveSeconds = "openconnect.keepalive_seconds"
+    case coreReconnectTimeout = "openconnect.reconnect_timeout_seconds", coreSessionTimeout = "openconnect.session_timeout_seconds"
+    case coreSessionRemaining = "openconnect.session_remaining_seconds", coreIdleSeconds = "openconnect.idle_timeout_seconds"
     case idle = "phase.idle", connecting = "phase.connecting", connected = "phase.connected", failed = "phase.failed"
     case stopping = "phase.stopping", protected = "phase.protected", authorizing = "phase.authorizing", testing = "phase.testing"
     case preparingService = "phase.preparingService", preparingCheckService = "phase.preparingCheckService"
@@ -19,7 +32,12 @@ public enum FaultEvent: String, Sendable {
 // Background-only bounded disk I/O. No strings from configuration, errors or core output.
 public final class FaultDiagnostics: @unchecked Sendable {
     public static let shared = FaultDiagnostics()
-    public static var directory: URL { FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/GoConnect", isDirectory: true) }
+    public static var directory: URL {
+        if let preview = ProcessInfo.processInfo.environment["GOCONNECT_DATA_DIR"] {
+            return URL(fileURLWithPath: preview).appendingPathComponent("Logs", isDirectory: true)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/GoConnect", isDirectory: true)
+    }
     private let queue = DispatchQueue(label: "com.willhsu.GoConnect.diagnostics", qos: .utility)
     private let capacity = DispatchSemaphore(value: 128)
     private let logger = Logger(subsystem: "com.willhsu.GoConnect", category: "FaultDiagnostics")

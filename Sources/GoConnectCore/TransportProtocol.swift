@@ -13,6 +13,8 @@ public struct TransportEvent: Decodable, Sendable {
     public var sent: UInt64?
     public var passed: Bool?
     public var tun: Bool?
+    public var code: String?
+    public var value: Int?
     public init(event: String, message: String? = nil) { self.event = event; self.message = message }
 }
 

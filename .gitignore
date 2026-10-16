@@ -17,3 +17,5 @@ __pycache__/
 *.p12
 *.pfx
 .superpowers/
+.release-stage-*/
+*.zip

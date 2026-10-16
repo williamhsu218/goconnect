@@ -26,9 +26,10 @@ type transparentRoute struct {
 	Scoped                     bool `json:"scoped,omitempty"`
 }
 type transparentState struct {
-	Device string             `json:"device"`
-	Routes []transparentRoute `json:"routes"`
-	State  string             `json:"state"`
+	Device  string             `json:"device"`
+	Routes  []transparentRoute `json:"routes"`
+	State   string             `json:"state"`
+	CorePID int                `json:"corePID,omitempty"`
 }
 
 func originalPhysicalNetwork(probe bool) (originalNetwork, error) {
@@ -271,43 +272,36 @@ func addTransparentRoute(path string, s *transparentState, r transparentRoute) e
 	return e
 }
 func cleanupTransparentRoutes(path string, s *transparentState) error {
+	return cleanupTransparentRoutesWith(path, s, systemCommand)
+}
+
+func cleanupTransparentRoutesWith(path string, s *transparentState, command func(string, ...string) ([]byte, error)) error {
+	trace("transparent.cleanup_started", int64(len(s.Routes)))
 	var failed []transparentRoute
 	for i := len(s.Routes) - 1; i >= 0; i-- {
 		r := s.Routes[i]
-		p, e := netip.ParsePrefix(r.Prefix)
+		_, e := netip.ParsePrefix(r.Prefix)
 		if e != nil {
 			return e
 		}
-		if r.Scoped {
-			family := "inet"
-			if routeFamily(r.Prefix) == "-inet6" {
-				family = "inet6"
-			}
-			table, err := systemCommand("/usr/sbin/netstat", "-rn", "-f", family)
-			if err != nil {
-				failed = append(failed, r)
-				continue
-			}
-			if !scopedDefaultInTable(table, originalNetwork{Interface: r.Interface}, r.Gateway) {
-				continue
-			}
-		}
-		query := []string{"-n", "get", routeFamily(r.Prefix)}
-		if r.Scoped {
-			query = append(query, "-ifscope", r.Interface)
-		}
-		query = append(query, p.Addr().String())
-		b, e := systemCommand("/sbin/route", query...)
+		family := strings.TrimPrefix(routeFamily(r.Prefix), "-")
+		table, e := command("/usr/sbin/netstat", "-rn", "-f", family)
 		if e != nil {
 			failed = append(failed, r)
 			continue
 		}
-		if companyRouteInterface(b) != r.Interface {
+		// A lookup can return a different covering route, or fail because the
+		// interface/IPv6 route disappeared. Only the exact journaled route is ours.
+		if !ownedTransparentRouteInTable(table, r) {
 			continue
 		}
 		args := transparentRouteArguments("delete", r)
-		if _, e = systemCommand("/sbin/route", args...); e != nil {
-			failed = append(failed, r)
+		if _, e = command("/sbin/route", args...); e != nil {
+			// The kernel may already have removed it with its interface.
+			table, queryErr := command("/usr/sbin/netstat", "-rn", "-f", family)
+			if queryErr != nil || ownedTransparentRouteInTable(table, r) {
+				failed = append(failed, r)
+			}
 		}
 	}
 	s.Routes = failed
@@ -319,8 +313,10 @@ func cleanupTransparentRoutes(path string, s *transparentState) error {
 		return e
 	}
 	if len(failed) > 0 {
+		trace("transparent.cleanup_failed", int64(len(failed)))
 		return errors.New("路由清理未完成，已暂停新连接")
 	}
+	trace("transparent.cleanup_ok", 0)
 	return nil
 }
 
@@ -384,14 +380,8 @@ func transparentSession(ctx context.Context, path string, uid uint32, pid int) (
 		return e
 	}
 	defer lock.Close()
-	for _, pattern := range []string{"transparent-*", "company-*"} {
-		old, e := filepath.Glob(filepath.Join(serviceRunDirectory, pattern))
-		if e != nil {
-			return e
-		}
-		if len(old) > 0 {
-			return errors.New("存在未清理的网络会话，已暂停重连；请检查诊断。")
-		}
+	if e = recoverAbandonedSessions(); e != nil {
+		return e
 	}
 	r := c.request
 	if _, e = prepareLiveApps(r.AppPaths, false); e != nil {
@@ -447,6 +437,9 @@ func transparentSession(ctx context.Context, path string, uid uint32, pid int) (
 	var child *exec.Cmd
 	var done chan error
 	defer func() {
+		if result != nil {
+			trace("transparent.session_failed", 1)
+		}
 		// Restore the network before waiting for a potentially blocked core. Retain
 		// a quarantine record if either cleanup or child termination fails.
 		cleanupErr := cleanupTransparentRoutes(statePath, &state)
@@ -457,6 +450,7 @@ func transparentSession(ctx context.Context, path string, uid uint32, pid int) (
 		if cleanupErr != nil {
 			result = cleanupErr
 		} else if stopErr != nil {
+			trace("transparent.core_stop_failed", 1)
 			result = stopErr
 		} else {
 			_ = os.RemoveAll(dir)
@@ -481,6 +475,10 @@ func transparentSession(ctx context.Context, path string, uid uint32, pid int) (
 	child = cmd
 	done = make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
+	state.CorePID = cmd.Process.Pid
+	if e = saveTransparentState(statePath, state); e != nil {
+		return e
+	}
 	client := &http.Client{Timeout: time.Second}
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
@@ -494,6 +492,7 @@ func transparentSession(ctx context.Context, path string, uid uint32, pid int) (
 			return nil
 		case e := <-done:
 			done <- e
+			trace("transparent.core_exited", int64(cmd.ProcessState.ExitCode()))
 			return errors.New("透明分流核心已退出")
 		case <-tick.C:
 			if !c.alive() {
@@ -564,10 +563,12 @@ func transparentSession(ctx context.Context, path string, uid uint32, pid int) (
 				if !r.ProbeOnly {
 					now, e := originalPhysicalNetwork(true)
 					if e != nil || now != original {
+						trace("transparent.network_changed", 1)
 						return errors.New("原网络已改变，已停止本次连接；请重新连接")
 					}
 					b, e := systemCommand("/sbin/route", "-n", "get", r.Gateway)
 					if e != nil || companyRouteInterface(b) != original.Interface {
+						trace("transparent.outer_path_changed", 1)
 						return errors.New("VPN 外层路径改变，已停止连接以避免回流")
 					}
 				}
@@ -578,6 +579,7 @@ func transparentSession(ctx context.Context, path string, uid uint32, pid int) (
 					trace("transparent.health_failed", int64(failures))
 				}
 				if failures >= 3 {
+					trace("transparent.core_unresponsive", int64(failures))
 					return errors.New("分流核心连续未响应，已恢复原网络并停止本次连接")
 				}
 			}

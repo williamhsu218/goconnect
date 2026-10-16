@@ -12,6 +12,7 @@ let package = Package(
         .target(name: "GoConnectCore"),
         .executableTarget(name: "GoConnect", dependencies: ["GoConnectCore"],
                           linkerSettings: [.linkedFramework("SwiftUI"), .linkedFramework("Security")]),
-        .testTarget(name: "GoConnectCoreTests", dependencies: ["GoConnectCore"])
+        .testTarget(name: "GoConnectCoreTests", dependencies: ["GoConnectCore"]),
+        .testTarget(name: "GoConnectAppTests", dependencies: ["GoConnect", "GoConnectCore"])
     ]
 )

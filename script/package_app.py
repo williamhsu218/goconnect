@@ -7,13 +7,19 @@ from pathlib import Path
 import plistlib
 import re
 import shutil
-import signal
 import subprocess
 import sys
-import time
 
 ROOT = Path(__file__).resolve().parent.parent
-DIST = Path(os.environ.get("GOCONNECT_OUTPUT_DIR", ROOT / "dist")).resolve()
+if not all(os.environ.get(name) for name in ("GOCONNECT_WORK_DIR", "GOCONNECT_OUTPUT_DIR", "GOCONNECT_TRANSPORT_BIN_DIR")):
+    raise SystemExit("Use script/build_and_run.sh; packaging requires its temporary build directory.")
+WORK = Path(os.environ["GOCONNECT_WORK_DIR"]).resolve()
+DIST = Path(os.environ["GOCONNECT_OUTPUT_DIR"]).resolve()
+TRANSPORT_BIN = Path(os.environ["GOCONNECT_TRANSPORT_BIN_DIR"]).resolve()
+if WORK == ROOT or ROOT in WORK.parents or not WORK.name.startswith("goconnect-build.") or not WORK.is_dir():
+    raise SystemExit("Build directory must be a dedicated temporary directory outside the project.")
+if any(WORK not in path.parents for path in (DIST, TRANSPORT_BIN)):
+    raise SystemExit("Package and transport output must stay inside the temporary build directory.")
 STAGE = DIST / ".GoConnect.stage.app"
 APP = DIST / "GoConnect.app"
 OTOOL = shutil.which("otool") or "/usr/bin/otool"
@@ -32,8 +38,8 @@ licenses = STAGE / "Contents/Resources/ThirdParty"
 for directory in (bin_dir, lib_dir, share_dir, licenses, STAGE / "Contents/MacOS"):
     directory.mkdir(parents=True, exist_ok=True)
 shutil.copy2(sys.argv[1], STAGE / "Contents/MacOS/GoConnect")
-shutil.copy2(ROOT / "Transport/bin/GoConnectTransport", bin_dir / "GoConnectTransport")
-shutil.copy2(ROOT / "Transport/bin/GoConnectLauncher", bin_dir / "GoConnectLauncher")
+shutil.copy2(TRANSPORT_BIN / "GoConnectTransport", bin_dir / "GoConnectTransport")
+shutil.copy2(TRANSPORT_BIN / "GoConnectLauncher", bin_dir / "GoConnectLauncher")
 shutil.copy2(ROOT / "Packaging/Licenses/vpnonly-MIT.txt", licenses / "vpnonly-MIT.txt")
 
 brew_cellar = Path(run("brew", "--cellar"))
@@ -112,7 +118,7 @@ metadata = {"openconnect": run(shutil.which("openconnect"), "--version").splitli
 if (ROOT / "THIRD_PARTY.md").exists():
     shutil.copy2(ROOT / "THIRD_PARTY.md", licenses / "README.md")
 
-icon = ROOT / "Packaging/GoConnect.icns"
+icon = WORK / "GoConnect.icns"
 subprocess.run(["swift", str(ROOT / "script/make_icon.swift"), str(icon)], check=True)
 # A content-specific resource name also invalidates cached icons for pinned Dock items.
 icon_name = "GoConnect-" + hashlib.sha256(icon.read_bytes()).hexdigest()[:12] + ".icns"
@@ -126,7 +132,7 @@ for binary in [*copied.values(), STAGE / "Contents/MacOS/GoConnect", bin_dir / "
             minimum = value
 info = {"CFBundleIdentifier": "com.willhsu.GoConnect", "CFBundleName": "GoConnect",
         "CFBundleDisplayName": "GoConnect", "CFBundleExecutable": "GoConnect", "CFBundlePackageType": "APPL",
-        "CFBundleShortVersionString": "0.11.7", "CFBundleVersion": "44", "CFBundleIconFile": icon_name,
+        "CFBundleShortVersionString": "0.11.9", "CFBundleVersion": "46", "CFBundleIconFile": icon_name,
         "LSMinimumSystemVersion": minimum, "NSHighResolutionCapable": True,
         "NSHumanReadableCopyright": "GoConnect contributors. Includes open-source components."}
 info["CFBundleDevelopmentRegion"] = "zh-Hans"
@@ -140,7 +146,7 @@ for binary in [*lib_dir.iterdir(), *bin_dir.iterdir(), STAGE / "Contents/MacOS/G
 subprocess.run(["/usr/bin/codesign", "--force", "--sign", "-", str(STAGE)], check=True, capture_output=True)
 subprocess.run(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(STAGE)], check=True)
 
-# Stop only this checkout's GUI. A live tunnel must be disconnected explicitly first.
+# Never replace a bundle in use, including a GUI without a tunnel.
 processes = run("/bin/ps", "-axo", "pid=,command=").splitlines()
 for line in processes:
     fields = line.strip().split(None, 1)
@@ -149,12 +155,7 @@ for line in processes:
 for line in processes:
     fields = line.strip().split(None, 1)
     if len(fields) == 2 and fields[1] == str(APP / "Contents/MacOS/GoConnect"):
-        pid = int(fields[0]); os.kill(pid, signal.SIGTERM)
-        for _ in range(30):
-            try: os.kill(pid, 0)
-            except ProcessLookupError: break
-            time.sleep(0.1)
-        else: raise RuntimeError("GoConnect did not exit; close it before rebuilding.")
+        raise RuntimeError("Close the temporary GoConnect app before rebuilding.")
 if APP.exists():
     shutil.rmtree(APP)
 STAGE.rename(APP)
@@ -162,7 +163,7 @@ STAGE.rename(APP)
 lsregister = Path("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister")
 if lsregister.exists() and os.environ.get("GOCONNECT_REGISTER_APP", "1") == "1":
     subprocess.run([str(lsregister), "-f", str(APP)], check=True)
-archive = DIST / f"GoConnect-0.11.7-macos-{os.uname().machine}.zip"
+archive = DIST / f"GoConnect-0.11.9-macos-{os.uname().machine}.zip"
 if archive.exists(): archive.unlink()
 subprocess.run(["/usr/bin/ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", str(APP), str(archive)], check=True)
 (DIST / "SHA256SUMS").write_text(hashlib.sha256(archive.read_bytes()).hexdigest() + "  " + archive.name + "\n")

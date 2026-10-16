@@ -317,3 +317,73 @@ func TestUntrustedCertificateIsRejected(t *testing.T) {
 		}
 	}
 }
+
+func TestBundledOpenConnectServerDisconnectDiagnostics(t *testing.T) {
+	gate := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(gate) }) }
+	defer release()
+	fixture := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "CONNECT" {
+			conn, buffer, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+			fmt.Fprint(buffer, "HTTP/1.1 200 CONNECTED\r\nX-CSTP-Version: 1\r\nX-CSTP-MTU: 1400\r\nX-CSTP-Address: 192.0.2.1\r\nX-CSTP-Netmask: 255.255.255.0\r\nX-CSTP-DPD: 30\r\nX-CSTP-Keepalive: 20\r\nX-CSTP-Session-Timeout: 3600\r\n\r\n")
+			_ = buffer.Flush()
+			<-gate
+			channel := &cstpChannel{Conn: conn, reader: buffer}
+			_ = channel.frame(5, append([]byte{0xb0}, []byte("Idle Timeout")...))
+			return
+		}
+		body, _ := io.ReadAll(io.LimitReader(r.Body, 65536))
+		w.Header().Set("Content-Type", "text/xml")
+		if bytes.Contains(body, []byte("<password>synthetic-secret-never-log</password>")) {
+			fmt.Fprint(w, `<?xml version="1.0"?><config-auth client="vpn" type="complete"><auth id="success"/><session-token>fixture-cookie</session-token></config-auth>`)
+		} else {
+			fmt.Fprint(w, `<?xml version="1.0"?><config-auth client="vpn" type="auth-request"><auth id="main"><form method="post" action="/auth"><input type="text" name="username" label="Username:"/><input type="password" name="password" label="Password:"/></form></auth></config-auth>`)
+		}
+	}))
+	defer fixture.Close()
+	ca := filepath.Join(t.TempDir(), "fixture-ca.pem")
+	if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: fixture.Certificate().Raw}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	h := startHelper(t, fixture.URL, ca)
+	seen := make(map[string]bool)
+	ready := false
+	deadline := time.After(15 * time.Second)
+	for {
+		select {
+		case event, ok := <-h.events:
+			if !ok {
+				for _, code := range []string{"openconnect.idle_timeout", "openconnect.exit_code", "openconnect.unexpected_exit", "openconnect.dpd_seconds", "openconnect.keepalive_seconds"} {
+					if !seen[code] {
+						t.Fatalf("final diagnostic lost: %s (seen %v)", code, seen)
+					}
+				}
+				if !ready {
+					t.Fatal("session did not become ready")
+				}
+				return
+			}
+			data, _ := json.Marshal(event)
+			for _, secret := range []string{"synthetic-secret", "fixture-cookie", "fixture-user", fixture.URL} {
+				if bytes.Contains(data, []byte(secret)) {
+					t.Fatal("sensitive core output escaped")
+				}
+			}
+			if code, ok := event["code"].(string); ok {
+				seen[code] = true
+			}
+			if event["event"] == "ready" {
+				ready = true
+				release()
+			}
+		case <-deadline:
+			release()
+			t.Fatal("server disconnect diagnostics timed out")
+		}
+	}
+}

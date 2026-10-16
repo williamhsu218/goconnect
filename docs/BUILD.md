@@ -23,24 +23,54 @@ cd goconnect
 ./script/build_and_run.sh --build-only
 ```
 
-输出在 `dist/`：应用、ZIP 压缩包及 SHA-256 校验文件。应用包含运行需要的网络组件，使用者不需要另外安装 Homebrew 或 Cisco 客户端。
+Swift scratch、Go/C 二进制、图标、应用和 ZIP 全部在系统临时目录中生成。检查完成、失败或中断后自动删除临时目录；项目不会累积 `.build/`、`Transport/bin/` 或候选包。应用包含运行需要的网络组件，使用者不需要另外安装 Homebrew 或 Cisco 客户端。
 
-不带参数运行脚本会构建并打开应用。若同一输出目录中的应用正在连接，脚本会拒绝替换它。
+不带参数只构建和检查，不打开 GUI。需要预览时显式使用 `--run`；预览使用临时数据目录，脚本等待应用退出后删除临时产物，中断时只结束本次预览进程。`--debug` 选择 debug 构建，`--logs` 显示日志查看命令。
+
+需要交付候选包时，导出到项目外的**新目录**，例如：
+
+```sh
+./script/build_and_run.sh --verify --export "$HOME/Downloads/GoConnect-candidate-$(date +%Y%m%d-%H%M%S)"
+```
+
+导出仅含 ZIP 和 SHA256SUMS，不覆盖已有目录，不改变保留的正式版。交付或验收结束后清理该候选目录。旧 `GOCONNECT_OUTPUT_DIR` 持久输出参数已禁用。
+
+## 正式版、回滚版和清理
+
+`dist/current/` 只保留一个正式版 ZIP，`dist/rollback/` 只保留一个紧邻的回滚版 ZIP，各有一份 `SHA256SUMS`；`dist/releases.json` 记录实际包内版本、构建号、大小和哈希。项目内不再保留重复 `.app`，正式安装位置仍是 `/Applications/GoConnect.app`。
+
+普通构建不更新这两个目录。得到对应安装或发布授权并完成适用验收后，显式选择已验收的正式包和上一个正式包：
+
+```sh
+python3 script/release_artifacts.py retain --current /path/to/accepted-current.zip --rollback /path/to/previous-release.zip
+python3 script/release_artifacts.py check
+```
+
+归档命令校验 ZIP、包内标识、版本和构建顺序，完整准备新保留对后才替换目录。它不安装应用、不发布 GitHub，也不验证真实 VPN；维护者必须先完成这些适用的验收。旧保留目录移入废纸篓，替换失败时恢复。
+
+清理先查看清单，再执行：
+
+```sh
+python3 script/release_artifacts.py clean
+python3 script/release_artifacts.py clean --apply
+```
+
+清理要求保留对有效，只移走项目内生成的构建目录、独立的冗余 ZIP、Python 缓存和 `.DS_Store`。受版本控制的文件、源码、维护记录、用户数据和项目外的安装/服务组件均不在清理范围；正在运行的产物会导致清理拒绝。移出的文件在废纸篓，可恢复。
 
 ## 本地检查
 
 ```sh
-GOCONNECT_REGISTER_APP=0 \
-GOCONNECT_OUTPUT_DIR="$PWD/.build/verification" \
 ./script/build_and_run.sh --verify
 ```
 
-`--verify` 运行 Swift 测试、Go race 检查、完整打包、签名及动态依赖校验，以及使用内置组件的隔离集成测试。它不启动 GUI，不安装特权服务，也不主动改变系统路由。
+`--verify` 运行构建/清理边界回归测试、Swift 测试、Go race 检查、完整打包、签名及动态依赖校验，以及使用内置组件的隔离集成测试。它不启动 GUI，不安装特权服务，也不主动改变系统路由。
 
 只检查源码：
 
 ```sh
-swift test
+scratch="$(mktemp -d "${TMPDIR:-/tmp}/goconnect-source-check.XXXXXX")"
+swift test --scratch-path "$scratch"
+rm -rf -- "$scratch"
 (cd Transport && go test -race -count=1 -timeout 120s ./...)
 (cd Transport && go vet ./... && go mod verify)
 ```

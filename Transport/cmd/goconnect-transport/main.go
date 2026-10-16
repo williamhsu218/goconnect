@@ -170,7 +170,7 @@ func session(parent context.Context) error {
 	defer cancel()
 	// Keeping stdin open is the lifetime lease from the GUI. EOF means stop.
 	go func() { _, _ = io.Copy(io.Discard, reader); cancel() }()
-	args := []string{"--protocol=anyconnect", "--non-inter", "--passwd-on-stdin", "--reconnect-timeout=0", "--script-tun", "--script", "exec " + shellQuote(self) + " pipe", "--user", r.Username}
+	args := []string{"--protocol=anyconnect", "--verbose", "--non-inter", "--passwd-on-stdin", "--reconnect-timeout=0", "--script-tun", "--script", "exec " + shellQuote(self) + " pipe", "--user", r.Username}
 	if r.Group != "" {
 		args = append(args, "--authgroup", r.Group)
 	}
@@ -189,22 +189,54 @@ func session(parent context.Context) error {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LANG=C", "GOCONNECT_TOKEN=" + r.Token, "GOCONNECT_OWNER_PID=" + strconv.Itoa(os.Getpid())}
 	cmd.Stdin = strings.NewReader(r.Password + "\n")
-	stdout, err := cmd.StdoutPipe()
+	stdout, stdoutWrite, err := os.Pipe()
 	if err != nil {
 		return err
 	}
-	stderr, err := cmd.StderrPipe()
+	defer stdout.Close()
+	defer stdoutWrite.Close()
+	stderr, stderrWrite, err := os.Pipe()
 	if err != nil {
 		return err
 	}
+	defer stderr.Close()
+	defer stderrWrite.Close()
+	cmd.Stdout = stdoutWrite
+	cmd.Stderr = stderrWrite
 	if err = cmd.Start(); err != nil {
 		fail("无法启动 OpenConnect。")
 		return err
 	}
+	stdoutWrite.Close()
+	stderrWrite.Close()
+	emitCoreDiagnostic("openconnect.started", cmd.Process.Pid)
+	emitCoreDiagnostic("openconnect.reconnect_timeout_seconds", 0)
 	r.Password = ""
 	line = nil
+	var readers sync.WaitGroup
+	readers.Add(2)
 	ready := make(chan struct{}, 1)
+	var diagnosticMu sync.Mutex
+	seen := make(map[string]int)
+	observeCoreLine := func(line string) {
+		diagnosticMu.Lock()
+		defer diagnosticMu.Unlock()
+		for _, d := range classifyOpenConnect(line) {
+			if value, exists := seen[d.Code]; exists && value == d.Value {
+				continue
+			}
+			seen[d.Code] = d.Value
+			emitCoreDiagnostic(d.Code, d.Value)
+			if d.Code == "openconnect.certificate_failed" {
+				fail("服务器证书校验未通过。请确认服务器地址或配置受信任的证书。")
+			}
+			if d.Code == "openconnect.authentication_failed" {
+				fail("身份认证失败，请检查账号、密码和连接组。")
+			}
+		}
+	}
 	go func() {
+		defer readers.Done()
 		scanner := bufio.NewScanner(stdout)
 		scanner.Buffer(make([]byte, 4096), 1<<20)
 		for scanner.Scan() {
@@ -217,29 +249,54 @@ func session(parent context.Context) error {
 					}
 				}
 				emit(event)
+			} else {
+				// OpenConnect writes informational timing lines to stdout;
+				// errors go to stderr. Both pass through the same allowlist.
+				observeCoreLine(scanner.Text())
 			}
+		}
+		if scanner.Err() != nil {
+			emitCoreDiagnostic("openconnect.output_incomplete", 1)
 		}
 	}()
 	go func() {
+		defer readers.Done()
 		scanner := bufio.NewScanner(stderr)
+		scanner.Buffer(make([]byte, 4096), 1<<20)
 		for scanner.Scan() {
-			// Only classify known error categories. Raw OpenConnect output is never retained.
-			lower := strings.ToLower(scanner.Text())
-			if strings.Contains(lower, "certificate") && (strings.Contains(lower, "fail") || strings.Contains(lower, "invalid")) {
-				fail("服务器证书校验未通过。请确认服务器地址或配置受信任的证书。")
-			}
-			if strings.Contains(lower, "authentication failed") || strings.Contains(lower, "login failed") {
-				fail("身份认证失败，请检查账号、密码和连接组。")
-			}
+			observeCoreLine(scanner.Text())
+		}
+		if scanner.Err() != nil {
+			emitCoreDiagnostic("openconnect.output_incomplete", 1)
 		}
 	}()
 	ended := make(chan error, 1)
-	go func() { ended <- cmd.Wait() }()
+	go func() {
+		err := cmd.Wait()
+		// os.Pipe readers are owned here, so Wait cannot close them before
+		// the final reason is consumed. Bound draining for orphaned children.
+		drained := make(chan struct{})
+		go func() { readers.Wait(); close(drained) }()
+		select {
+		case <-drained:
+		case <-time.After(2 * time.Second):
+			stdout.Close()
+			stderr.Close()
+			<-drained
+			emitCoreDiagnostic("openconnect.output_incomplete", 1)
+		}
+		emitCoreDiagnostic("openconnect.exit_code", cmd.ProcessState.ExitCode())
+		if status, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+			emitCoreDiagnostic("openconnect.exit_signal", int(status.Signal()))
+		}
+		ended <- err
+	}()
 	timer := time.NewTimer(75 * time.Second)
 	defer timer.Stop()
 	for {
 		select {
 		case <-ready:
+			emitCoreDiagnostic("openconnect.ready", 0)
 			if !timer.Stop() {
 				select {
 				case <-timer.C:
@@ -252,12 +309,16 @@ func session(parent context.Context) error {
 				fail("VPN 子进程尚未退出，请导出诊断。")
 				return cleanupErr
 			}
+			if ctx.Err() == nil {
+				emitCoreDiagnostic("openconnect.unexpected_exit", 0)
+			}
 			if ctx.Err() == nil && err != nil {
 				fail("VPN 隧道未能建立或已中断。请核对认证方式和网络。")
 			}
 			emit(map[string]any{"event": "stopped"})
 			return err
 		case <-timer.C:
+			emitCoreDiagnostic("openconnect.connect_timeout", 75)
 			fail("连接超时，请检查服务器和网络。")
 			cancel()
 		case <-ctx.Done():

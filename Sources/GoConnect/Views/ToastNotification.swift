@@ -8,20 +8,38 @@ struct ToastBanner: View {
     let onDismiss: () -> Void
 
     @State private var copied = false
+    @State private var messageHeight: CGFloat = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .center, spacing: 10) {
             Image(systemName: isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(isError ? Color.red : AppTheme.success)
+                .frame(width: 28, height: 28)
 
-            ViewThatFits(in: .vertical) {
+            // Measure the natural text height; only long errors need scrolling.
+            // A flexible ViewThatFits/maxHeight expanded even a one-line toast.
+            if isError {
                 messageText
-                ScrollView { messageText.frame(maxWidth: .infinity, alignment: .leading) }
-                    .scrollIndicators(.visible)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .hidden()
+                    .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { messageHeight = $0 }
+                    .frame(maxHeight: 120, alignment: .top)
+                    .clipped()
+                    .overlay(alignment: .center) {
+                        if messageHeight > 120 {
+                            ScrollView {
+                                messageText.frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .scrollBounceBehavior(.basedOnSize)
+                        } else {
+                            messageText.frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+            } else {
+                messageText.frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxHeight: 120, alignment: .topLeading)
 
             if isError {
                 Button(action: copyError) {

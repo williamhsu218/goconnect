@@ -196,6 +196,7 @@ func readDiagnosticLogs() map[string]string {
 	for _, name := range []string{"service.jsonl.1", "service.jsonl", "worker.jsonl.1", "worker.jsonl"} {
 		result[name] = diagnosticTail(filepath.Join(diagnosticDirectory, name))
 	}
+	result["recovery.json"] = recoverySummary()
 	return result
 }
 func serviceDiagnostics() error {

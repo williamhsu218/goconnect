@@ -32,7 +32,7 @@ final class AppStore {
         configurationReadable && !updatingApplications && !busy
     }
     var search = ""
-    var phase = "idle" { didSet { if phase != oldValue, let event = FaultEvent(rawValue: "phase." + phase) { FaultDiagnostics.shared.record(event) } } }
+    var phase = "idle" { didSet { if phase != oldValue, let event = FaultEvent(rawValue: "phase." + phase) { diagnostics.record(event) } } }
     var testOnly = false
     var message: String?
     var isError = false
@@ -59,6 +59,8 @@ final class AppStore {
     private var socksPort: UInt16 = 0
     private var routeReported = false
     private var stopFailed = false
+    private var disconnectReason = DisconnectReason.unknown
+    private var unexpectedDisconnectReported = false
     private var handledCommand: UInt64 = 0
     private let transport = TransportClient()
     private let route = RouteClient()
@@ -74,9 +76,11 @@ final class AppStore {
     let keychain = KeychainStore()
     let nodeLatency: NodeLatencyStore
     let file: ConfigurationFile
+    private let diagnostics: FaultDiagnostics
 
-    init() {
-        let base = ProcessInfo.processInfo.environment["GOCONNECT_DATA_DIR"].map { URL(fileURLWithPath: $0) }
+    init(dataDirectory: URL? = nil, diagnostics: FaultDiagnostics = .shared, refreshRuntime: Bool = true) {
+        self.diagnostics = diagnostics
+        let base = dataDirectory ?? ProcessInfo.processInfo.environment["GOCONNECT_DATA_DIR"].map { URL(fileURLWithPath: $0) }
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent(Product.bundleID)
         file = ConfigurationFile(url: base.appendingPathComponent("configuration.json"))
         let quarantineURL = base.appendingPathComponent("network-quarantine.json")
@@ -119,7 +123,7 @@ final class AppStore {
         }
         do { subscriptions = try subscriptionFile.load() }
         catch { subscriptionsReadable = false; show("订阅缓存无法读取，原文件已保留。", error: true) }
-        refreshEnvironment()
+        if refreshRuntime { refreshEnvironment() }
     }
     var busy: Bool { passwordRequested || networkService.working || !["idle", "failed"].contains(phase) }
     var statusTitle: String {
@@ -334,6 +338,7 @@ final class AppStore {
             guard !secret.contains("\n"), !secret.contains("\r") else { show("密码不能包含换行。", error: true); return }
             guard save() else { return }
             testOnly = test; routeReported = false; stopFailed = false; routeSnapshot = nil; handledCommand = 0; connectedAt = nil; addresses = []; received = 0; sent = 0
+            disconnectReason = .unknown; unexpectedDisconnectReported = false
             token = UUID().uuidString + UUID().uuidString
             phase = test ? "connecting" : "preparingService"
             show("正在准备透明 App 分流服务。")
@@ -353,6 +358,7 @@ final class AppStore {
         guard busy else { return }
         if passwordRequested { passwordRequested = false; return }
         if routingCheckRunning { phase = "stopping"; routingCheck.stop(); return }
+        diagnostics.record(.disconnectRequested)
         stopFailed = false
         stopAll()
     }
@@ -368,8 +374,10 @@ final class AppStore {
             if !stopFailed { show("已断开。") }
         }
     }
-    private func handle(_ event: TransportEvent) {
+    func handle(_ event: TransportEvent) {
         switch event.event {
+        case "diagnostic":
+            if let code = event.code, let reason = DisconnectReason(diagnosticCode: code) { disconnectReason = disconnectReason.merging(reason) }
         case "ready":
             guard phase == "connecting", let port = event.port else { return }
             socksPort = port; addresses = event.addresses ?? []; connectedAt = Date()
@@ -388,17 +396,33 @@ final class AppStore {
         case "quarantined": quarantineNetwork()
         case "stats": received = event.received ?? received; sent = event.sent ?? sent
         case "error":
-            show(event.message ?? "VPN 连接失败。", error: true)
+            if connectedAt != nil && !["idle", "failed", "stopping"].contains(phase) {
+                reportUnexpectedDisconnect(source: 1)
+            } else { show(event.message ?? "VPN 连接失败。", error: true) }
             if phase == "stopping" { return }
             stopFailed = true; stopAll()
         case "stopped":
             if phase == "stopping" { finishStopping() }
-            else if phase == "connected" || phase == "protected" { stopFailed = true; stopAll() }
+            else if connectedAt != nil && !["idle", "failed"].contains(phase) {
+                reportUnexpectedDisconnect(source: 1); stopFailed = true; stopAll()
+            }
             else if phase != "idle" && phase != "failed" {
                 show("隧道已结束，请检查连接信息后重试。", error: true); stopFailed = true; stopAll()
             }
         default: break
         }
+    }
+    private func reportUnexpectedDisconnect(source: Int) {
+        guard !unexpectedDisconnectReported else { return }
+        unexpectedDisconnectReported = true
+        diagnostics.record(.unexpectedDisconnect, value: disconnectReason.rawValue)
+        diagnostics.record(.disconnectSource, value: source)
+        if let connectedAt { diagnostics.record(.connectionDuration, value: max(0, Int(Date().timeIntervalSince(connectedAt)))) }
+        let component = source == 2 ? "本机分流服务意外结束" : source == 3 ? "代理入口意外结束" : disconnectReason.explanation
+        show("连接意外断开：\(component)。已记录诊断日志，请在「诊断」中导出以分析原因。", error: true)
+        // Make background/menu-bar use visible without taking focus or
+        // requiring notification permission during a live VPN session.
+        if !NSApp.isActive { NSApp.requestUserAttention(.criticalRequest) }
     }
     private func handleRoute(_ state: String) {
         if state == "ready" && phase == "authorizing" {
@@ -406,12 +430,15 @@ final class AppStore {
             phase = "connected"
             show(configuration.routingMode.title + "已启用，应用无需配置代理。")
         } else if ["failed", "serviceFailed"].contains(state) && phase != "stopping" {
-            show(routeSnapshot?.message ?? "本机分流服务未能启动，请在诊断中重新检测服务和网络环境。", error: true)
+            if phase == "connected" || phase == "protected" { reportUnexpectedDisconnect(source: 2) }
+            else { show(routeSnapshot?.message ?? "本机分流服务未能启动，请在诊断中重新检测服务和网络环境。", error: true) }
             stopFailed = true; stopAll()
         } else if state == "stopped" {
             if phase == "stopping" { finishStopping() }
             else {
-                show("分流进程已结束，请重新连接。", error: true); stopFailed = true; stopAll()
+                if phase == "connected" || phase == "protected" { reportUnexpectedDisconnect(source: 2) }
+                else { show("分流进程已结束，请重新连接。", error: true) }
+                stopFailed = true; stopAll()
             }
         }
     }
@@ -421,11 +448,14 @@ final class AppStore {
             proxyPort = port; phase = "connected"; show(usesCompanyRoutes ? "代理与公司网段已就绪，共用当前 AnyConnect 会话。" : "代理入口已就绪。请在目标应用中设置代理；仅加入名单不会生效。")
             proxyConnectivity.check(port: port)
         } else if event.event == "error" {
-            show(event.message ?? "代理入口异常。", error: true)
+            if phase == "connected" { reportUnexpectedDisconnect(source: 3) }
+            else { show(event.message ?? "代理入口异常。", error: true) }
             if phase != "stopping" { stopFailed = true; stopAll() }
         } else if event.event == "stopped" {
             if phase == "stopping" { finishStopping() }
-            else if phase == "connected" || phase == "authorizing" { stopFailed = true; stopAll() }
+            else if phase == "connected" || phase == "authorizing" {
+                reportUnexpectedDisconnect(source: 3); stopFailed = true; stopAll()
+            }
         }
     }
     private func quarantineNetwork() {
@@ -475,9 +505,10 @@ final class AppStore {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         let report = "GoConnect \(Product.version)\nmacOS \(ProcessInfo.processInfo.operatingSystemVersionString)\n运行组件: \(localReady)\n状态: \(phase)\n模式: \(accessTitle)\n白名单数量: \(configuration.applications.count)\n直连排除数量: \(configuration.excludedApplications.count)\nTailscale 已识别: \(routeSnapshot?.tailscaleActive == true)\n\n" + "本次运行事件数: \(activity.count)；错误数: \(activity.filter(\.isError).count)\n原始消息可能含服务器或路径信息，导出仅包含结构化故障事件。"
         Task {
-            let appLogs = await FaultDiagnostics.shared.export()
+            let appLogs = await diagnostics.export()
             let serviceLogs = await networkService.diagnosticLogs()
-            let output = report + "\n\n持久故障日志（UTC；仅事件代码与数值）\n" + appLogs + "\n\n网络服务日志\n" + serviceLogs
+            let legend = "\n断线日志说明：connection.disconnect_requested=主动断开；connection.unexpected_disconnect=意外断开（value: 0原因未知/1服务器断开/2空闲超时/3会话到期/4会话凭据被拒/5DPD超时/6TLS读取/7TLS写入/8TLS连接/9重连失败）；connection.disconnect_source: 1隧道/2本机分流/3代理入口；connection.duration_seconds=连接持续秒数。openconnect.exit_code 与 openconnect.exit_signal 为实际 VPN 进程退出信息，transport.exited 为包装组件退出码。network.*、system.sleep/wake 可用于时间关联，不单独证明根因。\n"
+            let output = report + legend + "\n\n持久故障日志（UTC；仅事件代码与数值）\n" + appLogs + "\n\n网络服务日志\n" + serviceLogs
             do {
                 try await Task.detached {
                     try output.write(to: url, atomically: true, encoding: .utf8)
