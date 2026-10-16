@@ -308,12 +308,43 @@ func inspectControl(path string, createStatus bool) (*controlFiles, error) {
 }
 
 func (c *controlFiles) alive() bool {
+	reason, _ := c.leaseDiagnostics()
+	return reason.Reason == ""
+}
+func (c *controlFiles) leaseDiagnostics() (diagnosticDetails, error) {
+	d := diagnosticDetails{Stage: "lease", TimeoutMS: 5000}
 	data, st, err := readOwned(c.directory, "lease", c.uid)
-	if err != nil || string(data) != c.request.Token || time.Since(st.ModTime()) > 5*time.Second || time.Until(st.ModTime()) > time.Second {
-		return false
+	if err != nil {
+		d.Reason = "lease_unreadable"
+		if os.IsNotExist(err) {
+			d.Reason = "lease_missing"
+		}
+		return d, err
+	}
+	if string(data) != c.request.Token {
+		d.Reason = "lease_token_mismatch"
+		return d, nil
+	}
+	age := time.Since(st.ModTime())
+	d.DurationMS = age.Milliseconds()
+	if age > 5*time.Second {
+		d.Reason = "lease_expired"
+		return d, nil
+	}
+	if age < -time.Second {
+		d.Reason = "lease_future"
+		return d, nil
 	}
 	owner, err := unix.SysctlKinfoProc("kern.proc.pid", c.request.OwnerPID)
-	return err == nil && owner.Eproc.Ucred.Uid == c.uid && owner.Proc.P_starttime == c.started
+	if err != nil {
+		d.Reason = "owner_missing"
+		return d, err
+	}
+	if owner.Eproc.Ucred.Uid != c.uid || owner.Proc.P_starttime != c.started {
+		d.Reason = "owner_changed"
+		return d, nil
+	}
+	return diagnosticDetails{}, nil
 }
 func (c *controlFiles) close() {
 	if c.status != nil {
@@ -380,23 +411,8 @@ func writeConfig(r routeRequest, runtime, device string, port uint16) (string, e
 	return dir, nil
 }
 func ready(client *http.Client, port uint16, token, device string) bool {
-	iface, err := net.InterfaceByName(device)
-	if err != nil || iface.Flags&net.FlagUp == 0 {
-		return false
-	}
-	request, _ := http.NewRequest("GET", fmt.Sprintf("http://127.0.0.1:%d/configs", port), nil)
-	request.Header.Set("Authorization", "Bearer "+token)
-	response, err := client.Do(request)
-	if err != nil {
-		return false
-	}
-	defer response.Body.Close()
-	var body struct {
-		Tun struct {
-			Enable bool `json:"enable"`
-		} `json:"tun"`
-	}
-	return response.StatusCode == 200 && json.NewDecoder(io.LimitReader(response.Body, 65536)).Decode(&body) == nil && body.Tun.Enable
+	ok, _ := coreReadiness(client, port, token, device)
+	return ok
 }
 
 func routeSession(ctx context.Context, path string) (resultErr error) {

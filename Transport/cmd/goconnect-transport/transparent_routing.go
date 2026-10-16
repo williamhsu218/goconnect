@@ -33,8 +33,11 @@ type transparentState struct {
 }
 
 func originalPhysicalNetwork(probe bool) (originalNetwork, error) {
+	return originalPhysicalNetworkWith(probe, net.Interfaces, systemCommand)
+}
+func originalPhysicalNetworkWith(probe bool, interfaces func() ([]net.Interface, error), command func(string, ...string) ([]byte, error)) (originalNetwork, error) {
 	read := func(args ...string) (originalNetwork, error) {
-		b, e := systemCommand("/sbin/route", args...)
+		b, e := command("/sbin/route", args...)
 		if e != nil {
 			return originalNetwork{}, e
 		}
@@ -55,16 +58,22 @@ func originalPhysicalNetwork(probe bool) (originalNetwork, error) {
 		return read("-n", "get", "-inet", "default")
 	}
 	// Isolated validation only: no default routes will be installed.
-	ifaces, e := net.Interfaces()
+	ifaces, e := interfaces()
 	if e != nil {
 		return originalNetwork{}, e
 	}
+	var lastFailure error
 	for _, i := range ifaces {
 		if physicalInterface.MatchString(i.Name) && i.Flags&net.FlagUp != 0 {
 			if n, e := read("-n", "get", "-inet", "-ifscope", i.Name, "default"); e == nil {
 				return n, nil
+			} else if diagnosticError(lastFailure).Reason != "system_timeout" {
+				lastFailure = e
 			}
 		}
+	}
+	if lastFailure != nil {
+		return originalNetwork{}, fmt.Errorf("找不到原网络接口: %w", lastFailure)
 	}
 	return originalNetwork{}, errors.New("找不到原网络接口")
 }
@@ -163,9 +172,16 @@ func staticGatewayPresent(gateway string, original originalNetwork) bool {
 	table, err := systemCommand("/usr/sbin/netstat", "-rn", "-f", "inet")
 	return err == nil && staticGatewayInTable(table, gateway, original)
 }
-func gatewayUsesOriginal(gateway string, original originalNetwork) bool {
+
+// Preserve command failures across the combined boolean check. Otherwise a
+// command timeout is indistinguishable from a successfully observed route change.
+func transparentGatewayReady(gateway string, original originalNetwork) (bool, error) {
+	table, err := systemCommand("/usr/sbin/netstat", "-rn", "-f", "inet")
+	if err != nil || !staticGatewayInTable(table, gateway, original) {
+		return false, err
+	}
 	b, err := systemCommand("/sbin/route", "-n", "get", "-inet", gateway)
-	return err == nil && companyRouteInterface(b) == original.Interface
+	return err == nil && companyRouteInterface(b) == original.Interface, err
 }
 func pinTransparentGateway(path string, s *transparentState, gateway string, original originalNetwork) error {
 	if !staticGatewayPresent(gateway, original) {
@@ -173,7 +189,10 @@ func pinTransparentGateway(path string, s *transparentState, gateway string, ori
 			return fmt.Errorf("无法固定 VPN 外层路径: %w", err)
 		}
 	}
-	if !staticGatewayPresent(gateway, original) || !gatewayUsesOriginal(gateway, original) {
+	if ok, err := transparentGatewayReady(gateway, original); !ok {
+		if err != nil {
+			return fmt.Errorf("VPN 网关静态绕行检查失败: %w", err)
+		}
 		return errors.New("VPN 网关静态绕行路由未生效")
 	}
 	return nil
@@ -276,30 +295,53 @@ func cleanupTransparentRoutes(path string, s *transparentState) error {
 }
 
 func cleanupTransparentRoutesWith(path string, s *transparentState, command func(string, ...string) ([]byte, error)) error {
+	return cleanupTransparentRoutesWithDiagnostics(path, s, command, traceDetails)
+}
+func cleanupTransparentRoutesWithDiagnostics(path string, s *transparentState, command func(string, ...string) ([]byte, error), record func(string, int64, diagnosticDetails)) error {
 	trace("transparent.cleanup_started", int64(len(s.Routes)))
+	failure := func(reason string, index int, route transparentRoute, err error) {
+		d := diagnosticError(err)
+		d.Check = d.Reason
+		d.Stage = "cleanup"
+		d.Reason = reason
+		d.RouteIndex = &index
+		d.Interface = route.Interface
+		d.Scoped = &route.Scoped
+		if prefix, e := netip.ParsePrefix(route.Prefix); e == nil {
+			d.Family = 6
+			if prefix.Addr().Is4() {
+				d.Family = 4
+			}
+			n := prefix.Bits()
+			d.PrefixBits = &n
+		}
+		record("transparent.route_cleanup_failed", int64(index), d)
+	}
 	var failed []transparentRoute
 	for i := len(s.Routes) - 1; i >= 0; i-- {
 		r := s.Routes[i]
-		_, e := netip.ParsePrefix(r.Prefix)
-		if e != nil {
+		if _, e := netip.ParsePrefix(r.Prefix); e != nil {
+			failure("invalid_route", i, r, e)
 			return e
 		}
 		family := strings.TrimPrefix(routeFamily(r.Prefix), "-")
 		table, e := command("/usr/sbin/netstat", "-rn", "-f", family)
 		if e != nil {
+			failure("read_failed", i, r, e)
 			failed = append(failed, r)
 			continue
 		}
-		// A lookup can return a different covering route, or fail because the
-		// interface/IPv6 route disappeared. Only the exact journaled route is ours.
 		if !ownedTransparentRouteInTable(table, r) {
 			continue
 		}
-		args := transparentRouteArguments("delete", r)
-		if _, e = command("/sbin/route", args...); e != nil {
-			// The kernel may already have removed it with its interface.
+		if _, e = command("/sbin/route", transparentRouteArguments("delete", r)...); e != nil {
 			table, queryErr := command("/usr/sbin/netstat", "-rn", "-f", family)
-			if queryErr != nil || ownedTransparentRouteInTable(table, r) {
+			if queryErr != nil {
+				failure("delete_failed", i, r, e)
+				failure("recheck_failed", i, r, queryErr)
+				failed = append(failed, r)
+			} else if ownedTransparentRouteInTable(table, r) {
+				failure("delete_still_present", i, r, e)
 				failed = append(failed, r)
 			}
 		}
@@ -310,6 +352,10 @@ func cleanupTransparentRoutesWith(path string, s *transparentState, command func
 		s.State = "cleanupFailed"
 	}
 	if e := saveTransparentState(path, *s); e != nil {
+		d := diagnosticError(e)
+		d.Stage = "cleanup"
+		d.Reason = "journal_write_failed"
+		record("transparent.cleanup_journal_failed", int64(len(failed)), d)
 		return e
 	}
 	if len(failed) > 0 {
@@ -356,6 +402,8 @@ func validateTransparentAddresses(remote []string) error {
 }
 
 func transparentSession(ctx context.Context, path string, uid uint32, pid int) (result error) {
+	exitLog := newSessionExitDiagnostics()
+	defer exitLog.complete(&result)
 	c, e := openControl(path)
 	if e != nil {
 		return e
@@ -375,30 +423,37 @@ func transparentSession(ctx context.Context, path string, uid uint32, pid int) (
 			c.write("stopped")
 		}
 	}()
+	exitLog.stage = "lock"
 	lock, e := captureLock()
 	if e != nil {
 		return e
 	}
 	defer lock.Close()
+	exitLog.stage = "recovery"
 	if e = recoverAbandonedSessions(); e != nil {
 		return e
 	}
 	r := c.request
+	exitLog.stage = "apps"
 	if _, e = prepareLiveApps(r.AppPaths, false); e != nil {
 		return e
 	}
+	exitLog.stage = "network"
 	original, e := originalPhysicalNetwork(r.ProbeOnly)
 	if e != nil {
 		return e
 	}
+	exitLog.stage = "local"
 	local, e := discoverLocalNetworks()
 	if e != nil {
 		return e
 	}
+	exitLog.stage = "tailscale"
 	ts, e := discoverTailscale()
 	if e != nil {
 		return e
 	}
+	exitLog.stage = "company"
 	if len(r.RemoteNetworks) > 0 {
 		if _, e = companyPlan(r.RemoteNetworks, local, ts); e != nil {
 			return e
@@ -407,17 +462,21 @@ func transparentSession(ctx context.Context, path string, uid uint32, pid int) (
 			return e
 		}
 	}
+	exitLog.stage = "address"
 	if e = validateTransparentAddresses(r.RemoteNetworks); e != nil {
 		return e
 	}
+	exitLog.stage = "device"
 	device, e := chooseDevice()
 	if e != nil {
 		return e
 	}
+	exitLog.stage = "port"
 	port, e := freePort()
 	if e != nil {
 		return e
 	}
+	exitLog.stage = "runtime"
 	runtime, e := runtimePath()
 	if e != nil {
 		return e
@@ -425,37 +484,56 @@ func transparentSession(ctx context.Context, path string, uid uint32, pid int) (
 	if e = secureRootPath(filepath.Join(runtime, "bin/mihomo"), false); e != nil {
 		return e
 	}
+	exitLog.stage = "journal"
 	dir, e := os.MkdirTemp(serviceRunDirectory, "transparent-")
 	if e != nil {
 		return e
 	}
 	statePath := filepath.Join(dir, "state.json")
 	state := transparentState{Device: device, State: "starting"}
+	exitLog.stage = "journal"
 	if e = saveTransparentState(statePath, state); e != nil {
 		return e
 	}
 	var child *exec.Cmd
 	var done chan error
-	defer func() {
+	defer exitLog.unwind(&result, func() {
 		if result != nil {
 			trace("transparent.session_failed", 1)
 		}
 		// Restore the network before waiting for a potentially blocked core. Retain
 		// a quarantine record if either cleanup or child termination fails.
-		cleanupErr := cleanupTransparentRoutes(statePath, &state)
+		cleanupErr := cleanupTransparentRoutesWithDiagnostics(statePath, &state, systemCommand, exitLog.cleanupEvent)
+		exitLog.cleanupFailures = len(state.Routes)
+		if cleanupErr != nil && exitLog.cleanupFailures == 0 {
+			exitLog.cleanupFailures = 1
+		}
 		var stopErr error
 		if child != nil {
 			stopErr = stopChild(child, done)
 		}
+		if stopErr != nil {
+			exitLog.stopFailed = true
+			d := diagnosticError(stopErr)
+			d.Stage = "core_stop"
+			d.Reason = "core_stop_failed"
+			exitLog.cleanupEvent("transparent.core_stop_failed", 1, d)
+		}
 		if cleanupErr != nil {
 			result = cleanupErr
 		} else if stopErr != nil {
-			trace("transparent.core_stop_failed", 1)
 			result = stopErr
 		} else {
-			_ = os.RemoveAll(dir)
+			if removeErr := os.RemoveAll(dir); removeErr != nil {
+				d := diagnosticError(removeErr)
+				d.Stage = "remove"
+				d.Reason = "directory_remove_failed"
+				exitLog.cleanupFailures++
+				exitLog.cleanupEvent("transparent.cleanup_directory_failed", 1, d)
+			}
 		}
-	}()
+	})
+	exitLog.stage = "config"
 	config, e := json.Marshal(makeTransparentConfig(r, device, port, original, local, ts))
 	if e != nil {
 		return e
@@ -469,6 +547,7 @@ func transparentSession(ctx context.Context, path string, uid uint32, pid int) (
 	cmd.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LANG=C"}
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
+	exitLog.stage = "core_start"
 	if e = cmd.Start(); e != nil {
 		return e
 	}
@@ -476,6 +555,7 @@ func transparentSession(ctx context.Context, path string, uid uint32, pid int) (
 	done = make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	state.CorePID = cmd.Process.Pid
+	exitLog.stage = "journal"
 	if e = saveTransparentState(statePath, state); e != nil {
 		return e
 	}
@@ -489,25 +569,40 @@ func transparentSession(ctx context.Context, path string, uid uint32, pid int) (
 	for {
 		select {
 		case <-ctx.Done():
+			exitLog.stage = "lease"
+			exitLog.capture("context_canceled", ctx.Err(), diagnosticDetails{})
 			return nil
 		case e := <-done:
 			done <- e
+			exitLog.stage = "health_core"
+			code := cmd.ProcessState.ExitCode()
+			exitLog.capture("core_exited", e, diagnosticDetails{ExitCode: &code})
 			trace("transparent.core_exited", int64(cmd.ProcessState.ExitCode()))
 			return errors.New("透明分流核心已退出")
 		case <-tick.C:
-			if !c.alive() {
+			if lease, err := c.leaseDiagnostics(); lease.Reason != "" {
+				exitLog.stage = "lease"
+				exitLog.capture(lease.Reason, err, lease)
 				return nil
 			}
 			if !active {
-				if !ready(client, port, r.Token, device) {
+				exitLog.stage = "core_ready"
+				healthy, health := coreReadiness(client, port, r.Token, device)
+				if !healthy {
 					if time.Since(start) > 15*time.Second {
+						exitLog.capture("core_start_timeout", nil, health)
 						return errors.New("透明分流入口启动超时")
 					}
 					continue
 				}
 				if !r.ProbeOnly {
+					exitLog.stage = "network"
 					current, e := originalPhysicalNetwork(false)
-					if e != nil || current != original {
+					if e != nil {
+						return exitLog.fail("network_query_failed", fmt.Errorf("原网络检查失败: %w", e))
+					}
+					if current != original {
+						exitLog.capture("network_changed", nil, diagnosticDetails{ExpectedInterface: original.Interface, ActualInterface: current.Interface, GatewayChanged: current.Gateway != original.Gateway})
 						return errors.New("原网络已改变，请重新连接")
 					}
 					// Keep the tunnel's outer connection on its original physical path.
@@ -515,11 +610,13 @@ func transparentSession(ctx context.Context, path string, uid uint32, pid int) (
 					if !gw.Is4() {
 						return errors.New("当前透明连接要求 IPv4 VPN 网关")
 					}
+					exitLog.stage = "health_gateway"
 					b, e := systemCommand("/sbin/route", "-n", "get", r.Gateway)
 					if e != nil {
-						return e
+						return exitLog.fail("gateway_query_failed", e)
 					}
-					if companyRouteInterface(b) != original.Interface {
+					if actual := companyRouteInterface(b); actual != original.Interface {
+						exitLog.capture("gateway_changed", nil, diagnosticDetails{ExpectedInterface: original.Interface, ActualInterface: actual})
 						return errors.New("VPN 服务器未使用原网络，请先结束冲突的 VPN")
 					}
 					if e = pinTransparentGateway(statePath, &state, r.Gateway, original); e != nil {
@@ -532,6 +629,7 @@ func transparentSession(ctx context.Context, path string, uid uint32, pid int) (
 						return e
 					}
 				}
+				exitLog.stage = "routing"
 				if e = ensureTransparentDirectRoutes(statePath, &state, original); e != nil {
 					return e
 				}
@@ -544,11 +642,17 @@ func transparentSession(ctx context.Context, path string, uid uint32, pid int) (
 				if r.ProbeOnly {
 					outer = "203.0.113.5"
 				}
-				if !staticGatewayPresent(outer, original) || !gatewayUsesOriginal(outer, original) {
+				exitLog.stage = "health_gateway"
+				if ok, e := transparentGatewayReady(outer, original); !ok {
+					if e != nil {
+						return exitLog.fail("gateway_query_failed", e)
+					}
+					exitLog.capture("gateway_changed", nil, diagnosticDetails{ExpectedInterface: original.Interface})
 					return errors.New("接管路由后 VPN 网关绕行失效，已停止连接")
 				}
 				active = true
 				state.State = "ready"
+				exitLog.stage = "journal"
 				if e = saveTransparentState(statePath, state); e != nil {
 					return e
 				}
@@ -561,24 +665,35 @@ func transparentSession(ctx context.Context, path string, uid uint32, pid int) (
 			} else if time.Since(lastHealth) > 5*time.Second {
 				lastHealth = time.Now()
 				if !r.ProbeOnly {
+					exitLog.stage = "health_network"
 					now, e := originalPhysicalNetwork(true)
-					if e != nil || now != original {
-						trace("transparent.network_changed", 1)
+					if e != nil {
+						return exitLog.fail("network_query_failed", fmt.Errorf("原网络检查失败: %w", e))
+					}
+					if now != original {
+						exitLog.capture("network_changed", nil, diagnosticDetails{ExpectedInterface: original.Interface, ActualInterface: now.Interface, GatewayChanged: now.Gateway != original.Gateway})
 						return errors.New("原网络已改变，已停止本次连接；请重新连接")
 					}
+					exitLog.stage = "health_gateway"
 					b, e := systemCommand("/sbin/route", "-n", "get", r.Gateway)
-					if e != nil || companyRouteInterface(b) != original.Interface {
-						trace("transparent.outer_path_changed", 1)
+					if e != nil {
+						return exitLog.fail("gateway_query_failed", fmt.Errorf("VPN 外层检查失败: %w", e))
+					}
+					if actual := companyRouteInterface(b); actual != original.Interface {
+						exitLog.capture("gateway_changed", nil, diagnosticDetails{ExpectedInterface: original.Interface, ActualInterface: actual})
 						return errors.New("VPN 外层路径改变，已停止连接以避免回流")
 					}
 				}
-				if ready(client, port, r.Token, device) {
+				exitLog.stage = "health_core"
+				healthy, health := coreReadiness(client, port, r.Token, device)
+				if healthy {
 					failures = 0
 				} else {
 					failures++
-					trace("transparent.health_failed", int64(failures))
+					traceDetails("transparent.health_failed", int64(failures), health)
 				}
 				if failures >= 3 {
+					exitLog.capture("core_unresponsive", nil, health)
 					trace("transparent.core_unresponsive", int64(failures))
 					return errors.New("分流核心连续未响应，已恢复原网络并停止本次连接")
 				}

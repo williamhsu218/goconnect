@@ -46,7 +46,12 @@ func TestDiagnosticRejectUnsafeFiles(t *testing.T) {
 			case "fifo":
 				unix.Mkfifo(path, 0600)
 			case "public":
-				os.WriteFile(path, nil, 0644)
+				if err := os.WriteFile(path, nil, 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(path, 0644); err != nil {
+					t.Fatal(err)
+				}
 			}
 			if err := appendDiagnostic(path, []byte("x"), 64); err == nil {
 				t.Fatal("unsafe file accepted")

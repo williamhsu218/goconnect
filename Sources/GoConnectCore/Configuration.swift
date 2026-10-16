@@ -2,7 +2,7 @@ import Foundation
 
 public enum Product {
     public static let bundleID = "com.willhsu.GoConnect"
-    public static let version = "0.11.9"
+    public static let version = "0.11.10"
 }
 
 public enum AccessMode: String, Codable, CaseIterable, Identifiable, Sendable {

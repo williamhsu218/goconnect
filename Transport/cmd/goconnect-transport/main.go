@@ -48,7 +48,7 @@ func main() {
 	}
 	switch os.Args[1] {
 	case "version":
-		fmt.Println("GoConnectTransport 0.11.0")
+		fmt.Println("GoConnectTransport 0.11.10")
 	case "service-diagnostics":
 		err = serviceDiagnostics()
 	case "service-status":

@@ -301,6 +301,9 @@ func handleServiceConnection(ctx context.Context, conn *net.UnixConn, runtime st
 	worker.Stdout = io.Discard
 	worker.Stderr = io.Discard
 	if err = worker.Start(); err != nil {
+		d := diagnosticError(err)
+		d.Stage, d.Reason = "worker", "operation_failed"
+		traceDetails("worker.start_failed", 0, d)
 		write(serviceReply{State: "failed", Message: "无法启动本机分流服务。"})
 		return
 	}
@@ -338,7 +341,12 @@ func handleServiceConnection(ctx context.Context, conn *net.UnixConn, runtime st
 			return
 		}
 	}
-	trace("worker.exited", int64(worker.ProcessState.ExitCode()))
+	d := diagnosticProcessExit(worker.ProcessState)
+	d.Stage, d.Reason = "worker", "success"
+	if err != nil {
+		d.Reason = "operation_failed"
+	}
+	traceDetails("worker.exited", int64(worker.ProcessState.ExitCode()), d)
 	if err != nil {
 		write(serviceReply{State: "failed", Message: "分流会话已结束，请检查诊断记录。"})
 	} else {

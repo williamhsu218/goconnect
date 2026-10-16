@@ -508,7 +508,8 @@ final class AppStore {
             let appLogs = await diagnostics.export()
             let serviceLogs = await networkService.diagnosticLogs()
             let legend = "\n断线日志说明：connection.disconnect_requested=主动断开；connection.unexpected_disconnect=意外断开（value: 0原因未知/1服务器断开/2空闲超时/3会话到期/4会话凭据被拒/5DPD超时/6TLS读取/7TLS写入/8TLS连接/9重连失败）；connection.disconnect_source: 1隧道/2本机分流/3代理入口；connection.duration_seconds=连接持续秒数。openconnect.exit_code 与 openconnect.exit_signal 为实际 VPN 进程退出信息，transport.exited 为包装组件退出码。network.*、system.sleep/wake 可用于时间关联，不单独证明根因。\n"
-            let output = report + legend + "\n\n持久故障日志（UTC；仅事件代码与数值）\n" + appLogs + "\n\n网络服务日志\n" + serviceLogs
+            let serviceLegend = "\n分流日志说明：session.exit_first=清理前的首次退出原因；session.exit_final=相同原因及清理结果，value 为会话毫秒数；details.stage/reason/check 标明阶段、退出原因与具体检查结果。system.command_timeout/failed/slow/late_result 记录系统命令超时、失败、慢执行和超时后返回；以 PID 与 operationID 关联，durationMs/timeoutMs 为毫秒。transparent.route_cleanup_failed 区分读表、删除和复核失败，routeIndex 对应会话路由清单序号；worker.exited 的 details 包含退出码与信号。worker.exit.json 保留最近退出摘要，请核对 PID 和时间；服务旧版可能没有这些字段。\n"
+            let output = report + legend + serviceLegend + "\n\n持久故障日志（UTC；仅固定代码、类别与数值）\n" + appLogs + "\n\n网络服务日志\n" + serviceLogs
             do {
                 try await Task.detached {
                     try output.write(to: url, atomically: true, encoding: .utf8)

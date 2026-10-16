@@ -55,26 +55,6 @@ func processIdentities() ([]processIdentity, error) {
 	return result, nil
 }
 
-func systemCommand(name string, args ...string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LANG=C"}
-	type output struct {
-		data []byte
-		err  error
-	}
-	done := make(chan output, 1)
-	go func() { data, err := cmd.Output(); done <- output{data, err} }()
-	select {
-	case result := <-done:
-		return result.data, result.err
-	case <-ctx.Done():
-		return nil, fmt.Errorf("system command timeout: %s", name)
-	}
-
-}
-
 func appGroupName(uid uint32, path string) string {
 	sum := sha256.Sum256([]byte(path))
 	return fmt.Sprintf("goc_%d_%s", uid, hex.EncodeToString(sum[:8]))

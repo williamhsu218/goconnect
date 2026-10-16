@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -22,16 +23,20 @@ var diagnosticCode = regexp.MustCompile(`^[a-z][a-z0-9_.]{0,63}$`)
 var diagnostics *diagnosticLog
 
 type diagnosticRecord struct {
-	Time  string `json:"time"`
-	PID   int    `json:"pid"`
-	Event string `json:"event"`
-	Value int64  `json:"value"`
+	Time    string             `json:"time"`
+	PID     int                `json:"pid"`
+	Event   string             `json:"event"`
+	Value   int64              `json:"value"`
+	Details *diagnosticDetails `json:"details,omitempty"`
 }
 type diagnosticLog struct {
-	queue   chan diagnosticRecord
-	stop    chan struct{}
-	done    chan struct{}
-	dropped atomic.Int64
+	queue      chan diagnosticRecord
+	critical   chan diagnosticRecord
+	stop       chan struct{}
+	done       chan struct{}
+	dropped    atomic.Int64
+	maxWriteMS atomic.Int64
+	closeOnce  sync.Once
 }
 
 func trace(code string, value int64) {
@@ -40,10 +45,24 @@ func trace(code string, value int64) {
 	}
 }
 func (l *diagnosticLog) record(code string, value int64) {
-	if !diagnosticCode.MatchString(code) {
+	l.enqueue(diagnosticRecord{Time: time.Now().UTC().Format(time.RFC3339Nano), PID: os.Getpid(), Event: code, Value: value})
+}
+func (l *diagnosticLog) recordDetails(code string, value int64, details diagnosticDetails) {
+	d := sanitizeDiagnosticDetails(details)
+	l.enqueue(diagnosticRecord{Time: time.Now().UTC().Format(time.RFC3339Nano), PID: os.Getpid(), Event: code, Value: value, Details: &d})
+}
+func (l *diagnosticLog) enqueue(record diagnosticRecord) {
+	if !diagnosticCode.MatchString(record.Event) {
 		return
 	}
-	record := diagnosticRecord{time.Now().UTC().Format(time.RFC3339Nano), os.Getpid(), code, value}
+	if (record.Event == "session.exit_first" || record.Event == "session.exit_final") && l.critical != nil {
+		select {
+		case l.critical <- record:
+		default:
+			l.dropped.Add(1)
+		}
+		return
+	}
 	select {
 	case l.queue <- record:
 	default:
@@ -104,28 +123,56 @@ func startDiagnosticLog(directory, name string) (*diagnosticLog, error) {
 		lock.Close()
 		return nil, err
 	}
-	l := &diagnosticLog{queue: make(chan diagnosticRecord, 128), stop: make(chan struct{}), done: make(chan struct{})}
+	l := &diagnosticLog{queue: make(chan diagnosticRecord, 128), critical: make(chan diagnosticRecord, 2), stop: make(chan struct{}), done: make(chan struct{})}
 	go func() {
 		defer close(l.done)
 		defer lock.Close()
 		path := filepath.Join(directory, name+".jsonl")
 		write := func(r diagnosticRecord) {
+			started := time.Now()
 			data, _ := json.Marshal(r)
+			if r.Event == "session.exit_first" || r.Event == "session.exit_final" {
+				if writeExitSnapshot(filepath.Join(directory, name+".exit.json"), data) != nil {
+					l.dropped.Add(1)
+				}
+			}
 			if appendDiagnostic(path, append(data, '\n'), diagnosticLimit) != nil {
 				l.dropped.Add(1)
+			}
+			elapsed := time.Since(started).Milliseconds()
+			for old := l.maxWriteMS.Load(); elapsed > old; old = l.maxWriteMS.Load() {
+				if l.maxWriteMS.CompareAndSwap(old, elapsed) {
+					break
+				}
 			}
 		}
 		tick := time.NewTicker(30 * time.Second)
 		defer tick.Stop()
 		for {
+			// Reserve two independent slots for the first and final exit records.
 			select {
+			case r := <-l.critical:
+				write(r)
+				continue
+			default:
+			}
+			select {
+			case r := <-l.critical:
+				write(r)
 			case r := <-l.queue:
 				write(r)
 			case <-tick.C:
-				write(diagnosticRecord{time.Now().UTC().Format(time.RFC3339Nano), os.Getpid(), "process.heartbeat", l.dropped.Swap(0)})
-				write(diagnosticRecord{time.Now().UTC().Format(time.RFC3339Nano), os.Getpid(), "process.goroutines", int64(runtime.NumGoroutine())})
+				write(diagnosticRecord{Time: time.Now().UTC().Format(time.RFC3339Nano), PID: os.Getpid(), Event: "process.heartbeat", Value: l.dropped.Swap(0)})
+				write(diagnosticRecord{Time: time.Now().UTC().Format(time.RFC3339Nano), PID: os.Getpid(), Event: "diagnostics.write_max_ms", Value: l.maxWriteMS.Swap(0)})
+				write(diagnosticRecord{Time: time.Now().UTC().Format(time.RFC3339Nano), PID: os.Getpid(), Event: "process.goroutines", Value: int64(runtime.NumGoroutine())})
 			case <-l.stop:
 				for {
+					select {
+					case r := <-l.critical:
+						write(r)
+						continue
+					default:
+					}
 					select {
 					case r := <-l.queue:
 						write(r)
@@ -139,7 +186,7 @@ func startDiagnosticLog(directory, name string) (*diagnosticLog, error) {
 	return l, nil
 }
 func (l *diagnosticLog) close() {
-	close(l.stop)
+	l.closeOnce.Do(func() { close(l.stop) })
 	select {
 	case <-l.done:
 	case <-time.After(time.Second):
@@ -193,7 +240,7 @@ func readDiagnosticLogs() map[string]string {
 	if secureRootPath(diagnosticDirectory, true) != nil {
 		return result
 	}
-	for _, name := range []string{"service.jsonl.1", "service.jsonl", "worker.jsonl.1", "worker.jsonl"} {
+	for _, name := range []string{"service.jsonl.1", "service.jsonl", "worker.jsonl.1", "worker.jsonl", "worker.exit.json"} {
 		result[name] = diagnosticTail(filepath.Join(diagnosticDirectory, name))
 	}
 	result["recovery.json"] = recoverySummary()
