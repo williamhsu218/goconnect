@@ -11,6 +11,11 @@ struct ConnectionView: View {
 
                 VPNConnectionCard(store: store)
 
+                if let subscription = store.selectedSubscription {
+                    SubscriptionUsageCard(store: store, subscription: subscription)
+                    if subscription.quotaValues["total"] == nil { YunyooUsageCard(store: store.yunyooUsage, subscription: subscription) }
+                }
+
                 if store.recoveryRequired {
                     HStack(alignment: .top, spacing: 10) {
                         Image(systemName: "exclamationmark.triangle.fill")

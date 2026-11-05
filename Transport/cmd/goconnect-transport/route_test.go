@@ -248,7 +248,7 @@ func TestLeaseRevocationAndExpiry(t *testing.T) {
 	if !control.alive() {
 		t.Fatal("fresh lease rejected")
 	}
-	old := time.Now().Add(-10 * time.Second)
+	old := time.Now().Add(-leaseTimeout - time.Second)
 	_ = os.Chtimes(filepath.Join(dir, "lease"), old, old)
 	if control.alive() {
 		t.Fatal("stale owner lease accepted")

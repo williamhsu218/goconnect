@@ -5,11 +5,6 @@ import GoConnectCore
 struct VPNConnectionCard: View {
     @Bindable var store: AppStore
 
-    @State private var lastReceived: UInt64 = 0
-    @State private var lastSent: UInt64 = 0
-    @State private var lastSampleTime: Date = Date()
-    @State private var downRate: Double = 0
-    @State private var upRate: Double = 0
     @State private var currentTime = Date()
 
     private let timer = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()
@@ -22,6 +17,13 @@ struct VPNConnectionCard: View {
         store.localReady && store.configurationReadable && !store.recoveryRequired
     }
 
+    private var metricsActive: Bool { state == .connected || (state == .diagnostic && store.phase == "testing") }
+    private var hasSession: Bool { metricsActive || state == .reconnecting }
+    private var trafficFresh: Bool {
+        store.trafficAvailable && store.trafficUpdatedAt.map { currentTime.timeIntervalSince($0) < 5 } == true
+    }
+    private var isProxyLine: Bool { store.configuration.activeConnection.subscription != nil }
+
     private var statusColor: Color {
         if state.needsAttention { return AppTheme.warning }
         if state == .connected { return AppTheme.success }
@@ -29,7 +31,7 @@ struct VPNConnectionCard: View {
     }
 
     private var durationString: String {
-        guard state == .connected, let connectedAt = store.connectedAt else {
+        guard hasSession, let connectedAt = store.connectedAt else {
             return "00:00:00"
         }
         let elapsed = max(0, currentTime.timeIntervalSince(connectedAt))
@@ -37,11 +39,12 @@ struct VPNConnectionCard: View {
     }
 
     private var addressSummary: String {
-        if state != .connected {
+        if !hasSession {
             return "—"
         }
+        if isProxyLine { return "不适用" }
         if store.addresses.isEmpty {
-            return "分配中..."
+            return "未上报"
         }
         if let first = store.addresses.first {
             return store.addresses.count > 1 ? "\(first) (+\(store.addresses.count - 1))" : first
@@ -77,6 +80,8 @@ struct VPNConnectionCard: View {
 
                 // Real-time network metrics grid
                 metricsGrid
+
+                publicIPRow
 
                 Divider()
 
@@ -119,45 +124,32 @@ struct VPNConnectionCard: View {
                 }
             }
         }
-        .onAppear {
-            if state == .connected {
-                lastReceived = store.received
-                lastSent = store.sent
-                lastSampleTime = Date()
-                currentTime = Date()
-            }
-        }
+        .onAppear { currentTime = Date() }
         .onReceive(timer) { now in
             currentTime = now
-            if state == .connected {
-                let delta = now.timeIntervalSince(lastSampleTime)
-                if delta >= 0.5 {
-                    let rxDelta = store.received >= lastReceived ? store.received - lastReceived : 0
-                    let txDelta = store.sent >= lastSent ? store.sent - lastSent : 0
-                    downRate = Double(rxDelta) / delta
-                    upRate = Double(txDelta) / delta
-                    lastReceived = store.received
-                    lastSent = store.sent
-                    lastSampleTime = now
-                }
-            } else {
-                downRate = 0
-                upRate = 0
-            }
         }
-        .onChange(of: state) { _, newState in
-            if newState == .connected {
-                lastReceived = store.received
-                lastSent = store.sent
-                lastSampleTime = Date()
-                currentTime = Date()
-            } else if newState == .off {
-                downRate = 0
-                upRate = 0
-                lastReceived = 0
-                lastSent = 0
+    }
+
+    private var publicIPRow: some View {
+        HStack(spacing: 12) {
+            Label("公网出口 IP", systemImage: "globe")
+                .foregroundStyle(.secondary)
+            Text(!hasSession ? "连接后检测" : store.publicIPChecking ? "检测中…" : store.publicIP ?? (store.publicIPFailed ? "检测失败" : "待检测"))
+                .font(.system(.callout, design: .monospaced))
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            if let checked = store.publicIPCheckedAt, hasSession {
+                Text(checked, style: .time).font(.caption).foregroundStyle(.secondary)
+                    .help("上次出口 IP 检测时间")
             }
+            Button("刷新出口 IP", systemImage: "arrow.clockwise") { store.refreshPublicIP() }
+                .labelStyle(.iconOnly).buttonStyle(.borderless)
+                .disabled(!metricsActive || store.publicIPChecking)
+                .help("通过当前线路检测公网出口 IP")
         }
+        .font(.callout)
+        .help("通过所选线路的代理检测；这是该线路的公网出口 IP，不是隧道虚拟地址。")
     }
 
     private var statusIcon: some View {
@@ -207,28 +199,28 @@ struct VPNConnectionCard: View {
     private var metricTiles: some View {
         MetricTile(
             title: "下行速率",
-            value: state == .connected ? NetworkFormatters.formatRate(downRate) : "—",
-            secondary: "\(state == .connected ? "已接收" : "上次接收") \(NetworkFormatters.formatBytes(store.received))",
+            value: metricsActive && trafficFresh ? NetworkFormatters.formatRate(store.downloadRate) : "—",
+            secondary: "\(metricsActive && !trafficFresh ? "统计待更新 · 已接收" : "已接收") \(NetworkFormatters.formatBytes(store.received))",
             symbol: "arrow.down"
         )
         MetricTile(
             title: "上行速率",
-            value: state == .connected ? NetworkFormatters.formatRate(upRate) : "—",
-            secondary: "\(state == .connected ? "已发送" : "上次发送") \(NetworkFormatters.formatBytes(store.sent))",
+            value: metricsActive && trafficFresh ? NetworkFormatters.formatRate(store.uploadRate) : "—",
+            secondary: "\(metricsActive && !trafficFresh ? "统计待更新 · 已发送" : "已发送") \(NetworkFormatters.formatBytes(store.sent))",
             symbol: "arrow.up"
         )
         MetricTile(
             title: "连接时长",
-            value: state == .connected ? durationString : "—",
-            secondary: state == .connected ? "会话活跃中" : "未建立会话",
+            value: hasSession ? durationString : "—",
+            secondary: state == .reconnecting ? "会话保留，恢复中" : metricsActive ? "会话活跃中" : "未建立会话",
             symbol: "timer"
         )
         MetricTile(
             title: "虚拟地址",
             value: addressSummary,
-            secondary: store.addresses.isEmpty ? "待分配虚拟地址" : "\(store.addresses.count) 个活跃地址",
+            secondary: isProxyLine ? "代理线路不分配隧道地址" : store.addresses.isEmpty ? "尚未收到隧道地址" : "\(store.addresses.count) 个\(state == .reconnecting ? "已保留" : "活跃")地址",
             symbol: "network",
-            tooltip: "隧道分配的虚拟地址，非公网出口 IP。\n" + (store.addresses.isEmpty ? "未分配虚拟地址" : store.addresses.joined(separator: "\n"))
+            tooltip: isProxyLine ? "HY2 等代理线路不分配远端隧道地址；公网出口见下方独立检测结果。" : "隧道分配的虚拟地址，非公网出口 IP。\n" + (store.addresses.isEmpty ? "尚未收到隧道地址" : store.addresses.joined(separator: "\n"))
         )
     }
 }

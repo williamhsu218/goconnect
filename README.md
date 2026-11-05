@@ -19,7 +19,11 @@ GoConnect 是一款 macOS 网络连接工具。你可以接入公司的 AnyConne
 
 ## 开始使用
 
-从 [Releases](https://github.com/williamhsu218/goconnect/releases/latest) 下载适用于 Apple Silicon 的安装包，解压后将 `GoConnect.app` 放入“应用程序”文件夹。当前发布包要求 macOS 27 或更新版本。
+从 [Releases](https://github.com/williamhsu218/goconnect/releases/latest) 下载适用于 Apple Silicon 的安装包，解压后将 `GoConnect.app` 放入“应用程序”文件夹。请按所下载版本确认系统要求。
+
+最新预发布版为 [0.11.16 / build 56](https://github.com/williamhsu218/goconnect/releases/tag/v0.11.16)，包含 HY2 实时流量、公网出口 IP、套餐手动刷新和新增线路布局修复。AnyConnect 的真实 UDP 稳定性门禁仍未通过，因此按预发布版提供；完整说明见 [0.11.16 发布记录](docs/RELEASE_0.11.16.md)。
+
+本机已验收正式版为 **0.11.14 / build 51**，唯一保留回滚版为 **0.11.13 / build 50**，清单见 `dist/releases.json`。修复、30 分钟视频渲染测试及保留边界见 [0.11.14 正式版记录](docs/RELEASE_0.11.14.md)；本机验收不代表已发布到 GitHub Releases。
 
 更新前，请先断开 GoConnect 的 VPN 连接并退出应用，再替换旧版。熟悉开发工具的用户也可以按[构建说明](docs/BUILD.md)自行生成应用。
 
@@ -34,7 +38,7 @@ GoConnect 是一款 macOS 网络连接工具。你可以接入公司的 AnyConne
 
 ## 使用前需要知道
 
-**系统要求**：当前源码版本为 0.11.10。本次验证使用 Apple Silicon Mac 和 macOS 27；在这台机器生成的应用要求 macOS 27 或更新版本。虽然 Swift 项目最低目标设为 macOS 14，最终要求还取决于打包进去的网络组件。Intel Mac 和较早系统尚未完成本次验证。
+**系统要求**：当前源码版本见 [VERSION.json](VERSION.json)，已安装和已验收分发包的版本独立管理。0.11.14 正式包因 Homebrew 依赖要求 macOS 26 或更新版本；Swift 与 Go 源码部署目标为 macOS 14，不能据此推断完整包兼容 macOS 14。实际要求见包内 build-requirements.json。Intel Mac、macOS 14–26 的运行兼容性尚未完成实机验证。
 
 **公司 VPN 和订阅用途不同**：普通订阅节点不能代替公司 VPN 访问公司内网。需要浏览器登录、复杂多因素认证或专用客户端功能的企业 VPN，也可能无法使用。
 
@@ -42,7 +46,7 @@ GoConnect 是一款 macOS 网络连接工具。你可以接入公司的 AnyConne
 
 **本地网络优先**：会保留已识别的局域网和 Tailscale 路径，但不同 VPN 同时接管网络可能发生冲突。公司内部域名的专用 DNS 解析尚未实现。
 
-**连接中断后**：GoConnect 会尝试撤销本次添加的路由，并记录脱敏的断线原因。下次连接或修复服务时，会核验并恢复已失效的透明分流会话；已消失的路由不会再被误判为清理失败。旧进程或虚拟网卡仍在使用、记录损坏或无法确认路由归属时，会暂停恢复并保留诊断信息。它不是“断线后禁止所有联网”的工具。
+**连接中断后**：GoConnect 会尝试撤销本次添加的路由，并记录脱敏的断线原因。下次连接或修复服务时，会核验并恢复已失效的透明分流及旧公司网段会话；已消失的路由不会再被误判为清理失败。旧进程或虚拟网卡仍在使用、记录损坏或无法确认路由归属时，会暂停恢复并保留诊断信息。它不是“断线后禁止所有联网”的工具。
 
 ## 账号与本机数据
 

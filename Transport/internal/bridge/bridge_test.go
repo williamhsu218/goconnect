@@ -16,6 +16,10 @@ import (
 )
 
 func pairedStacks(t *testing.T) (*Stack, *Stack, context.Context) {
+	return pairedStacksObserved(t, nil)
+}
+
+func pairedStacksObserved(t *testing.T, observer Observer) (*Stack, *Stack, context.Context) {
 	t.Helper()
 	client, err := New([]netip.Addr{netip.MustParseAddr("192.0.2.1"), netip.MustParseAddr("2001:db8::1")}, nil, 1400)
 	if err != nil {
@@ -30,6 +34,7 @@ func pairedStacks(t *testing.T) (*Stack, *Stack, context.Context) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	client.Observe = observer
 	for i, s := range []*Stack{client, server} {
 		file := os.NewFile(uintptr(fds[i]), "test-packet-socket")
 		channel, err := net.FileConn(file)

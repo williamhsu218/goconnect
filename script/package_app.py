@@ -9,8 +9,10 @@ import re
 import shutil
 import subprocess
 import sys
+from version import load_version
 
 ROOT = Path(__file__).resolve().parent.parent
+VERSION = load_version()
 if not all(os.environ.get(name) for name in ("GOCONNECT_WORK_DIR", "GOCONNECT_OUTPUT_DIR", "GOCONNECT_TRANSPORT_BIN_DIR")):
     raise SystemExit("Use script/build_and_run.sh; packaging requires its temporary build directory.")
 WORK = Path(os.environ["GOCONNECT_WORK_DIR"]).resolve()
@@ -39,7 +41,6 @@ for directory in (bin_dir, lib_dir, share_dir, licenses, STAGE / "Contents/MacOS
     directory.mkdir(parents=True, exist_ok=True)
 shutil.copy2(sys.argv[1], STAGE / "Contents/MacOS/GoConnect")
 shutil.copy2(TRANSPORT_BIN / "GoConnectTransport", bin_dir / "GoConnectTransport")
-shutil.copy2(TRANSPORT_BIN / "GoConnectLauncher", bin_dir / "GoConnectLauncher")
 shutil.copy2(ROOT / "Packaging/Licenses/vpnonly-MIT.txt", licenses / "vpnonly-MIT.txt")
 
 brew_cellar = Path(run("brew", "--cellar"))
@@ -124,21 +125,28 @@ subprocess.run(["swift", str(ROOT / "script/make_icon.swift"), str(icon)], check
 icon_name = "GoConnect-" + hashlib.sha256(icon.read_bytes()).hexdigest()[:12] + ".icns"
 shutil.copy2(icon, STAGE / "Contents/Resources" / icon_name)
 
-minimum = "14.0"
-for binary in [*copied.values(), STAGE / "Contents/MacOS/GoConnect", bin_dir / "GoConnectTransport", bin_dir / "GoConnectLauncher"]:
+minimum = VERSION["deploymentTarget"]
+requirements = {}
+for binary in [*copied.values(), STAGE / "Contents/MacOS/GoConnect", bin_dir / "GoConnectTransport"]:
     output = run(OTOOL, "-l", binary)
-    for value in re.findall(r"\bminos\s+([0-9.]+)", output):
+    values = re.findall(r"\bminos\s+([0-9.]+)|cmd LC_VERSION_MIN_MACOSX\s+cmdsize \d+\s+version ([0-9.]+)", output)
+    for modern, legacy in values:
+        value = modern or legacy
+        requirements[str(binary.relative_to(STAGE))] = value
         if tuple(map(int, value.split("."))) > tuple(map(int, minimum.split("."))):
             minimum = value
 info = {"CFBundleIdentifier": "com.willhsu.GoConnect", "CFBundleName": "GoConnect",
         "CFBundleDisplayName": "GoConnect", "CFBundleExecutable": "GoConnect", "CFBundlePackageType": "APPL",
-        "CFBundleShortVersionString": "0.11.10", "CFBundleVersion": "47", "CFBundleIconFile": icon_name,
+        "CFBundleShortVersionString": VERSION["version"], "CFBundleVersion": VERSION["build"], "CFBundleIconFile": icon_name,
         "LSMinimumSystemVersion": minimum, "NSHighResolutionCapable": True,
         "NSHumanReadableCopyright": "GoConnect contributors. Includes open-source components."}
 info["CFBundleDevelopmentRegion"] = "zh-Hans"
 info["CFBundleLocalizations"] = ["zh-Hans"]
 with (STAGE / "Contents/Info.plist").open("wb") as stream:
     plistlib.dump(info, stream)
+(STAGE / "Contents/Resources/build-requirements.json").write_text(json.dumps({"sourceTarget": VERSION["deploymentTarget"], "minimumMacOS": minimum, "components": requirements}, indent=2) + "\n")
+if tuple(map(int, minimum.split('.'))) > tuple(map(int, VERSION['deploymentTarget'].split('.'))):
+    print(f"Bundled dependencies require macOS {minimum}; rebuilding them is required to support macOS {VERSION['deploymentTarget']}.")
 
 for binary in [*lib_dir.iterdir(), *bin_dir.iterdir(), STAGE / "Contents/MacOS/GoConnect"]:
     options = ["--options", "runtime"] if binary.name == "GoConnectTransport" else []
@@ -163,7 +171,7 @@ STAGE.rename(APP)
 lsregister = Path("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister")
 if lsregister.exists() and os.environ.get("GOCONNECT_REGISTER_APP", "1") == "1":
     subprocess.run([str(lsregister), "-f", str(APP)], check=True)
-archive = DIST / f"GoConnect-0.11.10-macos-{os.uname().machine}.zip"
+archive = DIST / f"GoConnect-{VERSION['version']}-macos-{os.uname().machine}.zip"
 if archive.exists(): archive.unlink()
 subprocess.run(["/usr/bin/ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", str(APP), str(archive)], check=True)
 (DIST / "SHA256SUMS").write_text(hashlib.sha256(archive.read_bytes()).hexdigest() + "  " + archive.name + "\n")

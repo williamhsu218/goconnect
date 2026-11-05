@@ -13,7 +13,7 @@ enum MenuBarStatusIcon {
             case .connected: self = .connected
             case .needsRestart, .interrupted, .failed: self = .attention
             case .waitingForPassword, .preparingService, .maintainingService,
-                 .connecting, .authorizing, .disconnecting, .diagnostic, .endingDiagnostic:
+                 .connecting, .reconnecting, .authorizing, .disconnecting, .diagnostic, .endingDiagnostic:
                 self = .progress
             }
         }

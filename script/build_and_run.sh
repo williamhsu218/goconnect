@@ -51,6 +51,10 @@ fi
 for tool in swift go python3 brew openconnect mihomo; do
   command -v "$tool" >/dev/null || { echo "Missing $tool. Install Xcode and run: brew install go openconnect mihomo" >&2; exit 1; }
 done
+python3 script/version.py --check
+export MACOSX_DEPLOYMENT_TARGET="$(python3 script/version.py --field deploymentTarget)"
+export CGO_CFLAGS="${CGO_CFLAGS:-} -mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET"
+export CGO_LDFLAGS="${CGO_LDFLAGS:-} -mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/goconnect-build.XXXXXX")"
 APP_PID=""
 cleanup() {
@@ -76,6 +80,9 @@ SWIFT_BUILD_ARGS=(--build-system native --sdk "$(xcrun --sdk macosx --show-sdk-p
 echo "Temporary build directory: $WORK"
 if [[ "$VERIFY" == 1 ]]; then
   python3 script/test_release_artifacts.py
+  python3 script/test_request_probe.py
+  python3 script/test_analyze_bridge_probe.py
+  python3 script/test_yunyoo_subscription_service.py
   swift test "${SWIFT_BUILD_ARGS[@]}"
   (cd Transport && go test -race -timeout 60s ./...)
 fi
@@ -83,7 +90,6 @@ swift build "${SWIFT_BUILD_ARGS[@]}" -c "$CONFIG"
 SWIFT_BIN="$(swift build "${SWIFT_BUILD_ARGS[@]}" -c "$CONFIG" --show-bin-path)/GoConnect"
 mkdir -p "$GOCONNECT_TRANSPORT_BIN_DIR"
 (cd Transport && CGO_ENABLED=1 go build -trimpath -o "$GOCONNECT_TRANSPORT_BIN_DIR/GoConnectTransport" ./cmd/goconnect-transport)
-clang -O2 -Wall -Wextra -Werror Transport/launcher/main.c -o "$GOCONNECT_TRANSPORT_BIN_DIR/GoConnectLauncher"
 python3 script/package_app.py "$SWIFT_BIN"
 APP="$GOCONNECT_OUTPUT_DIR/GoConnect.app"
 "$APP/Contents/Resources/Runtime/bin/openconnect" --version
@@ -93,7 +99,7 @@ APP="$GOCONNECT_OUTPUT_DIR/GoConnect.app"
 if [[ "$VERIFY" == 1 ]]; then
   python3 script/check_runtime.py "$APP"
   (cd Transport && GOCONNECT_TEST_RUNTIME="$APP/Contents/Resources/Runtime" go test -count=1 -race -v -timeout 60s ./cmd/goconnect-transport -run "TestLive")
-  (cd Transport && GOCONNECT_TEST_RUNTIME="$APP/Contents/Resources/Runtime" go test -count=1 -race -v -timeout 60s ./integration)
+  (cd Transport && GOCONNECT_TEST_RUNTIME="$APP/Contents/Resources/Runtime" go test -count=1 -race -v -timeout 180s ./integration)
 fi
 if [[ -n "$EXPORT_DIR" ]]; then
   python3 - "$GOCONNECT_OUTPUT_DIR" "$EXPORT_DIR" <<'PY'

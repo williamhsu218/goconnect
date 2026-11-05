@@ -48,14 +48,6 @@ struct ApplicationsView: View {
                     .font(.callout).foregroundStyle(.secondary)
             }
 
-            if let port = store.proxyPort {
-                HStack {
-                    Text(verbatim: "HTTP / SOCKS5 · 127.0.0.1:\(port)").font(.callout.monospaced()).textSelection(.enabled)
-                    Spacer()
-                    Button("复制地址") { store.copyProxyEndpoint() }
-                }
-            }
-
             HStack(spacing: 12) {
                 if #available(macOS 26.0, *) {
                     filterBar.padding(.leading, 12)

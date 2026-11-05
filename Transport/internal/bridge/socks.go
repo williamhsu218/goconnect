@@ -8,7 +8,7 @@ import (
 	"io"
 	"net"
 	"strconv"
-	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -16,8 +16,10 @@ type Dialer interface {
 	DialContext(context.Context, string, string) (net.Conn, error)
 }
 type SOCKSServer struct {
-	Dialer Dialer
-	Token  string
+	Dialer  Dialer
+	Token   string
+	Observe Observer
+	flows   atomic.Uint64
 }
 
 func (s *SOCKSServer) Serve(ctx context.Context, listener net.Listener) error {
@@ -235,15 +237,14 @@ func (s *SOCKSServer) udp(parent context.Context, control net.Conn) {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	go func() { _, _ = io.Copy(io.Discard, control); cancel() }()
-	go func() { <-ctx.Done(); _ = local.Close() }()
-	var mu sync.Mutex
-	remotes := make(map[string]net.Conn)
+	association := &udpAssociationState{server: s, ctx: ctx, local: local, remotes: make(map[string]*udpDestination)}
+	stop := context.AfterFunc(ctx, func() { _ = local.Close() })
 	defer func() {
-		mu.Lock()
-		defer mu.Unlock()
-		for _, remote := range remotes {
-			_ = remote.Close()
-		}
+		cancel()
+		stop()
+		_ = local.Close()
+		_ = control.Close()
+		association.workers.Wait()
 	}()
 	var source *net.UDPAddr
 	buffer := make([]byte, 65535)
@@ -266,52 +267,9 @@ func (s *SOCKSServer) udp(parent context.Context, control net.Conn) {
 		if err != nil {
 			continue
 		}
-		mu.Lock()
-		remote := remotes[address]
-		count := len(remotes)
-		mu.Unlock()
-		if remote == nil {
-			if count >= 128 {
-				continue
-			}
-			dialCtx, stop := context.WithTimeout(ctx, 10*time.Second)
-			remote, err = s.Dialer.DialContext(dialCtx, "udp", address)
-			stop()
-			if err != nil {
-				continue
-			}
-			mu.Lock()
-			remotes[address] = remote
-			mu.Unlock()
-			go func(target string, remote net.Conn, client *net.UDPAddr) {
-				defer remote.Close()
-				defer func() {
-					mu.Lock()
-					if remotes[target] == remote {
-						delete(remotes, target)
-					}
-					mu.Unlock()
-				}()
-				body := make([]byte, 65000)
-				encoded, err := encodedAddress(remote.RemoteAddr().String())
-				if err != nil {
-					return
-				}
-				for {
-					_ = remote.SetReadDeadline(time.Now().Add(90 * time.Second))
-					n, err := remote.Read(body)
-					if err != nil {
-						return
-					}
-					packet := append([]byte{0, 0, 0}, encoded...)
-					packet = append(packet, body[:n]...)
-					if _, err = local.WriteToUDP(packet, client); err != nil {
-						return
-					}
-				}
-			}(address, remote, source)
-		}
-		_, _ = remote.Write(reader.data)
+		id := markedSTUN(reader.data)
+		observe(s.Observe, "socks_receive", id, 0, len(reader.data), nil)
+		association.enqueue(address, source, reader.data)
 	}
 }
 

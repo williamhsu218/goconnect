@@ -22,7 +22,8 @@ import (
 )
 
 // Subscription data never enters the privileged service. Only a selected, reduced
-// proxy definition is consumed by a normal-user core with no TUN or controller.
+// proxy definition is consumed by a normal-user core with no TUN. Its statistics
+// controller binds only to loopback and requires the session's random secret.
 type subscriptionNode struct {
 	Name  string         `json:"name"`
 	Type  string         `json:"type"`
@@ -74,7 +75,7 @@ func parseSubscription(data []byte) ([]subscriptionNode, error) {
 			continue
 		}
 		safe := map[string]any{}
-		for _, key := range strings.Fields("name type server port password uuid alterId cipher network udp tls servername sni skip-cert-verify client-fingerprint fingerprint alpn up down obfs obfs-password flow packet-encoding") {
+		for _, key := range strings.Fields("name type server port username password uuid alterId cipher network udp tls servername sni skip-cert-verify client-fingerprint fingerprint alpn up down obfs obfs-password flow packet-encoding") {
 			if v, ok := raw[key]; ok {
 				safe[key] = v
 			}
@@ -162,47 +163,55 @@ func subscriptionCommand(ctx context.Context, importing bool) error {
 		if json.NewDecoder(io.LimitReader(os.Stdin, 65536)).Decode(&request) != nil {
 			return errors.New("invalid request")
 		}
-		u, err := url.Parse(request.URL)
-		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
-			fail("请输入 HTTPS 订阅地址。")
-			return errors.New("invalid URL")
-		}
-		client := http.Client{Timeout: 30 * time.Second, CheckRedirect: func(r *http.Request, via []*http.Request) error {
-			if len(via) >= 5 || r.URL.Scheme != "https" {
-				return errors.New("unsafe redirect")
-			}
-			return nil
-		}}
-		req, _ := http.NewRequestWithContext(ctx, "GET", request.URL, nil)
-		// Some providers select their modern AnyTLS/Hysteria2 template only for
-		// the Clash Verge client family. Preserve that subscription compatibility.
-		req.Header.Set("User-Agent", "clash-verge/v2.5.2")
-		resp, err := client.Do(req)
-		if err != nil {
-			fail("订阅更新失败，请检查网络或订阅有效期。已保留上次内容。")
-			return errors.New("fetch failed")
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != 200 {
-			fail("订阅服务器未返回可用内容。已保留上次内容。")
-			return errors.New("HTTP status")
-		}
-		data, err := io.ReadAll(io.LimitReader(resp.Body, subscriptionLimit+1))
+		payload, err := fetchSubscriptionData(ctx, request.URL)
 		if err != nil {
 			return err
 		}
-		nodes, err := parseSubscription(data)
-		if err != nil {
-			fail("需要包含 proxies 的 Clash YAML 订阅。已保留上次内容。")
-			return err
-		}
-		results = []subscriptionData{{Name: "新订阅", URL: request.URL, Nodes: nodes, Updated: time.Now().Unix(), UserInfo: resp.Header.Get("subscription-userinfo"), UnsupportedCount: subscriptionUnsupported(data, nodes)}}
+		results = []subscriptionData{payload}
 	}
 	if results == nil {
 		results = []subscriptionData{}
 	}
 	emit(results)
 	return nil
+}
+
+func fetchSubscriptionData(ctx context.Context, rawURL string) (subscriptionData, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
+		fail("请输入 HTTPS 订阅地址。")
+		return subscriptionData{}, errors.New("invalid URL")
+	}
+	client := http.Client{Timeout: 30 * time.Second, CheckRedirect: func(r *http.Request, via []*http.Request) error {
+		if len(via) >= 5 || r.URL.Scheme != "https" {
+			return errors.New("unsafe redirect")
+		}
+		return nil
+	}}
+	req, _ := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
+	// Some providers select their modern AnyTLS/Hysteria2 template only for
+	// the Clash Verge client family. Preserve that subscription compatibility.
+	req.Header.Set("User-Agent", "clash-verge/v2.5.2")
+	resp, err := client.Do(req)
+	if err != nil {
+		fail("订阅更新失败，请检查网络或订阅有效期。已保留上次内容。")
+		return subscriptionData{}, errors.New("fetch failed")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		fail("订阅服务器未返回可用内容。已保留上次内容。")
+		return subscriptionData{}, errors.New("HTTP status")
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, subscriptionLimit+1))
+	if err != nil {
+		return subscriptionData{}, err
+	}
+	nodes, err := parseSubscription(data)
+	if err != nil {
+		fail("需要包含 proxies 的 Clash YAML 订阅。已保留上次内容。")
+		return subscriptionData{}, err
+	}
+	return subscriptionData{Name: "新订阅", URL: rawURL, Nodes: nodes, Updated: time.Now().Unix(), UserInfo: resp.Header.Get("subscription-userinfo"), UnsupportedCount: subscriptionUnsupported(data, nodes)}, nil
 }
 
 func subscriptionSession(parent context.Context) (err error) {
@@ -239,11 +248,14 @@ func subscriptionSession(parent context.Context) (err error) {
 	host := proxy["server"].(string)
 	lookupCtx, lookupCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer lookupCancel()
-	ips, e := net.DefaultResolver.LookupIP(lookupCtx, "ip4", host)
+	ips, e := net.DefaultResolver.LookupIP(lookupCtx, "ip", host)
 	if e != nil || len(ips) == 0 {
 		return errors.New("resolve node")
 	}
-	gateway := ips[0].String()
+	gateway, e := subscriptionGateway(ips)
+	if e != nil {
+		return e
+	}
 	proxy["server"] = gateway
 	proxy["name"] = "Selected"
 	if ws, ok := proxy["ws-opts"].(map[string]any); ok {
@@ -268,7 +280,13 @@ func subscriptionSession(parent context.Context) (err error) {
 	if e != nil {
 		return e
 	}
-	cfg := map[string]any{"mode": "rule", "log-level": "silent", "ipv6": false, "allow-lan": false, "bind-address": "127.0.0.1", "socks-port": port, "authentication": []string{"goconnect:" + r.Token}, "dns": map[string]any{"enable": false}, "tun": map[string]any{"enable": false}, "profile": map[string]any{"store-selected": false}, "proxies": []map[string]any{proxy}, "rules": []string{"MATCH,Selected"}}
+	controllerPort, e := freePort()
+	if e != nil || controllerPort == port {
+		return errors.New("statistics port unavailable")
+	}
+	cfg := map[string]any{"mode": "rule", "log-level": "silent", "ipv6": true, "allow-lan": false, "bind-address": "127.0.0.1", "socks-port": port, "authentication": []string{"goconnect:" + r.Token}, "dns": map[string]any{"enable": false}, "tun": map[string]any{"enable": false}, "profile": map[string]any{"store-selected": false}, "proxies": []map[string]any{proxy}, "rules": []string{"MATCH,Selected"}}
+	cfg["external-controller"] = net.JoinHostPort("127.0.0.1", strconv.Itoa(int(controllerPort)))
+	cfg["secret"] = r.Token
 	dir, e := os.MkdirTemp("", "GoConnect-node-")
 	if e != nil {
 		return e
@@ -324,6 +342,8 @@ func subscriptionSession(parent context.Context) (err error) {
 		return errors.New("core not ready")
 	}
 	emit(map[string]any{"event": "ready", "port": port, "gateway": gateway, "addresses": []string{}})
+	stopMetrics := monitorNodeTotals(ctx, controllerPort, r.Token, emit)
+	defer stopMetrics()
 	select {
 	case <-ctx.Done():
 		return nil
@@ -334,4 +354,19 @@ func subscriptionSession(parent context.Context) (err error) {
 		}
 		return e
 	}
+}
+
+// Prefer IPv4 to preserve established dual-stack behavior, while allowing AAAA-only nodes.
+func subscriptionGateway(ips []net.IP) (string, error) {
+	for _, ip := range ips {
+		if ip.To4() != nil {
+			return ip.String(), nil
+		}
+	}
+	for _, ip := range ips {
+		if ip.To16() != nil && !ip.IsUnspecified() && !ip.IsMulticast() && !ip.IsLinkLocalUnicast() {
+			return ip.String(), nil
+		}
+	}
+	return "", errors.New("resolve node: no usable address")
 }

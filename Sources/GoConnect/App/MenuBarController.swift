@@ -95,9 +95,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         add(connection.connectionSummary, enabled: false)
         do {
             add(connection.routingMode == .global ? "直连 App / 服务：\(connection.excludedApplications.count) 个" : "白名单 App / 服务：\(connection.applications.count) 个", enabled: false)
-            if let port = store.proxyPort {
-                add("复制代理地址 · 127.0.0.1:\(port)", symbol: "doc.on.doc") { [weak self] in self?.store.copyProxyEndpoint() }
-            }
+
             add("直连域名与 IP：\(connection.directDomains.count) 条", enabled: false)
         }
         if connection.usesCompanyRoutes { add("同线路公司网段：\(connection.remoteNetworks.count) 条", enabled: false) }

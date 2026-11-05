@@ -2,6 +2,27 @@ import XCTest
 @testable import GoConnectCore
 
 final class FaultDiagnosticsTests: XCTestCase {
+    func testBridgeDiagnosticsRemainTypedPrivateAndSeparate() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let text = #"{"stage":"udp_write","outcome":"io_error","transaction":42,"flow":1,"packetKind":1,"bytes":0,"errno":32,"timeMicros":123456,"sequence":1,"dropped":0,"pid":123,"password":"PRIVATE-CANARY"}"#
+        let decoder = JSONDecoder()
+        let observation = try decoder.decode(BridgeDiagnostic.self, from: Data(text.utf8))
+        let logger = FaultDiagnostics(directory: base)
+        logger.recordBridge(observation)
+        logger.recordBridge(try decoder.decode(BridgeDiagnostic.self, from: Data(text.replacingOccurrences(of: "udp_write", with: "udp_queue").utf8)))
+        let output = await logger.export()
+        XCTAssertTrue(output.contains("bridge.trace"))
+        XCTAssertTrue(output.contains("udp_write"))
+        XCTAssertTrue(output.contains("udp_queue"))
+        XCTAssertFalse(output.contains("PRIVATE-CANARY"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: base.appendingPathComponent("app.jsonl").path))
+        let attrs = try FileManager.default.attributesOfItem(atPath: base.appendingPathComponent("bridge.jsonl").path)
+        XCTAssertEqual((attrs[.posixPermissions] as! NSNumber).intValue, 0o600)
+        XCTAssertThrowsError(try decoder.decode(BridgeDiagnostic.self, from: Data(text.replacingOccurrences(of: "udp_write", with: "PRIVATE-CANARY").utf8)))
+        let invalid = try decoder.decode(BridgeDiagnostic.self, from: Data(text.replacingOccurrences(of: #""bytes":0"#, with: #""bytes":-1"#).utf8))
+        XCTAssertFalse(invalid.isValid)
+    }
     func testProbeDoesNotAccumulateAndSeparatesSchedulerGap() {
         var state = ResponsivenessState()
         XCTAssertTrue(state.tick(now: 0).enqueue)

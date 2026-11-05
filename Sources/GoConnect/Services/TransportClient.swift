@@ -63,6 +63,10 @@ final class TransportClient {
     }
     private func deliver(_ event: TransportEvent, run: UUID) {
         guard generation == run else { return }
+        if event.event == "bridge_diagnostic" {
+            if let observation = event.bridge { diagnostics.recordBridge(observation) }
+            return
+        }
         // Drain final core diagnostics even after the UI has begun cleanup.
         if event.event == "diagnostic" {
             guard let code = event.code, let known = FaultEvent(rawValue: code), DisconnectReason.isCoreDiagnostic(known) else { return }

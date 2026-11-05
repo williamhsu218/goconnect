@@ -188,7 +188,9 @@ func decodeConfiguredGroupPaths(data []byte) (map[string]bool, error) {
 	if err := json.Unmarshal(data, &c); err != nil {
 		return nil, err
 	}
-	if c.Version != 5 || len(c.Connections) == 0 {
+	// Versions 5–7 retain the same per-connection application path fields.
+	// Reject future schemas rather than collecting a group we cannot protect.
+	if c.Version < 5 || c.Version > 7 || len(c.Connections) == 0 {
 		return nil, errors.New("unknown configuration schema")
 	}
 	result := map[string]bool{}

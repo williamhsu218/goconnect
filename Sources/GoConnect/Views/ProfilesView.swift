@@ -22,6 +22,11 @@ struct ProfilesView: View {
         }
     }
 
+    private var newDraftID: UUID? {
+        guard let draft = store.profileDraft, draft.isNew else { return nil }
+        return draft.id
+    }
+
     var body: some View {
         HStack(spacing: 0) {
             // Master Pane (Left)
@@ -147,6 +152,9 @@ struct ProfilesView: View {
                         .tag(connection.id)
                     }
             }
+            // Recreate the native list when a draft enters or leaves; macOS can
+            // otherwise keep the inserted row at its default single-line height.
+            .id(newDraftID)
             .listStyle(.inset)
             .scrollContentBackground(.hidden)
         }
@@ -158,7 +166,7 @@ struct ProfilesView: View {
                 Image(systemName: "plus.circle.fill")
                     .font(.system(size: 15))
                     .foregroundStyle(AppTheme.accent)
-                Text(draft.connection.displayName.isEmpty ? "新建线路（草稿）" : draft.connection.displayName)
+                Text(draft.connection.profile.name.isEmpty ? "新建线路" : draft.connection.displayName)
                     .font(.system(size: 13, weight: .semibold))
                     .lineLimit(1)
                 Spacer()
@@ -171,6 +179,9 @@ struct ProfilesView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
+        // Preserve both lines when the native list measures the draft card.
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: AppTheme.itemRadius, style: .continuous)
                 .fill(AppTheme.selectedBackground)
@@ -179,6 +190,7 @@ struct ProfilesView: View {
             RoundedRectangle(cornerRadius: AppTheme.itemRadius, style: .continuous)
                 .strokeBorder(AppTheme.accent.opacity(0.45), lineWidth: 1.5)
         )
+        .accessibilityElement(children: .combine)
     }
 
     private var detailPane: some View {
@@ -263,7 +275,7 @@ struct ProfilesView: View {
     }
 
     private func selectProfileItem(_ id: UUID) {
-        guard id != store.profileDraft?.id || store.profileDraft?.isNew == true else { return }
+        guard id != store.profileDraft?.id else { return }
         if store.profileDraftHasChanges {
             pendingProfileSwitch = id
             store.cancelProfileEditing()

@@ -8,22 +8,22 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
-	"net/http"
 	"net/netip"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
 )
 
 type originalNetwork struct{ Interface, Gateway string }
+
+var errPhysicalNetwork = errors.New("当前公网由其它 VPN 接管或网关无效，请检查原网络。")
+
 type transparentRoute struct {
 	Prefix, Interface, Gateway string
 	Scoped                     bool `json:"scoped,omitempty"`
+	Pending                    bool `json:"pending,omitempty"`
 }
 type transparentState struct {
 	Device  string             `json:"device"`
@@ -49,13 +49,17 @@ func originalPhysicalNetworkWith(probe bool, interfaces func() ([]net.Interface,
 			}
 		}
 		ip, e := netip.ParseAddr(n.Gateway)
-		if !physicalInterface.MatchString(n.Interface) || e != nil || !ip.Is4() {
-			return originalNetwork{}, errors.New("当前公网由其它 VPN 接管，请先断开该 VPN，再连接 GoConnect。")
+		if !physicalInterface.MatchString(n.Interface) || e != nil || ip.IsUnspecified() || (ip.Zone() != "" && ip.Zone() != n.Interface) {
+			return originalNetwork{}, errPhysicalNetwork
 		}
 		return n, nil
 	}
 	if !probe {
-		return read("-n", "get", "-inet", "default")
+		n, err := read("-n", "get", "-inet", "default")
+		if err == nil || errors.Is(err, errPhysicalNetwork) || diagnosticError(err).Reason == "system_timeout" {
+			return n, err
+		}
+		return read("-n", "get", "-inet6", "default")
 	}
 	// Isolated validation only: no default routes will be installed.
 	ifaces, e := interfaces()
@@ -69,6 +73,19 @@ func originalPhysicalNetworkWith(probe bool, interfaces func() ([]net.Interface,
 				return n, nil
 			} else if diagnosticError(lastFailure).Reason != "system_timeout" {
 				lastFailure = e
+			}
+		}
+	}
+	// IPv6-only physical networks have no IPv4 default. Preserve a timeout as
+	// the primary failure instead of hiding it behind another family lookup.
+	if diagnosticError(lastFailure).Reason != "system_timeout" {
+		for _, i := range ifaces {
+			if physicalInterface.MatchString(i.Name) && i.Flags&net.FlagUp != 0 {
+				if n, e := read("-n", "get", "-inet6", "-ifscope", i.Name, "default"); e == nil {
+					return n, nil
+				} else {
+					lastFailure = e
+				}
 			}
 		}
 	}
@@ -156,9 +173,18 @@ func makeTransparentConfig(r routeRequest, device string, port uint16, original 
 // A scoped cached lookup may shadow the static entry in `route get`. Verify
 // ownership in the routing table and forwarding interface independently.
 func staticGatewayInTable(table []byte, gateway string, original originalNetwork) bool {
+	address, err := netip.ParseAddr(gateway)
+	if err != nil {
+		return false
+	}
+	want := netip.PrefixFrom(address, address.BitLen())
 	for _, line := range strings.Split(string(table), "\n") {
 		f := strings.Fields(line)
-		if len(f) < 4 || f[0] != gateway || f[1] != original.Gateway || f[3] != original.Interface {
+		if len(f) < 4 || !sameRouteGateway(f[1], original.Gateway) || f[3] != original.Interface {
+			continue
+		}
+		prefix, ok := parseRoutePrefix(f[0])
+		if !ok || prefix != want {
 			continue
 		}
 		flags := f[2]
@@ -168,34 +194,103 @@ func staticGatewayInTable(table []byte, gateway string, original originalNetwork
 	}
 	return false
 }
+
+// Compare numeric addresses while retaining the IPv6 zone as part of ownership.
+func sameRouteGateway(actual, expected string) bool {
+	a, err := netip.ParseAddr(actual)
+	b, otherErr := netip.ParseAddr(expected)
+	return err == nil && otherErr == nil && a == b
+}
+
+func physicalDefaultGatewayInTable(table []byte, original originalNetwork) bool {
+	for _, line := range strings.Split(string(table), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 4 || f[0] != "default" || f[3] != original.Interface {
+			continue
+		}
+		// Our own scoped default can retain the old router after the physical
+		// IPv6 default changes. It cannot serve as evidence of that router's health.
+		flags := f[2]
+		if strings.Contains(flags, "U") && strings.Contains(flags, "G") && !strings.ContainsAny(flags, "IWLY") && sameRouteGateway(f[1], original.Gateway) {
+			return true
+		}
+	}
+	return false
+}
+
+func gatewayRouteInterfaceWith(gateway string, command func(string, ...string) ([]byte, error)) (string, error) {
+	b, err := command("/sbin/route", "-n", "get", "-"+gatewayTableFamily(gateway), gateway)
+	return companyRouteInterface(b), err
+}
 func staticGatewayPresent(gateway string, original originalNetwork) bool {
-	table, err := systemCommand("/usr/sbin/netstat", "-rn", "-f", "inet")
+	table, err := systemCommand("/usr/sbin/netstat", "-rn", "-f", gatewayTableFamily(gateway))
 	return err == nil && staticGatewayInTable(table, gateway, original)
 }
 
 // Preserve command failures across the combined boolean check. Otherwise a
 // command timeout is indistinguishable from a successfully observed route change.
 func transparentGatewayReady(gateway string, original originalNetwork) (bool, error) {
-	table, err := systemCommand("/usr/sbin/netstat", "-rn", "-f", "inet")
-	if err != nil || !staticGatewayInTable(table, gateway, original) {
+	return transparentGatewayReadyWith(gateway, original, systemCommand)
+}
+
+func transparentGatewayReadyWith(gateway string, original originalNetwork, command func(string, ...string) ([]byte, error)) (bool, error) {
+	table, err := command("/usr/sbin/netstat", "-rn", "-f", gatewayTableFamily(gateway))
+	if err != nil || !staticGatewayInTable(table, gateway, original) || !physicalDefaultGatewayInTable(table, original) {
 		return false, err
 	}
-	b, err := systemCommand("/sbin/route", "-n", "get", "-inet", gateway)
-	return err == nil && companyRouteInterface(b) == original.Interface, err
+	actual, err := gatewayRouteInterfaceWith(gateway, command)
+	return err == nil && actual == original.Interface, err
 }
 func pinTransparentGateway(path string, s *transparentState, gateway string, original originalNetwork) error {
-	if !staticGatewayPresent(gateway, original) {
-		if err := addTransparentRoute(path, s, transparentRoute{Prefix: gateway + "/32", Interface: original.Interface, Gateway: original.Gateway}); err != nil {
+	return pinTransparentGatewayWith(path, s, gateway, original, systemCommand)
+}
+func pinTransparentGatewayWith(path string, s *transparentState, gateway string, original originalNetwork, command func(string, ...string) ([]byte, error)) error {
+	table, err := command("/usr/sbin/netstat", "-rn", "-f", gatewayTableFamily(gateway))
+	if err != nil {
+		return err
+	}
+	if !staticGatewayInTable(table, gateway, original) {
+		address := netip.MustParseAddr(gateway)
+		if err := addTransparentRouteWith(path, s, transparentRoute{Prefix: netip.PrefixFrom(address, address.BitLen()).String(), Interface: original.Interface, Gateway: original.Gateway}, command); err != nil {
 			return fmt.Errorf("无法固定 VPN 外层路径: %w", err)
 		}
 	}
-	if ok, err := transparentGatewayReady(gateway, original); !ok {
+	if ok, err := transparentGatewayReadyWith(gateway, original, command); !ok {
 		if err != nil {
 			return fmt.Errorf("VPN 网关静态绕行检查失败: %w", err)
 		}
 		return errors.New("VPN 网关静态绕行路由未生效")
 	}
 	return nil
+}
+
+func gatewayTableFamily(gateway string) string {
+	if a, err := netip.ParseAddr(gateway); err == nil && a.Is6() {
+		return "inet6"
+	}
+	return "inet"
+}
+
+func gatewayPhysicalNetwork(gateway string, original originalNetwork, command func(string, ...string) ([]byte, error)) (originalNetwork, error) {
+	if gatewayTableFamily(gateway) == gatewayTableFamily(original.Gateway) {
+		return original, nil
+	}
+	b, err := command("/sbin/route", "-n", "get", "-"+gatewayTableFamily(gateway), "-ifscope", original.Interface, "default")
+	if err != nil {
+		return originalNetwork{}, err
+	}
+	n := originalNetwork{Interface: companyRouteInterface(b)}
+	for _, line := range strings.Split(string(b), "\n") {
+		f := strings.Fields(line)
+		if len(f) == 2 && f[0] == "gateway:" {
+			n.Gateway = f[1]
+		}
+	}
+	a, err := netip.ParseAddr(n.Gateway)
+	if err != nil || n.Interface != original.Interface || a.IsUnspecified() || gatewayTableFamily(gateway) != gatewayTableFamily(n.Gateway) || (a.Zone() != "" && a.Zone() != n.Interface) {
+		return originalNetwork{}, errPhysicalNetwork
+	}
+	return n, nil
 }
 
 func saveTransparentState(path string, s transparentState) error {
@@ -221,54 +316,75 @@ func transparentRouteArguments(action string, r transparentRoute) []string {
 		return append(args, "-ifscope", r.Interface, "-net", r.Prefix, r.Gateway)
 	}
 	if r.Gateway != "" {
-		return append(args, "-host", strings.TrimSuffix(r.Prefix, "/32"), r.Gateway)
+		prefix := netip.MustParsePrefix(r.Prefix)
+		return append(args, "-host", prefix.Addr().String(), r.Gateway)
 	}
 	return append(args, "-net", r.Prefix, "-interface", r.Interface)
 }
 func scopedDefaultInTable(table []byte, original originalNetwork, gateway string) bool {
 	for _, line := range strings.Split(string(table), "\n") {
 		f := strings.Fields(line)
-		if len(f) >= 4 && f[0] == "default" && f[1] == gateway && f[3] == original.Interface && strings.Contains(f[2], "I") && strings.Contains(f[2], "U") {
+		if len(f) >= 4 && f[0] == "default" && sameRouteGateway(f[1], gateway) && f[3] == original.Interface && strings.Contains(f[2], "I") && strings.Contains(f[2], "U") {
 			return true
 		}
 	}
 	return false
 }
-func originalIPv6Gateway(iface string) string {
-	table, err := systemCommand("/usr/sbin/netstat", "-rn", "-f", "inet6")
+func originalIPv6Gateway(iface string, command func(string, ...string) ([]byte, error)) (string, error) {
+	table, err := command("/usr/sbin/netstat", "-rn", "-f", "inet6")
 	if err != nil {
-		return ""
+		return "", err
 	}
 	for _, line := range strings.Split(string(table), "\n") {
 		f := strings.Fields(line)
-		if len(f) < 4 || f[0] != "default" || f[3] != iface || strings.Contains(f[2], "I") {
+		if len(f) < 4 || f[0] != "default" || f[3] != iface || !strings.Contains(f[2], "U") || !strings.Contains(f[2], "G") || strings.ContainsAny(f[2], "IWLY") {
 			continue
 		}
 		a, e := netip.ParseAddr(f[1])
 		if e == nil && a.Is6() && (a.Zone() == "" || a.Zone() == iface) {
-			return f[1]
+			return f[1], nil
 		}
 	}
-	return ""
+	return "", nil
 }
 func ensureTransparentDirectRoutes(path string, state *transparentState, original originalNetwork) error {
-	routes := []transparentRoute{{Prefix: "0.0.0.0/0", Interface: original.Interface, Gateway: original.Gateway, Scoped: true}}
-	if gateway := originalIPv6Gateway(original.Interface); gateway != "" {
-		routes = append(routes, transparentRoute{Prefix: "::/0", Interface: original.Interface, Gateway: gateway, Scoped: true})
+	return ensureTransparentDirectRoutesWith(path, state, original, systemCommand)
+}
+func transparentDirectRoutes(original originalNetwork, command func(string, ...string) ([]byte, error)) ([]transparentRoute, error) {
+	prefix := "0.0.0.0/0"
+	if gatewayTableFamily(original.Gateway) == "inet6" {
+		prefix = "::/0"
+	}
+	routes := []transparentRoute{{Prefix: prefix, Interface: original.Interface, Gateway: original.Gateway, Scoped: true}}
+	if prefix != "::/0" {
+		gateway, err := originalIPv6Gateway(original.Interface, command)
+		if err != nil {
+			return nil, err
+		}
+		if gateway != "" {
+			routes = append(routes, transparentRoute{Prefix: "::/0", Interface: original.Interface, Gateway: gateway, Scoped: true})
+		}
+	}
+	return routes, nil
+}
+func ensureTransparentDirectRoutesWith(path string, state *transparentState, original originalNetwork, command func(string, ...string) ([]byte, error)) error {
+	routes, err := transparentDirectRoutes(original, command)
+	if err != nil {
+		return err
 	}
 	for _, r := range routes {
 		family := "inet"
 		if routeFamily(r.Prefix) == "-inet6" {
 			family = "inet6"
 		}
-		table, err := systemCommand("/usr/sbin/netstat", "-rn", "-f", family)
+		table, err := command("/usr/sbin/netstat", "-rn", "-f", family)
 		if err != nil {
 			return err
 		}
 		if scopedDefaultInTable(table, original, r.Gateway) {
 			continue
 		} // preserve pre-existing system/VPN scoped routes
-		if err = addTransparentRoute(path, state, r); err != nil {
+		if err = addTransparentRouteWith(path, state, r, command); err != nil {
 			return fmt.Errorf("无法建立原网卡直连出口: %w", err)
 		}
 	}
@@ -276,19 +392,51 @@ func ensureTransparentDirectRoutes(path string, state *transparentState, origina
 }
 
 func addTransparentRoute(path string, s *transparentState, r transparentRoute) error {
-	// Intent is journaled before mutation. Existing routes are never replaced.
+	return addTransparentRouteWith(path, s, r, systemCommand)
+}
+func addTransparentRouteWith(path string, s *transparentState, r transparentRoute, command func(string, ...string) ([]byte, error)) error {
+	return addTransparentRouteWithJournal(s, r, command, func(state transparentState) error { return saveTransparentState(path, state) })
+}
+func addTransparentRouteWithJournal(s *transparentState, r transparentRoute, command func(string, ...string) ([]byte, error), save func(transparentState) error) error {
+	family := strings.TrimPrefix(routeFamily(r.Prefix), "-")
+	table, err := command("/usr/sbin/netstat", "-rn", "-f", family)
+	if err != nil {
+		return err
+	}
+	if routeDestinationInTable(table, r) {
+		return fmt.Errorf("路由已存在，未取得所有权: %w", syscall.EEXIST)
+	}
+	// Pending intents do not establish ownership; retain them after an unknown
+	// or late result instead of letting recovery delete a concurrent owner's route.
+	r.Pending = true
 	s.Routes = append(s.Routes, r)
-	if e := saveTransparentState(path, *s); e != nil {
+	if e := save(*s); e != nil {
+		s.Routes = s.Routes[:len(s.Routes)-1]
 		return e
 	}
 	args := transparentRouteArguments("add", r)
-	output, e := systemCommand("/sbin/route", args...)
-	if e != nil && strings.Contains(string(output), "File exists") {
-		// A concurrent owner won the route; do not delete its route on unwind.
+	output, e := command("/sbin/route", args...)
+	// Darwin route can print a failed mutation while still exiting zero.
+	if strings.Contains(string(output), ": File exists") || errors.Is(e, syscall.EEXIST) {
 		s.Routes = s.Routes[:len(s.Routes)-1]
-		_ = saveTransparentState(path, *s)
+		return errors.Join(fmt.Errorf("路由冲突，未取得所有权: %w", syscall.EEXIST), save(*s))
 	}
-	return e
+	if errors.Is(e, context.DeadlineExceeded) || diagnosticError(e).Reason == "system_timeout" {
+		return e
+	}
+	table, queryErr := command("/usr/sbin/netstat", "-rn", "-f", family)
+	if queryErr != nil {
+		return errors.Join(e, queryErr)
+	}
+	if !ownedTransparentRouteInTable(table, r) {
+		s.Routes = s.Routes[:len(s.Routes)-1]
+		return errors.Join(e, errors.New("新增路由未通过精确查表验证"), save(*s))
+	}
+	if e != nil {
+		return e
+	}
+	s.Routes[len(s.Routes)-1].Pending = false
+	return save(*s)
 }
 func cleanupTransparentRoutes(path string, s *transparentState) error {
 	return cleanupTransparentRoutesWith(path, s, systemCommand)
@@ -320,6 +468,11 @@ func cleanupTransparentRoutesWithDiagnostics(path string, s *transparentState, c
 	var failed []transparentRoute
 	for i := len(s.Routes) - 1; i >= 0; i-- {
 		r := s.Routes[i]
+		if r.Pending {
+			failure("route_add_incomplete", i, r, nil)
+			failed = append(failed, r)
+			continue
+		}
 		if _, e := netip.ParsePrefix(r.Prefix); e != nil {
 			failure("invalid_route", i, r, e)
 			return e
@@ -334,10 +487,13 @@ func cleanupTransparentRoutesWithDiagnostics(path string, s *transparentState, c
 		if !ownedTransparentRouteInTable(table, r) {
 			continue
 		}
-		if _, e = command("/sbin/route", transparentRouteArguments("delete", r)...); e != nil {
+		_, e = command("/sbin/route", transparentRouteArguments("delete", r)...)
+		{
 			table, queryErr := command("/usr/sbin/netstat", "-rn", "-f", family)
 			if queryErr != nil {
-				failure("delete_failed", i, r, e)
+				if e != nil {
+					failure("delete_failed", i, r, e)
+				}
 				failure("recheck_failed", i, r, queryErr)
 				failed = append(failed, r)
 			} else if ownedTransparentRouteInTable(table, r) {
@@ -345,6 +501,9 @@ func cleanupTransparentRoutesWithDiagnostics(path string, s *transparentState, c
 				failed = append(failed, r)
 			}
 		}
+	}
+	for i, j := 0, len(failed)-1; i < j; i, j = i+1, j-1 {
+		failed[i], failed[j] = failed[j], failed[i]
 	}
 	s.Routes = failed
 	s.State = "stopped"
@@ -415,14 +574,7 @@ func transparentSession(ctx context.Context, path string, uid uint32, pid int) (
 	c.snapshot.CaptureMode = "transparent-routes"
 	c.snapshot.RoutingMode = c.request.mode()
 	c.write("starting")
-	defer func() {
-		if result != nil {
-			c.snapshot.Message = result.Error()
-			c.write("failed")
-		} else {
-			c.write("stopped")
-		}
-	}()
+	defer c.finishSession(&result)
 	exitLog.stage = "lock"
 	lock, e := captureLock()
 	if e != nil {
@@ -442,6 +594,13 @@ func transparentSession(ctx context.Context, path string, uid uint32, pid int) (
 	original, e := originalPhysicalNetwork(r.ProbeOnly)
 	if e != nil {
 		return e
+	}
+	outerOriginal := original
+	if !r.ProbeOnly {
+		outerOriginal, e = gatewayPhysicalNetwork(r.Gateway, original, systemCommand)
+		if e != nil {
+			return e
+		}
 	}
 	exitLog.stage = "local"
 	local, e := discoverLocalNetworks()
@@ -485,223 +644,12 @@ func transparentSession(ctx context.Context, path string, uid uint32, pid int) (
 		return e
 	}
 	exitLog.stage = "journal"
-	dir, e := os.MkdirTemp(serviceRunDirectory, "transparent-")
+	state := transparentState{Device: device, State: "starting"}
+	dir, e := initializeSessionDirectory(serviceRunDirectory, "transparent-", func(path string) error { return saveTransparentState(path, state) })
 	if e != nil {
 		return e
 	}
 	statePath := filepath.Join(dir, "state.json")
-	state := transparentState{Device: device, State: "starting"}
-	exitLog.stage = "journal"
-	if e = saveTransparentState(statePath, state); e != nil {
-		return e
-	}
-	var child *exec.Cmd
-	var done chan error
-	defer exitLog.unwind(&result, func() {
-		if result != nil {
-			trace("transparent.session_failed", 1)
-		}
-		// Restore the network before waiting for a potentially blocked core. Retain
-		// a quarantine record if either cleanup or child termination fails.
-		cleanupErr := cleanupTransparentRoutesWithDiagnostics(statePath, &state, systemCommand, exitLog.cleanupEvent)
-		exitLog.cleanupFailures = len(state.Routes)
-		if cleanupErr != nil && exitLog.cleanupFailures == 0 {
-			exitLog.cleanupFailures = 1
-		}
-		var stopErr error
-		if child != nil {
-			stopErr = stopChild(child, done)
-		}
-		if stopErr != nil {
-			exitLog.stopFailed = true
-			d := diagnosticError(stopErr)
-			d.Stage = "core_stop"
-			d.Reason = "core_stop_failed"
-			exitLog.cleanupEvent("transparent.core_stop_failed", 1, d)
-		}
-		if cleanupErr != nil {
-			result = cleanupErr
-		} else if stopErr != nil {
-			result = stopErr
-		} else {
-			if removeErr := os.RemoveAll(dir); removeErr != nil {
-				d := diagnosticError(removeErr)
-				d.Stage = "remove"
-				d.Reason = "directory_remove_failed"
-				exitLog.cleanupFailures++
-				exitLog.cleanupEvent("transparent.cleanup_directory_failed", 1, d)
-			}
-		}
-	})
-	exitLog.stage = "config"
-	config, e := json.Marshal(makeTransparentConfig(r, device, port, original, local, ts))
-	if e != nil {
-		return e
-	}
-	file := filepath.Join(dir, "config.json")
-	if e = os.WriteFile(file, config, 0600); e != nil {
-		return e
-	}
-	cmd := exec.Command(filepath.Join(runtime, "bin/mihomo"), "-d", dir, "-f", file)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LANG=C"}
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
-	exitLog.stage = "core_start"
-	if e = cmd.Start(); e != nil {
-		return e
-	}
-	child = cmd
-	done = make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	state.CorePID = cmd.Process.Pid
-	exitLog.stage = "journal"
-	if e = saveTransparentState(statePath, state); e != nil {
-		return e
-	}
-	client := &http.Client{Timeout: time.Second}
-	tick := time.NewTicker(time.Second)
-	defer tick.Stop()
-	start := time.Now()
-	active := false
-	lastHealth := time.Time{}
-	failures := 0
-	for {
-		select {
-		case <-ctx.Done():
-			exitLog.stage = "lease"
-			exitLog.capture("context_canceled", ctx.Err(), diagnosticDetails{})
-			return nil
-		case e := <-done:
-			done <- e
-			exitLog.stage = "health_core"
-			code := cmd.ProcessState.ExitCode()
-			exitLog.capture("core_exited", e, diagnosticDetails{ExitCode: &code})
-			trace("transparent.core_exited", int64(cmd.ProcessState.ExitCode()))
-			return errors.New("透明分流核心已退出")
-		case <-tick.C:
-			if lease, err := c.leaseDiagnostics(); lease.Reason != "" {
-				exitLog.stage = "lease"
-				exitLog.capture(lease.Reason, err, lease)
-				return nil
-			}
-			if !active {
-				exitLog.stage = "core_ready"
-				healthy, health := coreReadiness(client, port, r.Token, device)
-				if !healthy {
-					if time.Since(start) > 15*time.Second {
-						exitLog.capture("core_start_timeout", nil, health)
-						return errors.New("透明分流入口启动超时")
-					}
-					continue
-				}
-				if !r.ProbeOnly {
-					exitLog.stage = "network"
-					current, e := originalPhysicalNetwork(false)
-					if e != nil {
-						return exitLog.fail("network_query_failed", fmt.Errorf("原网络检查失败: %w", e))
-					}
-					if current != original {
-						exitLog.capture("network_changed", nil, diagnosticDetails{ExpectedInterface: original.Interface, ActualInterface: current.Interface, GatewayChanged: current.Gateway != original.Gateway})
-						return errors.New("原网络已改变，请重新连接")
-					}
-					// Keep the tunnel's outer connection on its original physical path.
-					gw := netip.MustParseAddr(r.Gateway)
-					if !gw.Is4() {
-						return errors.New("当前透明连接要求 IPv4 VPN 网关")
-					}
-					exitLog.stage = "health_gateway"
-					b, e := systemCommand("/sbin/route", "-n", "get", r.Gateway)
-					if e != nil {
-						return exitLog.fail("gateway_query_failed", e)
-					}
-					if actual := companyRouteInterface(b); actual != original.Interface {
-						exitLog.capture("gateway_changed", nil, diagnosticDetails{ExpectedInterface: original.Interface, ActualInterface: actual})
-						return errors.New("VPN 服务器未使用原网络，请先结束冲突的 VPN")
-					}
-					if e = pinTransparentGateway(statePath, &state, r.Gateway, original); e != nil {
-						return e
-					}
-				} else {
-					// Documentation-only address: verifies the outer gateway
-					// remains pinned even when its enclosing prefix enters TUN.
-					if e = pinTransparentGateway(statePath, &state, "203.0.113.5", original); e != nil {
-						return e
-					}
-				}
-				exitLog.stage = "routing"
-				if e = ensureTransparentDirectRoutes(statePath, &state, original); e != nil {
-					return e
-				}
-				for _, prefix := range transparentCapturePrefixes(r.ProbeOnly) {
-					if e = addTransparentRoute(statePath, &state, transparentRoute{Prefix: prefix, Interface: device}); e != nil {
-						return fmt.Errorf("无法添加透明路由 %s: %w", prefix, e)
-					}
-				}
-				outer := r.Gateway
-				if r.ProbeOnly {
-					outer = "203.0.113.5"
-				}
-				exitLog.stage = "health_gateway"
-				if ok, e := transparentGatewayReady(outer, original); !ok {
-					if e != nil {
-						return exitLog.fail("gateway_query_failed", e)
-					}
-					exitLog.capture("gateway_changed", nil, diagnosticDetails{ExpectedInterface: original.Interface})
-					return errors.New("接管路由后 VPN 网关绕行失效，已停止连接")
-				}
-				active = true
-				state.State = "ready"
-				exitLog.stage = "journal"
-				if e = saveTransparentState(statePath, state); e != nil {
-					return e
-				}
-				c.snapshot.SystemDevice = device
-				c.snapshot.RemoteNetworks = r.RemoteNetworks
-				c.snapshot.TailscaleActive = len(ts.Interfaces) > 0
-				c.snapshot.TailscaleRoutes = len(ts.Prefixes)
-				c.snapshot.Message = "透明 App 分流已启用，无需应用代理设置。"
-				c.write("ready")
-			} else if time.Since(lastHealth) > 5*time.Second {
-				lastHealth = time.Now()
-				if !r.ProbeOnly {
-					exitLog.stage = "health_network"
-					now, e := originalPhysicalNetwork(true)
-					if e != nil {
-						return exitLog.fail("network_query_failed", fmt.Errorf("原网络检查失败: %w", e))
-					}
-					if now != original {
-						exitLog.capture("network_changed", nil, diagnosticDetails{ExpectedInterface: original.Interface, ActualInterface: now.Interface, GatewayChanged: now.Gateway != original.Gateway})
-						return errors.New("原网络已改变，已停止本次连接；请重新连接")
-					}
-					exitLog.stage = "health_gateway"
-					b, e := systemCommand("/sbin/route", "-n", "get", r.Gateway)
-					if e != nil {
-						return exitLog.fail("gateway_query_failed", fmt.Errorf("VPN 外层检查失败: %w", e))
-					}
-					if actual := companyRouteInterface(b); actual != original.Interface {
-						exitLog.capture("gateway_changed", nil, diagnosticDetails{ExpectedInterface: original.Interface, ActualInterface: actual})
-						return errors.New("VPN 外层路径改变，已停止连接以避免回流")
-					}
-				}
-				exitLog.stage = "health_core"
-				healthy, health := coreReadiness(client, port, r.Token, device)
-				if healthy {
-					failures = 0
-				} else {
-					failures++
-					traceDetails("transparent.health_failed", int64(failures), health)
-				}
-				if failures >= 3 {
-					exitLog.capture("core_unresponsive", nil, health)
-					trace("transparent.core_unresponsive", int64(failures))
-					return errors.New("分流核心连续未响应，已恢复原网络并停止本次连接")
-				}
-			}
-			if active {
-				// Poll only metadata and counts; leave forwarding and route ownership unchanged.
-				_ = c.refreshConnections(client, port)
-			}
-		}
-	}
+	connection := transparentConnection{control: c, port: port, original: original, outer: outerOriginal, device: device, statePath: statePath, state: &state, runtime: runtime, local: local, tails: ts, exitLog: exitLog, ops: defaultTransparentRuntime()}
+	return connection.run(ctx)
 }

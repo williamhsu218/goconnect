@@ -283,13 +283,19 @@ func atomicRootWrite(path string, data []byte) error {
 func networkServicePlist(revision string) []byte {
 	// revision is a SHA-256, never user-provided plist syntax.
 	executable := filepath.Join(serviceBase, "versions", revision, "bin/GoConnectTransport")
+	// This daemon forwards live user traffic. Background also throttles the
+	// inherited worker/core CPU and I/O under contention (observed priority 4),
+	// delaying packets and route probes even while OpenConnect stays responsive.
+	// Our authenticated Unix socket is not XPC, so Adaptive cannot track active
+	// transactions. Interactive removes that background resource policy; finite
+	// health/recovery deadlines, lease ownership and cleanup remain unchanged.
 	return []byte(fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>Label</key><string>%s</string>
 <key>ProgramArguments</key><array><string>%s</string><string>service-run</string></array>
 <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
-<key>ProcessType</key><string>Background</string>
+<key>ProcessType</key><string>Interactive</string>
 <key>ThrottleInterval</key><integer>10</integer><key>ExitTimeOut</key><integer>20</integer>
 <key>Umask</key><integer>63</integer>
 <key>EnvironmentVariables</key><dict><key>PATH</key><string>/usr/bin:/bin:/usr/sbin:/sbin</string><key>HOME</key><string>/var/root</string><key>TMPDIR</key><string>/private/var/tmp</string></dict>

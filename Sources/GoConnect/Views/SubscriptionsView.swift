@@ -155,6 +155,9 @@ struct SubscriptionsView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
+                    Button("导入 YAML", systemImage: "doc.badge.plus") { store.importSubscriptionFile() }.disabled(store.subscriptionWorking)
+                }
+                ToolbarItem(placement: .primaryAction) {
                     Button("从 Clash Verge 导入", systemImage: "square.and.arrow.down") { store.importSubscriptions() }
                         .disabled(store.subscriptionWorking)
                 }
@@ -226,7 +229,6 @@ private struct SubscriptionNodesView: View {
         if !store.localReady { return "运行组件未就绪，请在诊断页检查环境。" }
         if store.nodeLatency.isRunning { return "节点测试正在进行。" }
         if store.subscriptionWorking { return "订阅正在更新，完成后可测试节点。" }
-        if store.routingCheckRunning { return "分流检查正在进行，结束后可测试节点。" }
         if store.busy { return "请结束当前连接或诊断后再测试节点。" }
         return nil
     }
@@ -246,6 +248,8 @@ private struct SubscriptionNodesView: View {
             VStack(alignment: .leading, spacing: 16) {
                 PageHeading(title: item.payload.name, subtitle: "\(item.payload.nodes.count) 个节点 · 选择后在连接页开启")
                 if let quota = item.quotaText { Text(quota).font(.callout).foregroundStyle(.secondary) }
+                SubscriptionUsageCard(store: store, subscription: item)
+                if item.quotaValues["total"] == nil { YunyooUsageCard(store: store.yunyooUsage, subscription: item) }
                 if let count = item.payload.unsupportedCount, count > 0 {
                     Label("另有 \(count) 个节点的协议或传输暂不支持，未导入。", systemImage: "info.circle").font(.caption).foregroundStyle(.secondary)
                 }

@@ -14,6 +14,9 @@ func TestOpenConnectDiagnosticClassificationAndPrivacy(t *testing.T) {
 		"Cookie was rejected by server; exiting.":                "openconnect.cookie_rejected",
 		"CSTP Dead Peer Detection detected dead peer!":           "openconnect.dpd_timeout",
 		"SSL_read failed: PRIVATE_DESTINATION":                   "openconnect.tls_read_failed",
+		"Read error on SSL session: PRIVATE_DESTINATION":         "openconnect.tls_read_failed",
+		"Write error on SSL session: PRIVATE_DESTINATION":        "openconnect.tls_write_failed",
+		"Cookie is no longer valid, ending session":              "openconnect.cookie_rejected",
 		"SSL_write failed: PRIVATE_DESTINATION":                  "openconnect.tls_write_failed",
 		"SSL connection failure: PRIVATE_DESTINATION":            "openconnect.tls_failed",
 		"CSTP reconnect failed":                                  "openconnect.reconnect_failed",
@@ -29,7 +32,7 @@ func TestOpenConnectDiagnosticClassificationAndPrivacy(t *testing.T) {
 			t.Fatal("private text escaped")
 		}
 	}
-	for _, line := range []string{"Set-Cookie: SECRET", "COOKIE='SECRET'", "https://PRIVATE/path", "Authorization: SECRET", "X-CSTP-Session-Timeout: SECRET", "<password>SECRET</password>"} {
+	for _, line := range []string{"Read error on DTLS session: SECRET", "Write error on DTLS session: SECRET", "sleep SECRET", "Set-Cookie: SECRET", "COOKIE='SECRET'", "https://PRIVATE/path", "Authorization: SECRET", "X-CSTP-Session-Timeout: SECRET", "<password>SECRET</password>"} {
 		if len(classifyOpenConnect(line)) != 0 {
 			t.Fatal("unrecognized output retained")
 		}
@@ -37,8 +40,12 @@ func TestOpenConnectDiagnosticClassificationAndPrivacy(t *testing.T) {
 }
 
 func TestOpenConnectTimingIsNumericOnly(t *testing.T) {
+	w := classifyOpenConnect("sleep 3s, remaining timeout 60s")
+	if len(w) != 1 || w[0].Code != "openconnect.retry_wait_seconds" || w[0].Value != 3 {
+		t.Fatal(w)
+	}
 	d := classifyOpenConnect("CSTP connected. DPD 30, Keepalive 20")
-	if len(d) != 2 || d[0].Value != 30 || d[1].Value != 20 {
+	if len(d) != 3 || d[0].Code != "openconnect.cstp_connected" || d[1].Value != 30 || d[2].Value != 20 {
 		t.Fatal(d)
 	}
 	d = classifyOpenConnect("X-CSTP-Session-Timeout: 3600")

@@ -85,6 +85,13 @@ struct ContentView: View {
             }
         }
         .sheet(isPresented: $store.passwordRequested) { ConnectionPasswordSheet(store: store) }
+        .sheet(item: Binding(get: { store.yunyooUsage.loginBinding }, set: { store.yunyooUsage.loginBinding = $0 })) { binding in
+            YunyooLoginView(store: store.yunyooUsage, binding: binding) { authorized in
+                if let subscription = store.subscriptions.first(where: { $0.id == authorized.subscriptionID }) {
+                    store.updateSubscription(subscription)
+                }
+            }
+        }
         .confirmationDialog("放弃未保存的更改？", isPresented: $store.discardProfileChangesRequested) {
             Button("放弃更改", role: .destructive) { store.discardProfileChanges() }
             Button("继续编辑", role: .cancel) { store.pendingProfilePage = nil }
@@ -153,12 +160,12 @@ struct ContentView: View {
                 Image(systemName: "waveform.path.ecg").foregroundStyle(.secondary).accessibilityLabel("正在诊断")
             }
         case .applications:
-            if store.updatingApplications || store.scanning {
+            if store.scanning {
                 ProgressView()
                     .controlSize(.mini)
             }
         case .exclusions:
-            if store.updatingApplications || store.scanning {
+            if store.scanning {
                 ProgressView()
                     .controlSize(.mini)
             }

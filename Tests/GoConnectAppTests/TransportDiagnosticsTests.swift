@@ -16,6 +16,7 @@ final class TransportDiagnosticsTests: XCTestCase {
         echo '{"event":"diagnostic","code":"openconnect.idle_timeout","value":0}'
         echo '{"event":"error","message":"fixture error"}'
         echo '{"event":"diagnostic","code":"openconnect.exit_code","value":1}'
+        echo '{"event":"bridge_diagnostic","bridge":{"stage":"udp_write","outcome":"io_error","transaction":42,"flow":1,"packetKind":1,"bytes":0,"errno":32,"timeMicros":123456,"sequence":1,"dropped":0,"pid":123,"password":"PRIVATE_BRIDGE_SECRET"}}'
         echo '{"event":"diagnostic","code":"PRIVATE_COOKIE_SECRET","value":0}'
         echo '{"event":"diagnostic","code":"connection.disconnect_requested","value":0}'
         echo '{"event":"stopped"}'
@@ -39,6 +40,9 @@ final class TransportDiagnosticsTests: XCTestCase {
         XCTAssertTrue(output.contains("openconnect.idle_timeout"))
         XCTAssertTrue(output.contains("openconnect.exit_code"))
         XCTAssertTrue(output.contains("transport.stop_requested"))
+        XCTAssertTrue(output.contains("bridge.trace"))
+        XCTAssertTrue(output.contains("udp_write"))
+        XCTAssertFalse(output.contains("PRIVATE_BRIDGE_SECRET"))
         XCTAssertFalse(output.contains("PRIVATE_COOKIE_SECRET"))
         XCTAssertFalse(output.contains("private-fixture"))
         XCTAssertFalse(output.contains("connection.disconnect_requested"))

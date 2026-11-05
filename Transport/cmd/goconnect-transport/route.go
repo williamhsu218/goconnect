@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -311,8 +310,13 @@ func (c *controlFiles) alive() bool {
 	reason, _ := c.leaseDiagnostics()
 	return reason.Reason == ""
 }
+
+// Renewed every second on a dedicated queue. A bounded scheduling allowance
+// does not weaken explicit revocation or owner UID/start-time verification.
+const leaseTimeout = 30 * time.Second
+
 func (c *controlFiles) leaseDiagnostics() (diagnosticDetails, error) {
-	d := diagnosticDetails{Stage: "lease", TimeoutMS: 5000}
+	d := diagnosticDetails{Stage: "lease", TimeoutMS: leaseTimeout.Milliseconds()}
 	data, st, err := readOwned(c.directory, "lease", c.uid)
 	if err != nil {
 		d.Reason = "lease_unreadable"
@@ -327,10 +331,6 @@ func (c *controlFiles) leaseDiagnostics() (diagnosticDetails, error) {
 	}
 	age := time.Since(st.ModTime())
 	d.DurationMS = age.Milliseconds()
-	if age > 5*time.Second {
-		d.Reason = "lease_expired"
-		return d, nil
-	}
 	if age < -time.Second {
 		d.Reason = "lease_future"
 		return d, nil
@@ -344,8 +344,30 @@ func (c *controlFiles) leaseDiagnostics() (diagnosticDetails, error) {
 		d.Reason = "owner_changed"
 		return d, nil
 	}
+	if age > leaseTimeout {
+		d.Reason = "lease_expired"
+		return d, nil
+	}
 	return diagnosticDetails{}, nil
 }
+
+// Used directly by defer so a panic cannot publish a successful stop.
+func (c *controlFiles) finishSession(result *error) {
+	value := recover()
+	if value != nil {
+		*result = errors.New("分流会话异常结束，请导出诊断。")
+	}
+	if *result != nil {
+		c.snapshot.Message = (*result).Error()
+		c.write("failed")
+	} else {
+		c.write("stopped")
+	}
+	if value != nil {
+		panic(value)
+	}
+}
+
 func (c *controlFiles) close() {
 	if c.status != nil {
 		_ = c.status.Close()
@@ -415,341 +437,6 @@ func ready(client *http.Client, port uint16, token, device string) bool {
 	return ok
 }
 
-func routeSession(ctx context.Context, path string) (resultErr error) {
-	return routeSessionForOwner(ctx, path, 0, 0)
-}
-
-func routeSessionForOwner(ctx context.Context, path string, uid uint32, ownerPID int) (resultErr error) {
-	if os.Geteuid() != 0 {
-		return errors.New("administrator authorization required")
-	}
-	control, err := openControl(path)
-	if err != nil {
-		return err
-	}
-	defer control.close()
-	if uid != 0 && (control.uid != uid || control.request.OwnerPID != ownerPID) {
-		return errors.New("service session owner mismatch")
-	}
-	ctx, revoke := context.WithCancel(ctx)
-	defer revoke()
-	leaseWatchDone := make(chan struct{})
-	defer close(leaseWatchDone)
-	go func() {
-		watch := time.NewTicker(200 * time.Millisecond)
-		defer watch.Stop()
-		for {
-			select {
-			case <-leaseWatchDone:
-				return
-			case <-watch.C:
-				if !control.alive() {
-					trace("route.owner_lost", 0)
-					revoke()
-					return
-				}
-			}
-		}
-	}()
-	lock, err := captureLock()
-	if err != nil {
-		control.snapshot.Message = err.Error()
-		control.write("failed")
-		return err
-	}
-	defer lock.Close()
-	trace("route.starting", 0)
-	control.write("starting")
-	result := false
-	defer func() {
-		if resultErr != nil {
-			trace("route.failed", 1)
-		} else {
-			trace("route.stopped", 0)
-		}
-		if result {
-			control.write("stopped")
-		} else {
-			if control.snapshot.Message == "" {
-				control.snapshot.Message = "分流核心启动或运行失败，请检查管理员授权及其它 TUN。"
-			}
-			if resultErr != nil && strings.Contains(resultErr.Error(), "TUN did not start") {
-				control.snapshot.Message = "未能创建 TUN 网络接口，请检查管理员权限或其它 VPN 冲突。"
-			}
-			if resultErr != nil && strings.Contains(resultErr.Error(), "controller unavailable") {
-				control.snapshot.Message = "分流核心的状态读取已中断，正在释放本次 TUN。"
-			}
-			control.write("failed")
-		}
-	}()
-	trace("route.environment_check", 0)
-	runtime, err := runtimePath()
-	if err != nil {
-		return err
-	}
-	if err = validateCaptureEnvironment(); err != nil {
-		control.snapshot.Message = err.Error()
-		return err
-	}
-	if control.request.LiveRouting {
-		control.request.systemLAN, err = discoverLocalNetworks()
-		if err != nil {
-			control.snapshot.Message = "无法识别本机局域网，未启用分流。"
-			return err
-		}
-		control.request.systemDNS, err = discoverSystemDNS()
-		if err != nil {
-			control.snapshot.Message = "无法读取系统 DNS，未启用分流。"
-			return err
-		}
-		control.apps, err = prepareLiveApps(control.request.AppPaths, control.request.ProbeOnly)
-	} else {
-		control.apps, err = prepareCapturedApps(control.uid, control.request.AppPaths, control.request.ProbeOnly)
-	}
-	if err != nil {
-		control.snapshot.Message = err.Error()
-		return err
-	}
-	if control.request.ProbeOnly && !control.request.LiveRouting {
-		defer func() {
-			for _, app := range control.apps {
-				processes, e := processIdentities()
-				if e != nil {
-					continue
-				}
-				used := false
-				for _, process := range processes {
-					if process.GID == app.GID {
-						used = true
-					}
-				}
-				if !used {
-					_, _ = systemCommand("/usr/sbin/dseditgroup", "-o", "delete", app.Group)
-				}
-			}
-		}()
-	}
-	if !control.request.ProbeOnly && !control.request.LiveRouting {
-		processes, e := processIdentities()
-		if e != nil {
-			return e
-		}
-		for _, app := range control.apps {
-			_, unmanaged := appProcessCounts(app, control.uid, processes)
-			if unmanaged > 0 {
-				control.snapshot.Message = fmt.Sprintf("请先退出 %s，再连接；GoConnect 将为它启用专属线路。", strings.TrimSuffix(filepath.Base(app.Path), ".app"))
-				return errors.New("unmanaged application is already running")
-			}
-		}
-	}
-	trace("route.network_discovery", 0)
-	baseline, err := routeInterface(probeTarget)
-	if err != nil {
-		return err
-	}
-	tailscale, err := discoverTailscale()
-	if err != nil {
-		return errors.New("无法读取 Tailscale 网络路由，未修改网络。")
-	}
-	device, err := chooseDevice()
-	if err != nil {
-		return err
-	}
-	if control.request.hasSystemCapture() {
-		control.request.systemDevice, err = chooseOtherDevice(device)
-		if err != nil {
-			return err
-		}
-		control.request.coreGID, err = unusedCoreGID()
-		if err != nil {
-			return err
-		}
-	}
-	control.snapshot.SystemDevice = control.request.systemDevice
-	control.snapshot.RemoteNetworks = control.request.RemoteNetworks
-	control.snapshot.Device = device
-	port, err := freePort()
-	if err != nil {
-		return err
-	}
-	dir, err := writeConfig(control.request, runtime, device, port)
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(dir)
-	if !control.alive() {
-		return errors.New("session canceled")
-	}
-	cmd := exec.Command(filepath.Join(runtime, "bin", "mihomo"), "-d", dir, "-f", filepath.Join(dir, "config.json"))
-	cmd.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "HOME=" + dir}
-	if control.request.hasSystemCapture() {
-		cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: 0, Gid: control.request.coreGID, Groups: []uint32{}}}
-	}
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
-	if err = cmd.Start(); err != nil {
-		return err
-	}
-	trace("core.started", int64(cmd.Process.Pid))
-	ended := make(chan error, 1)
-	go func() { ended <- cmd.Wait() }()
-	running := true
-	var filter *packetFilter
-	defer func() {
-		if filter != nil {
-			var cleanupError error
-			for attempt := 0; attempt < 3; attempt++ {
-				trace("pf.cleanup_begin", int64(attempt))
-				cleanupError = filter.close()
-				if cleanupError != nil {
-					trace("pf.cleanup_failed", int64(attempt))
-				} else {
-					trace("pf.cleanup_ok", int64(attempt))
-				}
-				if cleanupError == nil {
-					break
-				}
-			}
-			if cleanupError != nil {
-				result = false
-				resultErr = cleanupError
-				control.snapshot.Message = "本次应用分流规则未能完全释放，请在诊断中检查。"
-			}
-		}
-		if running {
-			_ = cmd.Process.Signal(syscall.SIGTERM)
-			select {
-			case <-ended:
-			case <-time.After(3 * time.Second):
-				_ = cmd.Process.Kill()
-				<-ended
-			}
-		}
-	}()
-	// Avoid inherited proxy environment. The controller never leaves loopback.
-	client := &http.Client{Timeout: 500 * time.Millisecond, Transport: &http.Transport{Proxy: nil}}
-	defer client.CloseIdleConnections()
-	tick := time.NewTicker(250 * time.Millisecond)
-	defer tick.Stop()
-	deadline := time.Now().Add(12 * time.Second)
-	reported := false
-	nextSnapshot := time.Time{}
-	nextNetworkCheck := time.Time{}
-	nextDiagnostic := time.Time{}
-	networkCheck := networkPoller{baseline: baseline, read: func() (routingNetworkState, error) { return readRoutingNetwork(control.request.LiveRouting) }}
-	lastRules := ""
-	missedSnapshots := 0
-	for {
-		select {
-		case <-ctx.Done():
-			trace("route.cancelled", 0)
-			result = true
-			return nil
-		case <-ended:
-			running = false
-			trace("core.exited", int64(cmd.ProcessState.ExitCode()))
-			return errors.New("routing process exited")
-		case <-tick.C:
-			if !control.alive() {
-				result = true
-				return nil
-			}
-			if !reported {
-				if systemDeviceReady(control.request) && ready(client, port, control.request.Token, device) && (!control.request.LiveRouting || liveRulesReady(client, port, control.request.Token, len(liveRulePayload(control.request.AppPaths)))) {
-					after, e := routeInterface(probeTarget)
-					if e != nil || after != baseline {
-						return errors.New("unexpected default route change")
-					}
-					trace("pf.install_begin", 0)
-					filter, e = startPacketFilter(control.uid, control.apps, device, control.request.Token, control.request, tailscale)
-					if e != nil {
-						control.snapshot.Message = e.Error()
-						return e
-					}
-					control.snapshot.CaptureMode = "app-group"
-					if control.request.LiveRouting {
-						control.snapshot.CaptureMode = "process-rules"
-					}
-					control.snapshot.RoutingMode = control.request.mode()
-					control.snapshot.TailscaleActive = len(tailscale.Interfaces) > 0
-					control.snapshot.TailscaleRoutes = len(tailscale.Prefixes)
-					lastRules = routingRules(control.uid, control.apps, device, control.request, tailscale)
-					control.snapshot.OriginalRoute = true
-					// Connecting installs routing only. Apps launch exclusively through
-					// an explicit per-app command, in both whitelist and global modes.
-					reported = true
-					trace("route.ready", 0)
-					control.write("ready")
-				} else if time.Now().After(deadline) {
-					trace("core.start_timeout", 0)
-					return errors.New("TUN did not start")
-				}
-			}
-			if reported && time.Now().After(nextSnapshot) {
-				if time.Now().After(nextDiagnostic) {
-					trace("route.loop_alive", 0)
-					nextDiagnostic = time.Now().Add(30 * time.Second)
-				}
-				if time.Now().After(nextNetworkCheck) {
-					sample, e := networkCheck.poll()
-					if e != nil {
-						control.snapshot.Message = "网络巡检持续失败或原路由已变化，已停止本次分流。"
-						return e
-					}
-					if sample != nil {
-						fresh := sample.Tailscale
-						fresh.Prefixes = mergePrefixes(tailscale.Prefixes, fresh.Prefixes)
-						if len(fresh.Prefixes) > 1024 {
-							return errors.New("too many Tailscale subnet routes")
-						}
-						tailscale = fresh
-						control.request.systemLAN = sample.LAN
-						control.request.systemDNS = sample.DNS
-						rules := routingRules(control.uid, control.apps, device, control.request, tailscale)
-						if rules != lastRules {
-							trace("pf.network_update", 0)
-							if e = filter.load(rules); e != nil {
-								return e
-							}
-							lastRules = rules
-						}
-						control.snapshot.TailscaleActive = len(tailscale.Interfaces) > 0
-						control.snapshot.TailscaleRoutes = len(tailscale.Prefixes)
-					}
-					nextNetworkCheck = time.Now().Add(2 * time.Second)
-				}
-				if control.request.LiveRouting {
-					if err := control.handleLiveCommand(ctx, client, port, dir); err != nil {
-						control.snapshot.Message = err.Error()
-						return err
-					}
-				} else {
-					control.handleCommand(ctx, runtime)
-				}
-				nextSnapshot = time.Now().Add(time.Second)
-				connections, e := coreSnapshot(client, port, control.request.Token)
-				_, interfaceError := net.InterfaceByName(device)
-				if e != nil || interfaceError != nil || !systemDeviceReady(control.request) {
-					missedSnapshots++
-					trace("core.snapshot_failed", int64(missedSnapshots))
-				} else {
-					if missedSnapshots > 0 {
-						trace("core.snapshot_recovered", 0)
-					}
-					missedSnapshots = 0
-					control.snapshot = summarizeConnections(connections, control.request.AppPaths, control.snapshot)
-					control.updateAppProcesses()
-					control.write("ready")
-				}
-				if missedSnapshots >= 3 {
-					return errors.New("controller unavailable")
-				}
-			}
-		}
-	}
-}
-
-// Non-elevated syntax validation only: -t never starts a TUN or changes routes.
 func checkConfig(path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {

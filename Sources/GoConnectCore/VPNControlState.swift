@@ -2,7 +2,7 @@ import Foundation
 
 public enum VPNControlState: String, CaseIterable, Sendable {
     case off, waitingForPassword, preparingService, maintainingService, connecting, authorizing, connected, needsRestart
-    case interrupted, disconnecting, diagnostic, endingDiagnostic, failed
+    case reconnecting, interrupted, disconnecting, diagnostic, endingDiagnostic, failed
 
     public init(phase: String, passwordRequested: Bool, testOnly: Bool, routingCheck: Bool, hasUnmanagedApps: Bool) {
         if phase == "stopping" {
@@ -19,6 +19,7 @@ public enum VPNControlState: String, CaseIterable, Sendable {
             case "connecting": self = testOnly ? .diagnostic : .connecting
             case "authorizing": self = .authorizing
             case "connected": self = hasUnmanagedApps ? .needsRestart : .connected
+            case "reconnecting": self = testOnly ? .diagnostic : .reconnecting
             case "protected": self = .interrupted
             case "failed": self = .failed
             default: self = .off
@@ -28,10 +29,10 @@ public enum VPNControlState: String, CaseIterable, Sendable {
 
     /// The switch reflects the requested VPN session, not a diagnostic tunnel.
     public var isOn: Bool {
-        [.waitingForPassword, .preparingService, .connecting, .authorizing, .connected, .needsRestart, .interrupted].contains(self)
+        [.waitingForPassword, .preparingService, .connecting, .authorizing, .connected, .reconnecting, .needsRestart, .interrupted].contains(self)
     }
     public var canToggle: Bool { ![.preparingService, .maintainingService, .disconnecting, .diagnostic, .endingDiagnostic].contains(self) }
-    public var isWorking: Bool { [.preparingService, .maintainingService, .connecting, .authorizing, .disconnecting, .diagnostic, .endingDiagnostic].contains(self) }
+    public var isWorking: Bool { [.preparingService, .maintainingService, .connecting, .reconnecting, .authorizing, .disconnecting, .diagnostic, .endingDiagnostic].contains(self) }
     public var needsAttention: Bool { [.interrupted, .needsRestart, .failed].contains(self) }
     public var title: String {
         switch self {
@@ -42,6 +43,7 @@ public enum VPNControlState: String, CaseIterable, Sendable {
         case .connecting: "正在连接"
         case .authorizing: "准备透明分流"
         case .connected: "已连接"
+        case .reconnecting: "正在恢复连接"
         case .needsRestart: "部分应用需要重启"
         case .interrupted: "连接已中断"
         case .disconnecting: "正在断开"

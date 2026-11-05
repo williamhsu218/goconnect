@@ -52,7 +52,7 @@ func allowedDiagnosticLabel(value, allowed string) string {
 
 func sanitizeDiagnosticDetails(d diagnosticDetails) diagnosticDetails {
 	d.Stage = allowedDiagnosticLabel(d.Stage, "unknown control lock recovery apps network local tailscale company address device port runtime journal config core_start core_ready routing health_network health_gateway health_core lease cleanup core_stop remove worker service command")
-	reasons := "unknown operation_failed panic context_canceled lease_missing lease_unreadable lease_token_mismatch lease_expired lease_future owner_missing owner_changed core_exited core_start_timeout network_changed network_query_failed gateway_changed gateway_query_failed core_unresponsive read_failed delete_failed recheck_failed delete_still_present invalid_route journal_write_failed directory_remove_failed core_stop_failed system_timeout command_failed command_slow command_late success tun_missing tun_down controller_timeout controller_connect_failed controller_http_failed controller_decode_failed tun_disabled"
+	reasons := "unknown operation_failed panic context_canceled lease_missing lease_unreadable lease_token_mismatch lease_expired lease_future owner_missing owner_changed core_exited core_start_timeout network_changed network_query_failed gateway_changed gateway_query_failed core_unresponsive read_failed delete_failed recheck_failed delete_still_present invalid_route route_missing route_add_incomplete journal_write_failed directory_remove_failed core_stop_failed system_timeout command_failed command_slow command_late success tun_missing tun_down controller_timeout controller_connect_failed controller_http_failed controller_decode_failed tun_disabled"
 	d.Reason = allowedDiagnosticLabel(d.Reason, reasons)
 	d.Check = allowedDiagnosticLabel(d.Check, reasons)
 	d.Command = allowedDiagnosticLabel(d.Command, "unknown route.get4 route.get6 route.add4 route.add6 route.delete4 route.delete6 route.other netstat.inet netstat.inet6 netstat.other ps ifconfig dscl dseditgroup codesign launchctl otool")
@@ -154,6 +154,8 @@ func (d *sessionExitDiagnostics) capture(reason string, err error, extra diagnos
 	if extra.Reason != "" {
 		fields.Check = extra.Reason
 	}
+	fields.RouteIndex, fields.Scoped = extra.RouteIndex, extra.Scoped
+	fields.Family, fields.PrefixBits = extra.Family, extra.PrefixBits
 	fields.HTTPStatus = extra.HTTPStatus
 	if extra.ExitCode != nil {
 		fields.ExitCode = extra.ExitCode
@@ -195,6 +197,7 @@ func (d *sessionExitDiagnostics) beforeCleanup(primary error) {
 func (d *sessionExitDiagnostics) unwind(primary *error, cleanup func()) {
 	if value := recover(); value != nil {
 		d.capture("panic", nil, diagnosticDetails{})
+		*primary = errors.New("分流会话异常结束，请导出诊断。")
 		defer func() { panic(value) }()
 	} else {
 		d.beforeCleanup(*primary)
