@@ -1,6 +1,6 @@
 # 从源码构建
 
-本说明面向熟悉终端的 macOS 用户。项目由 SwiftUI 界面、Go 网络组件和一个 C 启动器组成。
+本说明面向熟悉终端的 macOS 用户，适用于已集成更新器的正式源码。当前正式版对应 [v1.0.1 tag](https://github.com/williamhsu218/goconnect/tree/v1.0.1)；先检出目标版本，再执行本文命令。项目由 SwiftUI 界面和 Go 网络组件组成。
 
 ## 准备工具
 
@@ -15,15 +15,17 @@ brew install go openconnect mihomo
 
 当前构建脚本显式使用本机 macOS SDK 和 SwiftPM native 后端。Xcode 27 的默认后端在本项目中会把部署目标写成二进制的 SDK 版本，导致系统使用旧版控件外观；native 后端可正确记录 SDK 27 并启用 Liquid Glass。native 后端当前有弃用提示，升级工具链时需重新核对 `LC_BUILD_VERSION` 和实际窗口外观，再迁移构建方式。
 
+版本、构建号与源码部署目标统一维护在根目录 `VERSION.json`。修改后运行 `python3 script/version.py --generate` 更新提交到仓库的 Swift/Go 常量；构建入口和 CI 会检查是否同步，打包器直接读取该文件。源码部署目标同时用于 SwiftPM 与 Go 的 CGO 编译、链接参数。应用内 `Contents/Resources/build-requirements.json` 记录各二进制实际要求；Homebrew 组件要求更高时，安装包会如实采用最高要求，不能通过降低 Info.plist 来获得旧系统兼容性。
+
 ## 构建应用
 
 ```sh
-git clone https://github.com/williamhsu218/goconnect.git
+git clone --branch v1.0.1 --depth 1 https://github.com/williamhsu218/goconnect.git
 cd goconnect
 ./script/build_and_run.sh --build-only
 ```
 
-Swift scratch、Go/C 二进制、图标、应用和 ZIP 全部在系统临时目录中生成。检查完成、失败或中断后自动删除临时目录；项目不会累积 `.build/`、`Transport/bin/` 或候选包。应用包含运行需要的网络组件，使用者不需要另外安装 Homebrew 或 Cisco 客户端。
+Swift scratch、Go 二进制、图标、应用和 ZIP 全部在系统临时目录中生成。检查完成、失败或中断后自动删除临时目录；项目不会累积 `.build/`、`Transport/bin/` 或候选包。应用包含运行需要的网络组件，使用者不需要另外安装 Homebrew 或 Cisco 客户端。
 
 不带参数只构建和检查，不打开 GUI。需要预览时显式使用 `--run`；预览使用临时数据目录，脚本等待应用退出后删除临时产物，中断时只结束本次预览进程。`--debug` 选择 debug 构建，`--logs` 显示日志查看命令。
 
@@ -57,6 +59,8 @@ python3 script/release_artifacts.py clean --apply
 
 清理要求保留对有效，只移走项目内生成的构建目录、独立的冗余 ZIP、Python 缓存和 `.DS_Store`。受版本控制的文件、源码、维护记录、用户数据和项目外的安装/服务组件均不在清理范围；正在运行的产物会导致清理拒绝。移出的文件在废纸篓，可恢复。
 
+`dist/` 保留的是本机验收包，仍不提交到 Git；忽略规则不表示可删除。禁止用 `git clean -fdX` 或 `git clean -fdx` 代替上述维护入口，这些命令会删除忽略的正式包和回滚包。不要把 ZIP 改成普通未忽略文件来规避此问题，那会使普通 `git clean -fd` 同样威胁发布包。
+
 ## 本地检查
 
 ```sh
@@ -77,10 +81,12 @@ rm -rf -- "$scratch"
 
 `GOCONNECT_TEST_RUNTIME` 可指向应用内的 `Contents/Resources/Runtime`，让 Go 测试使用实际打包组件。需要 root、已安装网络服务或真实 TUN 的测试默认跳过。请不要在依赖当前 VPN 工作时开启这些测试；应使用专门的测试环境。
 
-仓库附带 [GitHub Actions 配置模板](github-actions.yml)，只执行源码测试和静态检查。此次发布账号没有 workflow 写入权限，因此未启用云端自动检查。维护者可在具备相应权限后将模板放到 `.github/workflows/check.yml`。源码检查不代表通过实际 VPN、应用分流或安装验收。
+云端 CI 按发布时实际已提交并启用的工作流核对，记录对应源码提交和运行结果；Swift scratch 放在 runner 临时目录。本地配置完成不代表云端检查已生效，云端源码检查也不代表通过实际 VPN、应用分流、安装或 OTA 验收。正式发布仍执行 [发布流程](RELEASING.md) 的完整门禁。
 
 ## 签名和分发
 
-本地打包使用 ad-hoc 签名，不需要付费 Apple Developer 账号，但不具备 Developer ID 身份或 Apple 公证。最终系统要求写入应用的 `Info.plist`，以所包含组件中最高的要求为准。
+普通本地打包默认使用 ad-hoc 签名，不需要付费 Apple Developer 账号，应用内更新禁用。后续正式发布统一按 [正式发布与应用内更新流程](RELEASING.md) 使用 `--verify --team-sign --export`，延续现有团队开发签名及更新公钥，完成 GitHub Releases、签名 feed 同步和公开回验；不得用普通本地构建替代正式包。
+
+现用 Apple Development 团队签名不等于 Developer ID 分发签名或 Apple 公证。最终系统要求写入应用的 `Info.plist`，以所包含组件中最高的要求为准。
 
 打包会收集许可证、组件版本和 Homebrew SBOM。生成 ZIP 不代表已经满足第三方组件的二进制再分发要求；对外发布安装包前，还需准备对应源码和适用的构建材料。当前 GitHub Releases 提供项目源码和 Apple Silicon 安装包，组件来源与许可说明见 [THIRD_PARTY.md](../THIRD_PARTY.md)。
