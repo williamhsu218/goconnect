@@ -6,16 +6,16 @@ import AppKit
 enum MenuBarRateImage {
     private static let font = NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .medium)
     private static let iconWidth: CGFloat = 20
-    private static let gap: CGFloat = 3
-    private static let textWidth = ceil(
-        // Values just below 100 round to "100.0"; include its decimal point.
-        NSAttributedString(string: "↓ 100.0 MB/s", attributes: [.font: font]).size().width
-    )
-    static let size = NSSize(width: iconWidth + gap + textWidth, height: 22)
-    static let statusItemWidth = size.width + 5
+    private static let gap: CGFloat = 2
 
     static func image(icon: NSImage, lines: [String]) -> NSImage {
         let rows = Array(lines.prefix(2))
+        // Fit the current content, not a worst-case rate. In particular, missing
+        // samples must not leave an empty column the width of "100.0 MB/s".
+        let textWidth = ceil(rows.map {
+            NSAttributedString(string: $0, attributes: [.font: font]).size().width
+        }.max() ?? 0)
+        let size = NSSize(width: iconWidth + gap + textWidth, height: 22)
         let result = NSImage(size: size, flipped: false) { _ in
             icon.draw(in: NSRect(x: 0, y: 2, width: iconWidth, height: 18))
             let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.black]
