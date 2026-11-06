@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -100,8 +101,13 @@ func (n *lifecycleNetwork) command(name string, args ...string) ([]byte, error) 
 	return nil, nil
 }
 
+type fixtureDNSLease struct{ installed, removed, replaced bool }
+
+func (l *fixtureDNSLease) intact() bool { return l.installed && !l.removed && !l.replaced }
+func (l *fixtureDNSLease) close() error { l.removed = true; return nil }
+
 func TestTransparentProductionLifecycleFaults(t *testing.T) {
-	for _, outcome := range []string{"disconnect", "lease-revoked", "cancel-during-route", "lease-revoked-during-route", "network-changed-before-ready", "ipv6-next-hop-changed", "capture-missing", "borrowed-direct-missing", "core-exit", "core-health-failed", "intermittent-health", "startup-timeout", "core-start-failed", "config-write-failed", "cleanup-no-effect", "cleanup-query-timeout", "directory-remove-failed", "core-stop-failed", "panic-after-ready"} {
+	for _, outcome := range []string{"disconnect", "lease-revoked", "cancel-during-route", "lease-revoked-during-route", "network-changed-before-ready", "ipv6-next-hop-changed", "capture-missing", "borrowed-direct-missing", "core-exit", "core-health-failed", "intermittent-health", "startup-timeout", "core-start-failed", "config-write-failed", "cleanup-no-effect", "cleanup-query-timeout", "directory-remove-failed", "core-stop-failed", "panic-after-ready", "dns-install-failed", "dns-owner-lost", "dns-listener-failed"} {
 		t.Run(outcome, func(t *testing.T) {
 			controlDir := controlFixture(t)
 			control, err := openControl(filepath.Join(controlDir, "session.json"))
@@ -113,6 +119,8 @@ func TestTransparentProductionLifecycleFaults(t *testing.T) {
 			control.request.LiveRouting = true
 			control.request.AppPaths = nil
 			control.request.Gateway = "2001:db8::20"
+			control.request.managedDNS = &managedDNSPlan{port: 15353, resolvers: []nativeResolver{{servers: []netip.Addr{netip.MustParseAddr("192.168.1.1")}, port: 53}}}
+			dnsLease := &fixtureDNSLease{}
 			state := transparentState{Device: "utun100", State: "starting"}
 			dir := recoveryFixture(t, state)
 			path := filepath.Join(dir, "state.json")
@@ -144,6 +152,19 @@ func TestTransparentProductionLifecycleFaults(t *testing.T) {
 			}
 			ops := defaultTransparentRuntime()
 			ops.command = network.command
+			ops.installDNS = func(*managedDNSPlan) (managedDNSLease, error) {
+				if outcome == "dns-install-failed" {
+					return nil, syscall.EIO
+				}
+				dnsLease.installed = true
+				return dnsLease, nil
+			}
+			ops.checkDNS = func(uint16) error {
+				if outcome == "dns-listener-failed" {
+					return syscall.ECONNREFUSED
+				}
+				return nil
+			}
 			if outcome == "directory-remove-failed" {
 				ops.removeDirectory = func(string) error { return syscall.EACCES }
 			}
@@ -167,6 +188,9 @@ func TestTransparentProductionLifecycleFaults(t *testing.T) {
 				return core, core.Start()
 			}
 			ops.stopCore = func(cmd *exec.Cmd, done <-chan error) error {
+				if dnsLease.installed && !dnsLease.removed {
+					t.Error("core stopped before removing system DNS")
+				}
 				coreDone = done
 				if outcome == "core-stop-failed" {
 					return syscall.EIO
@@ -211,6 +235,8 @@ func TestTransparentProductionLifecycleFaults(t *testing.T) {
 					core.Process.Kill()
 				case "panic-after-ready":
 					panic("SECRET_PANIC")
+				case "dns-owner-lost":
+					dnsLease.replaced = true
 				}
 				return nil
 			}
@@ -249,6 +275,10 @@ func TestTransparentProductionLifecycleFaults(t *testing.T) {
 				want = "operation_failed"
 			case "panic-after-ready":
 				want = "panic"
+			case "dns-install-failed":
+				want = "dns_install_failed"
+			case "dns-owner-lost", "dns-listener-failed":
+				want = "dns_unavailable"
 			}
 			if first.Reason != want || final.Reason != want {
 				t.Fatalf("wrong first/final cause: %+v %+v, %v", first, final, result)

@@ -38,6 +38,7 @@ type routeRequest struct {
 	RemoteExcluded   []string `json:"remoteExcluded,omitempty"`
 	systemLAN        []localNetworkRoute
 	systemDNS        []netip.Addr
+	managedDNS       *managedDNSPlan
 	LiveRouting      bool         `json:"liveRouting,omitempty"`
 	DirectDomains    []domainRule `json:"directDomains,omitempty"`
 	OwnerPID         int          `json:"ownerPID"`

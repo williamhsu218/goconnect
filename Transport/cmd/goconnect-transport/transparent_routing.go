@@ -167,6 +167,7 @@ func makeTransparentConfig(r routeRequest, device string, port uint16, original 
 	// Recover a hostname for IPv4-only VPN egress and domain exceptions; never
 	// decrypt TLS. Unrecoverable IP-only requests retain their destination IP.
 	c["sniffer"] = map[string]any{"enable": true, "parse-pure-ip": true, "force-dns-mapping": true, "override-destination": true, "sniff": map[string]any{"HTTP": map[string]any{"ports": []string{"1-65535"}}, "TLS": map[string]any{"ports": []string{"1-65535"}}, "QUIC": map[string]any{"ports": []int{443, 8443}}}}
+	configureManagedDNS(c, r, original)
 	return c
 }
 
@@ -586,6 +587,14 @@ func transparentSession(ctx context.Context, path string, uid uint32, pid int) (
 		return e
 	}
 	r := c.request
+	if !r.ProbeOnly {
+		exitLog.stage = "dns_snapshot"
+		r.managedDNS, e = discoverManagedDNS()
+		if e != nil {
+			return e
+		}
+		c.request.managedDNS = r.managedDNS
+	}
 	exitLog.stage = "apps"
 	if _, e = prepareLiveApps(r.AppPaths, false); e != nil {
 		return e

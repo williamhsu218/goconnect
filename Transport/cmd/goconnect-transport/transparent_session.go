@@ -27,6 +27,8 @@ type transparentRuntime struct {
 	now             func() time.Time
 	poll            func(*controlFiles, *http.Client, uint16) error
 	removeDirectory func(string) error
+	installDNS      func(*managedDNSPlan) (managedDNSLease, error)
+	checkDNS        func(uint16) error
 }
 
 // These cores own a dual-stack internal TUN even on IPv4-only physical networks.
@@ -40,6 +42,8 @@ func defaultTransparentRuntime() transparentRuntime {
 	return transparentRuntime{
 		command: systemCommand, network: originalPhysicalNetwork, readiness: coreReadiness, stopCore: stopChild, now: time.Now,
 		removeDirectory: os.RemoveAll,
+		installDNS:      installManagedDNS,
+		checkDNS:        managedDNSReady,
 		ticks:           func() (<-chan time.Time, func()) { t := time.NewTicker(time.Second); return t.C, t.Stop },
 		poll: func(c *controlFiles, client *http.Client, port uint16) error {
 			return c.refreshConnections(client, port)
@@ -101,6 +105,7 @@ func (connection *transparentConnection) run(ctx context.Context) (result error)
 	}
 	var child *exec.Cmd
 	var done chan error
+	var dnsLease managedDNSLease
 	defer exitLog.unwind(&result, func() {
 		if errors.Is(result, errSessionEnded) {
 			result = nil
@@ -108,12 +113,25 @@ func (connection *transparentConnection) run(ctx context.Context) (result error)
 		if result != nil {
 			trace("transparent.session_failed", 1)
 		}
+		// Remove the temporary resolver while its listener still exists. Closing
+		// the dynamic-store session also restores DNS after abnormal worker exit.
+		var dnsRestoreErr error
+		if dnsLease != nil {
+			dnsRestoreErr = dnsLease.close()
+		}
 		// Restore the network before waiting for a potentially blocked core. Retain
 		// a quarantine record if either cleanup or child termination fails.
 		cleanupErr := cleanupTransparentRoutesWithDiagnostics(statePath, state, ops.command, exitLog.cleanupEvent)
 		exitLog.cleanupFailures = len(state.Routes)
 		if cleanupErr != nil && exitLog.cleanupFailures == 0 {
 			exitLog.cleanupFailures = 1
+		}
+		if dnsRestoreErr != nil {
+			exitLog.cleanupFailures++
+			exitLog.cleanupEvent("transparent.dns_restore_failed", 1, diagnosticDetails{Stage: "cleanup", Reason: "dns_restore_failed"})
+			if cleanupErr == nil {
+				cleanupErr = dnsRestoreErr
+			}
 		}
 		var stopErr error
 		if child != nil {
@@ -265,6 +283,13 @@ func (connection *transparentConnection) run(ctx context.Context) (result error)
 				if e = checkLease(); e != nil {
 					return e
 				}
+				if r.managedDNS != nil {
+					exitLog.stage = "dns_install"
+					dnsLease, e = ops.installDNS(r.managedDNS)
+					if e != nil {
+						return exitLog.fail("dns_install_failed", e)
+					}
+				}
 				active = true
 				state.State = "ready"
 				exitLog.stage = "journal"
@@ -276,9 +301,16 @@ func (connection *transparentConnection) run(ctx context.Context) (result error)
 				c.snapshot.TailscaleActive = len(ts.Interfaces) > 0
 				c.snapshot.TailscaleRoutes = len(ts.Prefixes)
 				c.snapshot.Message = "透明 App 分流已启用，无需应用代理设置。"
+				if dnsLease != nil {
+					c.snapshot.Message = "透明分流及系统 DNS 保护已启用；直连域名与内网保留原解析。"
+				}
 				c.write("ready")
 			} else if ops.now().Sub(lastHealth) > 5*time.Second {
 				lastHealth = ops.now()
+				if dnsLease != nil && (!dnsLease.intact() || ops.checkDNS(r.managedDNS.port) != nil) {
+					exitLog.stage = "health_dns"
+					return exitLog.fail("dns_unavailable", errors.New("系统 DNS 保护失效，已停止本次连接并恢复原解析"))
+				}
 				deferTimeout := func(err error, details diagnosticDetails) bool {
 					if !readOnlyProbeTimeout(err) || !uncertain.retry(lastHealth, ops.now()) {
 						return false
