@@ -8,10 +8,9 @@ enum MenuBarRateImage {
     private static let iconWidth: CGFloat = 20
     private static let gap: CGFloat = 2
     private static let textWidth = ceil(
-        // Rounding below 100 can produce "100.0"; the capped GB/s value
-        // can also be wider than a normal sample. Reserve the true maximum once.
-        ["↓ 100.0 MB/s", "↑ 100.0 MB/s", "↓ ≥999 GB/s", "↑ ≥999 GB/s",
-         "↓ 1024 MB/s", "↑ 1024 MB/s"].map {
+        // Compact rates have at most three digits or one decimal. Reserve their
+        // widest suffix and capped extreme once so no sample moves this item.
+        ["↓99.9MB/s", "↑99.9MB/s", "↓999MB/s", "↑999MB/s", "↓≥999GB/s", "↑≥999GB/s"].map {
             NSAttributedString(string: $0, attributes: [.font: font]).size().width
         }.max() ?? 0
     )

@@ -60,6 +60,20 @@ final class MenuBarRatePresentationTests: XCTestCase {
         XCTAssertLessThanOrEqual(extreme.title.count, 28)
     }
 
+    func testCompactRowsRetainUnitsWithoutFourDigitRounding() {
+        XCTAssertEqual(display(download: 0, upload: 560 * 1024).lines, ["↓0B/s", "↑560KB/s"])
+        XCTAssertEqual(display(download: 12.3 * 1024 * 1024, upload: 99.96 * 1024 * 1024).lines,
+                       ["↓12.3MB/s", "↑100MB/s"])
+        XCTAssertEqual(display(download: 999.8 * 1024, upload: 1023.8 * 1024 * 1024).lines,
+                       ["↓1.0MB/s", "↑1.0GB/s"])
+        XCTAssertEqual(display(download: .greatestFiniteMagnitude, upload: .nan).lines,
+                       ["↓≥999GB/s", "↑—"])
+        XCTAssertEqual(display(age: 5).lines, ["↓—", "↑—"])
+        // Full units remain available outside the compact menu artwork.
+        XCTAssertEqual(display(download: 12.3 * 1024 * 1024, upload: 560 * 1024).title,
+                       "↓ 12.3 MB/s  ↑ 560 KB/s")
+    }
+
     func testSingleDirectionUsesSelectedSampleAndAccessibility() {
         for (direction, title, description) in [
             (MenuBarRateDirection.download, "↓ 1.5 MB/s", "下载1.5 MB/s"),
