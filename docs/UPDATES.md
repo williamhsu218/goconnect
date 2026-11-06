@@ -2,6 +2,8 @@
 
 GoConnect 1.0.1（build 58）开始集成固定版本 Sparkle 2.10.1。0.11.17 没有更新器，首次迁移到 1.0.1 需要正常断开并退出后替换一次应用；后续版本可在应用菜单或设置中检查并安装。
 
+后续版本的正式发布必须执行 [正式发布与应用内更新流程](RELEASING.md)：同一份已验收团队签名包、GitHub stable/latest、ZIP 与整个 feed 的 Ed25519 签名、updates 分支同步以及固定 URL 匿名回验均是完成条件。本文描述更新器行为与维护工具，不替代发布主流程。
+
 ## 身份与密钥
 
 使用本机已有 Apple Development 团队证书及 Hardened Runtime，为主程序、Runtime、Sparkle 框架和内嵌代码逐层签名。这是团队开发签名，不是 Developer ID 签名或 Apple 公证包。首次在其他 Mac 上安装的系统信任行为不属于本机 OTA 验收结论；不提供关闭系统安全保护的方法。
@@ -30,6 +32,8 @@ helper 保留精确 CDHash 校验。团队签名或重新构建可能改变其 R
 1.0.1 使用正式更新渠道。发布验收范围为已通过的 HY2 订阅、原生界面、数据保护、团队签名及更新链路。AnyConnect UDP 长期稳定性仍是已知限制，未宣称修复或通过；不将该未验收能力扩大为正式版保证。
 
 先上传和回验应用 ZIP、第三方源码附件及 SHA256SUMS，再提升已签名的 feed；不能先推 feed 指向尚不存在的附件。每次更改 XML 都必须重新签名。
+
+每次正式发布包含应用 ZIP、对应第三方源码包、已签名 `appcast.xml` 和 `SHA256SUMS` 四个附件。先以 draft 核对 tag commit、尺寸及 digest，公开为 stable/latest 并匿名回验资产后，才把同一 XML 推送到 `updates` 分支。仅上传 Release 不会自动同步此 feed；尚未完成固定 URL 的字节、版本、enclosure 和签名回验时，不能宣布 GoConnect 内更新可用。完整命令、检查表和回滚边界见 [RELEASING.md](RELEASING.md)。
 
 ## 维护命令
 

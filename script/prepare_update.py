@@ -92,6 +92,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--download-url")
     parser.add_argument("--qa-feed", action="store_true")
+    parser.add_argument("--summary", default="GoConnect 更新。安装前请断开 VPN 并保存线路草稿。", help="Release summary shown by the updater")
     args = parser.parse_args()
     archive = args.archive.resolve(strict=True)
     output = args.output.resolve()
@@ -129,7 +130,7 @@ def main():
     ET.SubElement(item, "{" + NS + "}minimumSystemVersion").text = info["LSMinimumSystemVersion"]
     if info["GoConnectUpdateChannel"] == "preview":
         ET.SubElement(item, "{" + NS + "}channel").text = "preview"
-    ET.SubElement(item, "description").text = "<p>团队签名、受保护的在线更新与新图标。安装前请断开 VPN 并保存线路草稿。</p>"
+    ET.SubElement(item, "description").text = args.summary
     ET.SubElement(item, "enclosure", {"url": url, "length": str(archive.stat().st_size), "type": "application/octet-stream", "{" + NS + "}edSignature": signature})
     output.parent.mkdir(parents=True, exist_ok=True)
     ET.indent(feed, space="  ")

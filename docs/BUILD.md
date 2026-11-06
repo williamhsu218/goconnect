@@ -1,6 +1,6 @@
 # 从源码构建
 
-本说明面向熟悉终端的 macOS 用户。项目由 SwiftUI 界面和 Go 网络组件组成；当前透明分流不再打包旧版进程组启动器。
+本说明面向熟悉终端的 macOS 用户，适用于已集成更新器的正式源码。当前正式版对应 [v1.0.2 tag](https://github.com/williamhsu218/goconnect/tree/v1.0.2)；先检出目标版本，再执行本文命令。项目由 SwiftUI 界面和 Go 网络组件组成。
 
 ## 准备工具
 
@@ -20,7 +20,7 @@ brew install go openconnect mihomo
 ## 构建应用
 
 ```sh
-git clone https://github.com/williamhsu218/goconnect.git
+git clone --branch v1.0.2 --depth 1 https://github.com/williamhsu218/goconnect.git
 cd goconnect
 ./script/build_and_run.sh --build-only
 ```
@@ -81,10 +81,12 @@ rm -rf -- "$scratch"
 
 `GOCONNECT_TEST_RUNTIME` 可指向应用内的 `Contents/Resources/Runtime`，让 Go 测试使用实际打包组件。需要 root、已安装网络服务或真实 TUN 的测试默认跳过。请不要在依赖当前 VPN 工作时开启这些测试；应使用专门的测试环境。
 
-仓库现有 [GitHub Actions 工作流](../.github/workflows/check.yml)，使用 macOS 26 runner，执行版本一致性、源码测试和静态检查，Swift scratch 放在 runner 临时目录。工作流尚需提交、推送和云端运行验收；本地配置完成不代表云端检查已生效，也不代表通过实际 VPN、应用分流或安装验收。
+云端 CI 按发布时实际已提交并启用的工作流核对，记录对应源码提交和运行结果；Swift scratch 放在 runner 临时目录。本地配置完成不代表云端检查已生效，云端源码检查也不代表通过实际 VPN、应用分流、安装或 OTA 验收。正式发布仍执行 [发布流程](RELEASING.md) 的完整门禁。
 
 ## 签名和分发
 
-本地打包使用 ad-hoc 签名，不需要付费 Apple Developer 账号，但不具备 Developer ID 身份或 Apple 公证。最终系统要求写入应用的 `Info.plist`，以所包含组件中最高的要求为准。
+普通本地打包默认使用 ad-hoc 签名，不需要付费 Apple Developer 账号，应用内更新禁用。后续正式发布统一按 [正式发布与应用内更新流程](RELEASING.md) 使用 `--verify --team-sign --export`，延续现有团队开发签名及更新公钥，完成 GitHub Releases、签名 feed 同步和公开回验；不得用普通本地构建替代正式包。
+
+现用 Apple Development 团队签名不等于 Developer ID 分发签名或 Apple 公证。最终系统要求写入应用的 `Info.plist`，以所包含组件中最高的要求为准。
 
 打包会收集许可证、组件版本和 Homebrew SBOM。生成 ZIP 不代表已经满足第三方组件的二进制再分发要求；对外发布安装包前，还需准备对应源码和适用的构建材料。当前 GitHub Releases 提供项目源码和 Apple Silicon 安装包，组件来源与许可说明见 [THIRD_PARTY.md](../THIRD_PARTY.md)。

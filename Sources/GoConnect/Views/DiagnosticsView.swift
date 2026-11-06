@@ -362,7 +362,7 @@ struct PreferencesView: View {
     var updater: AppUpdater? = nil
     var body: some View {
         Form {
-            Section("菜单栏") { Button("重新显示菜单栏快捷菜单", action: showMenuBar) }
+            MenuBarSettings(showMenuBar: showMenuBar)
             if let updater { AppUpdateSettings(updater: updater) }
             Section("关于 GoConnect") {
                 LabeledContent("版本", value: Product.version)

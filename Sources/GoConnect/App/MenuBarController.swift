@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Observation
 import OSLog
 import GoConnectCore
@@ -9,18 +10,29 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private static let itemName = "GoConnectStatusItem"
     private let store: AppStore
     private let openMainWindow: () -> Void
+    private let defaults: UserDefaults
     private var statusItem: NSStatusItem?
+    private var preferenceObservation: AnyCancellable?
+    private var expiryTimer: Timer?
+    private var observationGeneration: UInt64 = 0
+    private var active = true
     private let menu = NSMenu()
     private let logger = Logger(subsystem: Product.bundleID, category: "MenuBar")
 
-    init(store: AppStore, openMainWindow: @escaping () -> Void) {
+    init(store: AppStore, defaults: UserDefaults = .standard, openMainWindow: @escaping () -> Void) {
         self.store = store
+        self.defaults = defaults
         self.openMainWindow = openMainWindow
         super.init()
         menu.autoenablesItems = false
         menu.delegate = self
         install()
         observeStatus()
+        preferenceObservation = NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification, object: defaults)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                Task { @MainActor [weak self] in self?.observeStatus() }
+            }
     }
 
     private func install() {
@@ -51,7 +63,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         statusItem = nil
         UserDefaults.standard.set(0, forKey: "NSStatusItem Preferred Position \(Self.itemName)")
         install()
-        refreshStatus()
+        observeStatus()
         // Wait for the newly inserted button to acquire its menu-bar window.
         DispatchQueue.main.async { [weak self] in self?.statusItem?.button?.performClick(nil) }
     }
@@ -63,25 +75,69 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     func tearDown() {
+        active = false
+        preferenceObservation?.cancel()
+        preferenceObservation = nil
+        expiryTimer?.invalidate()
+        expiryTimer = nil
         if let item = statusItem { NSStatusBar.system.removeStatusItem(item) }
         statusItem = nil
     }
 
     private func observeStatus() {
+        guard active else { return }
+        observationGeneration &+= 1
+        let generation = observationGeneration
         withObservationTracking {
             refreshStatus()
         } onChange: { [weak self] in
-            Task { @MainActor [weak self] in self?.observeStatus() }
+            Task { @MainActor [weak self] in
+                guard let self, self.observationGeneration == generation else { return }
+                self.observeStatus()
+            }
         }
     }
 
     private func refreshStatus() {
+        guard active, let item = statusItem, let button = item.button else { return }
         let state = store.connectionControlState
         let line = store.configuration.activeConnection.displayName
-        statusItem?.button?.image = MenuBarStatusIcon.image(for: state)
-        statusItem?.button?.toolTip = "GoConnect · \(state.title)\n\(line) · \(store.accessTitle)"
-        statusItem?.button?.setAccessibilityValue(state.title)
+        let enabled = defaults.bool(forKey: MenuBarPreferences.showsNetworkRatesKey)
+        let direction = defaults.string(forKey: MenuBarPreferences.rateDirectionKey)
+            .flatMap(MenuBarRateDirection.init(rawValue:)) ?? .both
+        let presentation = MenuBarRatePresentation(
+            enabled: enabled, direction: direction, state: state,
+            available: enabled && store.trafficAvailable,
+            sampledAt: enabled ? store.trafficUpdatedAt : nil,
+            download: enabled ? store.downloadRate : 0,
+            upload: enabled ? store.uploadRate : 0)
+        button.image = MenuBarStatusIcon.image(for: state)
+        button.imagePosition = enabled ? .imageLeading : .imageOnly
+        item.length = enabled ? (direction == .both ? Self.rateItemWidth : Self.singleRateItemWidth) : NSStatusItem.squareLength
+        if button.title != presentation.title {
+            button.attributedTitle = NSAttributedString(string: presentation.title, attributes: [.font: Self.rateFont])
+        }
+        let rates = presentation.accessibilityDescription.map { "\n当前线路 · " + $0 } ?? ""
+        button.toolTip = "GoConnect · \(state.title)\n\(line) · \(store.accessTitle)" + rates
+        button.setAccessibilityValue(state.title + (presentation.accessibilityDescription.map { "，" + $0 } ?? ""))
+        expiryTimer?.invalidate()
+        expiryTimer = nil
+        if let deadline = presentation.expiresAt {
+            let timer = Timer(fire: deadline, interval: 0, repeats: false) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.observeStatus() }
+            }
+            expiryTimer = timer
+            RunLoop.main.add(timer, forMode: .common)
+        }
     }
+
+    private static let rateFont = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+    private static let rateItemWidth: CGFloat = ceil(
+        NSAttributedString(string: "↓ 100.0 MB/s  ↑ 100.0 MB/s", attributes: [.font: rateFont]).size().width
+    ) + 40
+    private static let singleRateItemWidth: CGFloat = ceil(
+        NSAttributedString(string: "↓ 100.0 MB/s", attributes: [.font: rateFont]).size().width
+    ) + 36
 
     func menuNeedsUpdate(_ menu: NSMenu) { rebuildMenu() }
 
