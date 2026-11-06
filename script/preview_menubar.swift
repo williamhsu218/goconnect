@@ -90,6 +90,7 @@ enum Page: String {
             "state": store.state.rawValue, "liveSamples": store.liveSamples,
             "appearance": button.effectiveAppearance.name.rawValue,
             "direction": UserDefaults.standard.string(forKey: MenuBarPreferences.rateDirectionKey) ?? "both",
+            "imageHeight": button.image?.size.height ?? 0,
         ]
         if let data = try? JSONSerialization.data(withJSONObject: record, options: [.sortedKeys]) {
             try? data.write(to: URL(fileURLWithPath: path + "/native-status.json"), options: .atomic)
@@ -132,6 +133,7 @@ private struct MenuBarPreviewContent: View {
                     Button("常用速率") { store.downloadRate = 12.6 * 1024 * 1024; store.uploadRate = 842 * 1024 }
                     Button("真实零值") { store.downloadRate = 0; store.uploadRate = 0 }
                     Button("极大值") { store.downloadRate = .greatestFiniteMagnitude; store.uploadRate = .greatestFiniteMagnitude }
+                    Button("单位边界") { store.downloadRate = 99.96 * 1024 * 1024; store.uploadRate = 1023.8 * 1024 * 1024 }
                 }
                 Text(store.actionMessage).font(.caption).foregroundStyle(.secondary)
             }

@@ -16,6 +16,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var expiryTimer: Timer?
     private var observationGeneration: UInt64 = 0
     private var active = true
+    private var renderedRateKey: String?
     private let menu = NSMenu()
     private let logger = Logger(subsystem: Product.bundleID, category: "MenuBar")
 
@@ -37,6 +38,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private func install() {
         guard statusItem == nil else { return }
+        renderedRateKey = nil
         // A stable, named position replaces SwiftUI's anonymous Item-0 preference.
         // The first insertion starts near the right edge, avoiding the old hidden position.
         UserDefaults.standard.register(defaults: ["NSStatusItem Preferred Position \(Self.itemName)": 0])
@@ -111,11 +113,19 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             sampledAt: enabled ? store.trafficUpdatedAt : nil,
             download: enabled ? store.downloadRate : 0,
             upload: enabled ? store.uploadRate : 0)
-        button.image = MenuBarStatusIcon.image(for: state)
-        button.imagePosition = enabled ? .imageLeading : .imageOnly
-        item.length = enabled ? (direction == .both ? Self.rateItemWidth : Self.singleRateItemWidth) : NSStatusItem.squareLength
-        if button.title != presentation.title {
-            button.attributedTitle = NSAttributedString(string: presentation.title, attributes: [.font: Self.rateFont])
+        button.title = ""
+        button.imagePosition = .imageOnly
+        button.imageScaling = enabled ? .scaleNone : .scaleProportionallyDown
+        item.length = enabled ? MenuBarRateImage.statusItemWidth : NSStatusItem.squareLength
+        if enabled {
+            let key = state.rawValue + "|" + presentation.title
+            if key != renderedRateKey {
+                button.image = MenuBarRateImage.image(icon: MenuBarStatusIcon.image(for: state), lines: presentation.lines)
+                renderedRateKey = key
+            }
+        } else {
+            renderedRateKey = nil
+            button.image = MenuBarStatusIcon.image(for: state)
         }
         let rates = presentation.accessibilityDescription.map { "\n当前线路 · " + $0 } ?? ""
         button.toolTip = "GoConnect · \(state.title)\n\(line) · \(store.accessTitle)" + rates
@@ -130,14 +140,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             RunLoop.main.add(timer, forMode: .common)
         }
     }
-
-    private static let rateFont = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-    private static let rateItemWidth: CGFloat = ceil(
-        NSAttributedString(string: "↓ 100.0 MB/s  ↑ 100.0 MB/s", attributes: [.font: rateFont]).size().width
-    ) + 40
-    private static let singleRateItemWidth: CGFloat = ceil(
-        NSAttributedString(string: "↓ 100.0 MB/s", attributes: [.font: rateFont]).size().width
-    ) + 36
 
     func menuNeedsUpdate(_ menu: NSMenu) { rebuildMenu() }
 
