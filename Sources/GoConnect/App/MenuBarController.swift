@@ -116,15 +116,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         button.title = ""
         button.imagePosition = .imageOnly
         button.imageScaling = enabled ? .scaleNone : .scaleProportionallyDown
+        item.length = enabled ? MenuBarRateImage.statusItemWidth : NSStatusItem.squareLength
         if enabled {
             let key = state.rawValue + "|" + presentation.title
             if key != renderedRateKey {
                 button.image = MenuBarRateImage.image(icon: MenuBarStatusIcon.image(for: state), lines: presentation.lines)
-                item.length = (button.image?.size.width ?? 20) + 2
                 renderedRateKey = key
             }
         } else {
-            item.length = NSStatusItem.squareLength
             renderedRateKey = nil
             button.image = MenuBarStatusIcon.image(for: state)
         }
