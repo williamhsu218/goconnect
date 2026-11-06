@@ -24,14 +24,15 @@ struct AppUpdateSettings: View {
                 set: { updater.automaticallyChecksForUpdates = $0 }))
                 .disabled(!updater.isConfigured)
             Text(updater.statusDescription).font(.callout).foregroundStyle(.secondary)
-            Text("安装前请手动断开 VPN，并保存正在编辑的线路。应用不会自动安装更新。")
+            Text("检查、下载和验签可保持 VPN 连接。确认安装重启后才正常断开 VPN；请先保存线路草稿。应用不会自动下载安装。")
                 .font(.caption).foregroundStyle(.secondary)
             if updater.hasUnconfirmedInstallation {
                 Text("上次安装尚待确认。连接功能可继续使用；退出前请手动断开 VPN。")
                     .font(.caption).foregroundStyle(.secondary)
             }
             if updater.hasDeferredInstallation {
-                Button("继续安装已下载的更新") { updater.resumeDeferredInstallation() }
+                Button("安装已下载的更新并重启") { updater.resumeDeferredInstallation() }
+                    .disabled(updater.installationInProgress)
             }
         }
     }

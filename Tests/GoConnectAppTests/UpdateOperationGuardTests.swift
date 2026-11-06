@@ -40,4 +40,21 @@ final class UpdateOperationGuardTests: XCTestCase {
         store.beginNewProfile()
         XCTAssertNotNil(store.updateSafetyState.blockingReason)
     }
+    func testExplicitInstallationDrainsExistingConnectionThroughNormalStopPath() async throws {
+        let store = try fixture()
+        store.phase = "connected"
+        let prepared = await store.prepareForUpdateInstallation()
+        XCTAssertTrue(prepared)
+        XCTAssertEqual(store.phase, "idle")
+        XCTAssertNil(store.updateSafetyState.blockingReason)
+    }
+    func testPreparationWithDraftKeepsConnectionAndDraftIntact() async throws {
+        let store = try fixture()
+        store.beginNewProfile()
+        store.phase = "connected"
+        let prepared = await store.prepareForUpdateInstallation()
+        XCTAssertFalse(prepared)
+        XCTAssertEqual(store.phase, "connected")
+        XCTAssertNotNil(store.profileDraft)
+    }
 }

@@ -6,20 +6,30 @@ public struct UpdateSafetyState: Equatable, Sendable {
     public var hasUnsavedDraft: Bool
     public var isTestingNodes: Bool
     public var isUpdatingSubscriptions: Bool
+    public var isMaintainingService: Bool
 
     public init(connectionOrServiceActive: Bool = false, hasUnsavedDraft: Bool = false,
-                isTestingNodes: Bool = false, isUpdatingSubscriptions: Bool = false) {
+                isTestingNodes: Bool = false, isUpdatingSubscriptions: Bool = false,
+                isMaintainingService: Bool = false) {
         self.connectionOrServiceActive = connectionOrServiceActive
         self.hasUnsavedDraft = hasUnsavedDraft
         self.isTestingNodes = isTestingNodes
         self.isUpdatingSubscriptions = isUpdatingSubscriptions
+        self.isMaintainingService = isMaintainingService
     }
 
+    /// Checking, downloading and signature verification do not modify app data or networking.
+    /// These gates apply only after the user requests installation/relaunch.
+    public var preparationBlockingReason: String? {
+        if hasUnsavedDraft { return "请先保存或放弃正在编辑的线路，再安装更新。" }
+        if isTestingNodes { return "请先结束节点测试，再安装更新。" }
+        if isUpdatingSubscriptions { return "请先等待订阅操作完成，再安装更新。" }
+        if isMaintainingService { return "请先等待本机网络服务维护完成，再安装更新。" }
+        return nil
+    }
     public var blockingReason: String? {
-        if connectionOrServiceActive { return "请先手动断开 VPN，并等待本机网络服务空闲，再检查或安装更新。" }
-        if hasUnsavedDraft { return "请先保存或放弃正在编辑的线路，再检查或安装更新。" }
-        if isTestingNodes { return "请先结束节点测试，再检查或安装更新。" }
-        if isUpdatingSubscriptions { return "请先等待订阅操作完成，再检查或安装更新。" }
+        if let reason = preparationBlockingReason { return reason }
+        if connectionOrServiceActive { return "正在等待 VPN 正常断开和网络服务空闲，再安装更新。" }
         return nil
     }
 }

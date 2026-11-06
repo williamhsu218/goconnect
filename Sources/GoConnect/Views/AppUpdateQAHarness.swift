@@ -19,7 +19,8 @@ struct AppUpdateQAHarness: View {
                 Toggle("模拟线路草稿未保存", isOn: Binding(get: { store.profileDraft != nil },
                     set: { if $0 { store.beginNewProfile() } else { store.profileDraft = nil } }))
                     .disabled(updater.blocksNewConnection)
-                Text(store.updateSafetyState.blockingReason ?? "可以检查更新")
+                Text(updater.blocksNewConnection ? "安装交接期间暂停新连接" : "检查和下载不阻止 VPN 连接")
+                Text(store.updateSafetyState.blockingReason ?? "可以安装更新")
             }
         }.formStyle(.grouped)
     }

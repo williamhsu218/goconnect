@@ -11,11 +11,17 @@ final class UpdateSafetyPolicyTests: XCTestCase {
         "GoConnectUpdateChannel": "preview"
     ] }
 
-    func testEveryProtectedOperationBlocksUpdates() {
+    func testProtectedOperationsBlockInstallationPreparationButVPNCanBeDrained() {
         XCTAssertNil(UpdateSafetyState().blockingReason)
         for state in [UpdateSafetyState(connectionOrServiceActive: true), UpdateSafetyState(hasUnsavedDraft: true),
-                      UpdateSafetyState(isTestingNodes: true), UpdateSafetyState(isUpdatingSubscriptions: true)] {
+                      UpdateSafetyState(isTestingNodes: true), UpdateSafetyState(isUpdatingSubscriptions: true),
+                      UpdateSafetyState(isMaintainingService: true)] {
             XCTAssertNotNil(state.blockingReason)
+        }
+        XCTAssertNil(UpdateSafetyState(connectionOrServiceActive: true).preparationBlockingReason)
+        for state in [UpdateSafetyState(hasUnsavedDraft: true), UpdateSafetyState(isTestingNodes: true),
+                      UpdateSafetyState(isUpdatingSubscriptions: true), UpdateSafetyState(isMaintainingService: true)] {
+            XCTAssertNotNil(state.preparationBlockingReason)
         }
     }
 
