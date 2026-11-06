@@ -1,6 +1,6 @@
 # 从源码构建
 
-本说明面向熟悉终端的 macOS 用户，适用于已集成更新器的正式源码。当前正式版对应 [v1.0.6 tag](https://github.com/williamhsu218/goconnect/tree/v1.0.6)；先检出目标版本，再执行本文命令。项目由 SwiftUI 界面和 Go 网络组件组成。
+本说明面向熟悉终端的 macOS 用户，适用于已集成更新器的正式源码。当前正式版对应 [v1.0.7 tag](https://github.com/williamhsu218/goconnect/tree/v1.0.7)；先检出目标版本，再执行本文命令。项目由 SwiftUI 界面和 Go 网络组件组成。
 
 ## 准备工具
 
@@ -20,7 +20,7 @@ brew install go openconnect mihomo
 ## 构建应用
 
 ```sh
-git clone --branch v1.0.6 --depth 1 https://github.com/williamhsu218/goconnect.git
+git clone --branch v1.0.7 --depth 1 https://github.com/williamhsu218/goconnect.git
 cd goconnect
 ./script/build_and_run.sh --build-only
 ```

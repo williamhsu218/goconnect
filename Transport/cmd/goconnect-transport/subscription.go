@@ -285,6 +285,7 @@ func subscriptionSession(parent context.Context) (err error) {
 		return errors.New("statistics port unavailable")
 	}
 	cfg := map[string]any{"mode": "rule", "log-level": "silent", "ipv6": true, "allow-lan": false, "bind-address": "127.0.0.1", "socks-port": port, "authentication": []string{"goconnect:" + r.Token}, "dns": map[string]any{"enable": false}, "tun": map[string]any{"enable": false}, "profile": map[string]any{"store-selected": false}, "proxies": []map[string]any{proxy}, "rules": []string{"MATCH,Selected"}}
+	configureSubscriptionDNS(cfg, proxy)
 	cfg["external-controller"] = net.JoinHostPort("127.0.0.1", strconv.Itoa(int(controllerPort)))
 	cfg["secret"] = r.Token
 	dir, e := os.MkdirTemp("", "GoConnect-node-")

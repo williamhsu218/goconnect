@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/williamhsu218/goconnect/v1.0.6/Packaging/GoConnect.png" alt="GoConnect Logo" width="96" height="96" />
+  <img src="https://raw.githubusercontent.com/williamhsu218/goconnect/v1.0.7/Packaging/GoConnect.png" alt="GoConnect Logo" width="96" height="96" />
 </p>
 
 <h1 align="center">GoConnect</h1>
 
 <p align="center">
   面向 Apple Silicon Mac 的原生网络代理与 AnyConnect 客户端<br />
-  <strong>当前版本：v1.0.6 (Build 65)</strong>
+  <strong>当前版本：v1.0.7 (Build 67)</strong>
 </p>
 
 ---
@@ -24,6 +24,7 @@ GoConnect 是一款使用原生 SwiftUI 构建的 macOS 网络连接与分流工
 - **按名单代理与全局模式**：
   - 选择“**按名单代理**”，在“代理名单”中添加应用或独立 CLI 服务，其余应用保持直连。CLI 可选固定入口，连接时解析实际可执行文件的完整路径；连接期间升级 CLI 后需重新连接。
   - 支持全局模式与直连名单，提供域名与 IP 例外配置，以及明确的企业内网网段分流。
+- **HY2 可靠 DNS**：经过 HY2 代理的公网 UDP DNS 查询由节点内核转为经所选线路发送的 DoH，减少 UDP 回程丢包导致的解析超时。系统 DNS、内网解析和其他 UDP 保持原有路径。
 - **本机流量观测**：
   - 连接页显示当前上下行速率；按线路记录上传、下载及合计用量。
   - 支持按分时、日、月、年等多维度浏览历史趋势；切换统计查看线路不会变更当前活跃的网络连接。
@@ -41,7 +42,7 @@ GoConnect 是一款使用原生 SwiftUI 构建的 macOS 网络连接与分流工
 
 ### 获取应用
 
-- **最新发布包**：[GoConnect-1.0.6-macos-arm64.zip](https://github.com/williamhsu218/goconnect/releases/download/v1.0.6/GoConnect-1.0.6-macos-arm64.zip)
+- **最新发布包**：[GoConnect-1.0.7-macos-arm64.zip](https://github.com/williamhsu218/goconnect/releases/download/v1.0.7/GoConnect-1.0.7-macos-arm64.zip)
 - **完整发布页**：[GitHub Releases / Latest](https://github.com/williamhsu218/goconnect/releases/latest)
 
 ### 首次安装与权限
@@ -83,14 +84,14 @@ GoConnect 是一款使用原生 SwiftUI 构建的 macOS 网络连接与分流工
 
 - **本地存储**：线路配置、订阅缓存与流量历史保存在本机；订阅缓存可能包含节点凭据。
 - **凭据管理**：AnyConnect 密码仅在用户主动勾选“记住密码”时写入系统钥匙串（macOS Keychain）。
-- **外部请求**：GoConnect 不会把你的线路配置上传到本项目。连接、订阅更新、节点测试及 GitHub 软件更新会访问各自的服务；节点测试会访问连通性测试地址。
+- **外部请求**：GoConnect 不会把你的线路配置上传到本项目。连接、订阅更新、节点测试及 GitHub 软件更新会访问各自的服务；节点测试会访问连通性测试地址。HY2 的公网 DNS 解析会经所选节点访问 Cloudflare 和 Google 的 DoH 服务。
 - **问题反馈**：提交 Issue 或日志前移除密码、节点凭据、完整订阅链接及公司服务器信息。
 
 ## 源码构建与许可协议
 
-- **源码构建**：当前正式版对应 [v1.0.6 源码](https://github.com/williamhsu218/goconnect/tree/v1.0.6)。请先检出该 tag，再按 [构建说明](docs/BUILD.md)操作；普通源码构建默认采用 ad-hoc 签名，应用内更新禁用。
+- **源码构建**：当前正式版对应 [v1.0.7 源码](https://github.com/williamhsu218/goconnect/tree/v1.0.7)。请先检出该 tag，再按 [构建说明](docs/BUILD.md)操作；普通源码构建默认采用 ad-hoc 签名，应用内更新禁用。
 - **版本与发布规范**：版本更新机制详见 [docs/UPDATES.md](docs/UPDATES.md)，发布规范详见 [docs/RELEASING.md](docs/RELEASING.md)。
-- **第三方许可**：OpenConnect、Mihomo 与 Sparkle 等组件分别适用各自许可，来源及说明见 [THIRD_PARTY.md](https://github.com/williamhsu218/goconnect/blob/v1.0.6/THIRD_PARTY.md)。GoConnect 自有代码尚未指定独立开源许可证。
+- **第三方许可**：OpenConnect、Mihomo 与 Sparkle 等组件分别适用各自许可，来源及说明见 [THIRD_PARTY.md](https://github.com/williamhsu218/goconnect/blob/v1.0.7/THIRD_PARTY.md)。GoConnect 自有代码尚未指定独立开源许可证。
 
 ## 问题与反馈
 
