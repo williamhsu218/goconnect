@@ -10,9 +10,12 @@ import shutil
 import subprocess
 import sys
 from version import load_version
+from signing import resolve_configuration, sign_bundle, macho_files
+import base64
 
 ROOT = Path(__file__).resolve().parent.parent
 VERSION = load_version()
+SIGNING = resolve_configuration()
 if not all(os.environ.get(name) for name in ("GOCONNECT_WORK_DIR", "GOCONNECT_OUTPUT_DIR", "GOCONNECT_TRANSPORT_BIN_DIR")):
     raise SystemExit("Use script/build_and_run.sh; packaging requires its temporary build directory.")
 WORK = Path(os.environ["GOCONNECT_WORK_DIR"]).resolve()
@@ -41,6 +44,24 @@ for directory in (bin_dir, lib_dir, share_dir, licenses, STAGE / "Contents/MacOS
     directory.mkdir(parents=True, exist_ok=True)
 shutil.copy2(sys.argv[1], STAGE / "Contents/MacOS/GoConnect")
 shutil.copy2(TRANSPORT_BIN / "GoConnectTransport", bin_dir / "GoConnectTransport")
+# SwiftPM links @rpath/Sparkle.framework. Preserve its versioned symlinks.
+framework = Path(os.environ["GOCONNECT_SPARKLE_FRAMEWORK"]).resolve()
+if framework.name != "Sparkle.framework" or not (framework / "Sparkle").is_file():
+    raise RuntimeError("The pinned Sparkle framework is required")
+with (framework / "Resources/Info.plist").open("rb") as stream:
+    sparkle_info = plistlib.load(stream)
+updates = json.loads((ROOT / "Packaging/Updates.json").read_text())
+if sparkle_info["CFBundleShortVersionString"] != updates["sparkleVersion"]:
+    raise RuntimeError("Unexpected Sparkle framework version")
+frameworks = STAGE / "Contents/Frameworks"
+frameworks.mkdir()
+subprocess.run(["ditto", str(framework), str(frameworks / "Sparkle.framework")], check=True)
+sparkle_metadata = licenses / ("Sparkle-" + updates["sparkleVersion"])
+sparkle_metadata.mkdir()
+sparkle_sdk = Path(os.environ["GOCONNECT_SPARKLE_SDK"])
+shutil.copy2(sparkle_sdk / "LICENSE", sparkle_metadata / "LICENSE")
+(sparkle_metadata / "source.json").write_text(json.dumps({"name": "Sparkle", "version": updates["sparkleVersion"], "url": updates["sparkleSourceURL"], "sha256": updates["sparkleSourceSHA256"]}, indent=2) + "\n")
+
 shutil.copy2(ROOT / "Packaging/Licenses/vpnonly-MIT.txt", licenses / "vpnonly-MIT.txt")
 
 brew_cellar = Path(run("brew", "--cellar"))
@@ -115,6 +136,7 @@ while modules_raw.strip():
 metadata = {"openconnect": run(shutil.which("openconnect"), "--version").splitlines()[0],
             "mihomo": run(shutil.which("mihomo"), "-v").splitlines()[0], "goModules": modules,
             "sources": ["https://gitlab.com/openconnect/openconnect", "https://github.com/MetaCubeX/mihomo", "https://git.zx2c4.com/wireguard-go", "https://github.com/google/gvisor"]}
+metadata["sparkle"] = {"version": updates["sparkleVersion"], "sourceURL": updates["sparkleSourceURL"], "sourceSHA256": updates["sparkleSourceSHA256"]}
 (licenses / "components.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n")
 if (ROOT / "THIRD_PARTY.md").exists():
     shutil.copy2(ROOT / "THIRD_PARTY.md", licenses / "README.md")
@@ -140,6 +162,18 @@ info = {"CFBundleIdentifier": "com.willhsu.GoConnect", "CFBundleName": "GoConnec
         "CFBundleShortVersionString": VERSION["version"], "CFBundleVersion": VERSION["build"], "CFBundleIconFile": icon_name,
         "LSMinimumSystemVersion": minimum, "NSHighResolutionCapable": True,
         "NSHumanReadableCopyright": "GoConnect contributors. Includes open-source components."}
+if updates["feedURL"] != "https://raw.githubusercontent.com/williamhsu218/goconnect/updates/appcast.xml":
+    raise RuntimeError("Unexpected production update feed")
+if len(base64.b64decode(updates["publicKey"], validate=True)) != 32:
+    raise RuntimeError("Expected an Ed25519 public key")
+info.update({"GoConnectSigningMode": SIGNING.mode,
+             "GoConnectSigningTeam": SIGNING.team,
+             "GoConnectUpdatesEnabled": SIGNING.mode == "team" and updates["enabled"],
+             "GoConnectUpdateChannel": updates["channel"],
+             "SUFeedURL": updates["feedURL"], "SUPublicEDKey": updates["publicKey"],
+             "SUEnableAutomaticChecks": False, "SUAutomaticallyUpdate": False,
+             "SUAllowsAutomaticUpdates": False, "SUVerifyUpdateBeforeExtraction": True,
+             "SURequireSignedFeed": True})
 info["CFBundleDevelopmentRegion"] = "zh-Hans"
 info["CFBundleLocalizations"] = ["zh-Hans"]
 with (STAGE / "Contents/Info.plist").open("wb") as stream:
@@ -148,11 +182,15 @@ with (STAGE / "Contents/Info.plist").open("wb") as stream:
 if tuple(map(int, minimum.split('.'))) > tuple(map(int, VERSION['deploymentTarget'].split('.'))):
     print(f"Bundled dependencies require macOS {minimum}; rebuilding them is required to support macOS {VERSION['deploymentTarget']}.")
 
-for binary in [*lib_dir.iterdir(), *bin_dir.iterdir(), STAGE / "Contents/MacOS/GoConnect"]:
-    options = ["--options", "runtime"] if binary.name == "GoConnectTransport" else []
-    subprocess.run(["/usr/bin/codesign", "--force", "--sign", "-", *options, str(binary)], check=True, capture_output=True)
-subprocess.run(["/usr/bin/codesign", "--force", "--sign", "-", str(STAGE)], check=True, capture_output=True)
-subprocess.run(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(STAGE)], check=True)
+# SwiftPM adds a scratch framework search path for its executable/test products.
+# The distributable uses only its embedded framework and system libraries.
+for binary in macho_files(STAGE):
+    commands = run(OTOOL, "-l", binary)
+    rpaths = re.findall(r"cmd LC_RPATH\s+cmdsize \d+\s+path (.+?) \(offset", commands)
+    for rpath in set(rpaths):
+        if rpath.startswith(str(WORK)):
+            subprocess.run([INSTALL_NAME_TOOL, "-delete_rpath", rpath, str(binary)], check=True, capture_output=True)
+sign_bundle(STAGE, SIGNING)
 
 # Never replace a bundle in use, including a GUI without a tunnel.
 processes = run("/bin/ps", "-axo", "pid=,command=").splitlines()

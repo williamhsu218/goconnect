@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 
 extension AppStore {
     var canTestNodes: Bool {
-        localReady && !nodeLatency.isRunning && !subscriptionWorking &&
+        !updateOperationBlocked && localReady && !nodeLatency.isRunning && !subscriptionWorking &&
         (!busy || (phase == "connected" && !usesCompanyRoutes))
     }
     func testNodes(_ nodes: [SubscriptionNode], in subscription: Subscription) {
@@ -37,7 +37,7 @@ extension AppStore {
     func updateSubscription(_ item: Subscription) { loadSubscriptions(importing: false, url: item.payload.url, existingID: item.id) }
     func addSubscription(name: String, url: String) { loadSubscriptions(importing: false, url: url, name: name) }
     private func loadSubscriptions(importing: Bool, url: String = "", existingID: UUID? = nil, name: String? = nil, fileContent: String? = nil) {
-        guard !subscriptionWorking, configurationReadable, subscriptionsReadable else { return }
+        guard allowsOperationDuringUpdate(), !subscriptionWorking, configurationReadable, subscriptionsReadable else { return }
         nodeLatency.stop()
         subscriptionWorking = true
         Task {

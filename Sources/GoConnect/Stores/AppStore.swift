@@ -21,6 +21,7 @@ final class AppStore {
     var page: Page = .connection
     var configuration = Configuration()
     var subscriptions: [Subscription] = []
+    var updateOperationBlocked = false
     var subscriptionWorking = false
     var subscriptionsReadable = true
     var password = ""
@@ -125,6 +126,18 @@ final class AppStore {
         catch { subscriptionsReadable = false; show("订阅缓存无法读取，原文件已保留。", error: true) }
         if refreshRuntime { refreshEnvironment() }
     }
+    var updateSafetyState: UpdateSafetyState {
+        UpdateSafetyState(connectionOrServiceActive: busy || transport.isRunning || route.isRunning || networkService.status.busy || recoveryRequired,
+                          hasUnsavedDraft: profileDraft != nil, isTestingNodes: nodeLatency.isRunning,
+                          isUpdatingSubscriptions: subscriptionWorking)
+    }
+    func allowsOperationDuringUpdate() -> Bool {
+        guard !updateOperationBlocked else {
+            show("请先结束应用更新，再连接或维护网络服务。", error: true)
+            return false
+        }
+        return true
+    }
     var busy: Bool { passwordRequested || networkService.working || !["idle", "failed"].contains(phase) }
     func showTraffic(for id: UUID) {
         trafficProfileID = id
@@ -183,6 +196,7 @@ final class AppStore {
         catch { configuration = previous; show(error.localizedDescription, error: true) }
     }
     func quickConnect(_ id: UUID) {
+        guard allowsOperationDuringUpdate() else { return }
         guard !busy, profileDraft == nil else { return }
         guard !recoveryRequired else { show("上次网络进程未能退出，已暂停重连。请导出诊断并重启 macOS 后再连接。", error: true); return }
         guard !nodeLatency.isRunning else { show("请先停止节点测试，再连接 VPN。", error: true); return }
@@ -322,6 +336,7 @@ final class AppStore {
         hasOtherRouter = false
     }
     func connect(test: Bool = false) {
+        guard allowsOperationDuringUpdate() else { return }
         guard !busy, profileDraft == nil else { return }
         guard !recoveryRequired else { show("上次网络进程未能退出，已暂停重连。请导出诊断并重启 macOS 后再连接。", error: true); return }
         guard !nodeLatency.isRunning else { show("请先停止节点测试，再连接 VPN。", error: true); return }
@@ -517,6 +532,7 @@ final class AppStore {
         show("网络进程尚未退出，已暂停重连；请导出诊断并重启 macOS 后再连接。", error: true)
     }
     func manageNetworkService(uninstall: Bool = false) {
+        guard allowsOperationDuringUpdate() else { return }
         guard !busy else { return }
         phase = "serviceMaintenance"
         Task {

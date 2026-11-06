@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 import GoConnectCore
 
 @main
@@ -14,6 +15,8 @@ struct GoConnectApp: App {
         .windowResizability(.contentMinSize)
         .windowStyle(.titleBar)
         .commands {
+            AppUpdateCommands(updater: delegate.updater)
+            if !AppDelegate.isUpdateQA {
             SidebarCommands()
             CommandGroup(replacing: .newItem) {
                 Button("新建线路") { store.beginNewProfile() }.keyboardShortcut("n")
@@ -30,17 +33,34 @@ struct GoConnectApp: App {
                 Button("重新显示菜单栏快捷菜单") { delegate.menuBar?.restoreAndShow() }
                     .keyboardShortcut("m", modifiers: [.command, .shift])
             }
+            }
         }
         Settings {
-            PreferencesView(showMenuBar: { delegate.menuBar?.restoreAndShow() })
-                .frame(width: 480, height: 480)
+            PreferencesView(showMenuBar: { delegate.menuBar?.restoreAndShow() }, updater: delegate.updater)
+                .frame(width: 500, height: 620)
         }
     }
 }
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    let store = AppStore()
+    static var isUpdateQA: Bool {
+        Bundle.main.bundleIdentifier == "com.willhsu.GoConnect.UpdateQA" &&
+        Bundle.main.object(forInfoDictionaryKey: "GoConnectUpdateQAMode") as? Bool == true
+    }
+    let store: AppStore = {
+        guard isUpdateQA else { return AppStore() }
+        let path = Bundle.main.object(forInfoDictionaryKey: "GoConnectUpdateQADataDirectory") as? String
+        let temporary = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
+        let proposed = path.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath() }
+        let directory = proposed.flatMap { $0.path.hasPrefix(temporary.path + "/") ? $0 : nil }
+            ?? temporary.appendingPathComponent("GoConnect-UpdateQA-" + UUID().uuidString)
+        return AppStore(dataDirectory: directory, diagnostics: FaultDiagnostics(directory: directory.appendingPathComponent("logs")), refreshRuntime: false)
+    }()
+    lazy var updater = AppUpdater(safetyState: { [weak self] in
+        self?.store.updateSafetyState ?? UpdateSafetyState(connectionOrServiceActive: true)
+    }, notify: { [weak self] text in self?.store.show(text, error: true) })
+    private var updateObservation: AnyCancellable?
     private(set) var menuBar: MenuBarController?
     private var openMainWindow: (() -> Void)?
     private var pendingMainWindow = false
@@ -66,14 +86,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
-        AppFaultMonitor.shared.start()
+        if !Self.isUpdateQA { AppFaultMonitor.shared.start() }
         NSApp.setActivationPolicy(.regular)
         // App lifetime owns the status item; it must not depend on a window appearing.
-        menuBar = MenuBarController(store: store) { [weak self] in self?.showMainWindow() }
+        if !Self.isUpdateQA { menuBar = MenuBarController(store: store) { [weak self] in self?.showMainWindow() } }
+        updateObservation = updater.$isUpdateCycleActive.combineLatest(updater.$installationInProgress)
+            .sink { [weak self] cycle, installation in self?.store.updateOperationBlocked = cycle || installation }
+        if Self.isUpdateQA || ProcessInfo.processInfo.environment["GOCONNECT_DATA_DIR"] == nil { updater.start() }
         AppBranding.refreshDockIcon()
         NSApp.activate(ignoringOtherApps: true)
     }
-    func applicationWillTerminate(_ notification: Notification) { FaultDiagnostics.shared.record(.appStopping); menuBar?.tearDown(); store.nodeLatency.stop(); store.disconnect(); store.trafficHistory.flush() }
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        updater.canTerminateForUpdate() ? .terminateNow : .terminateCancel
+    }
+    func applicationWillTerminate(_ notification: Notification) {
+        if !Self.isUpdateQA {
+            FaultDiagnostics.shared.record(.appStopping)
+            menuBar?.tearDown(); store.nodeLatency.stop(); store.disconnect()
+        }
+        store.trafficHistory.flush()
+    }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -90,7 +122,10 @@ private struct MainWindowContent: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        ContentView(store: store)
+        Group {
+            if AppDelegate.isUpdateQA { AppUpdateQAHarness(store: store, updater: delegate.updater) }
+            else { ContentView(store: store) }
+        }
             .onAppear {
                 delegate.registerMainWindowOpener { openWindow(id: "main") }
             }

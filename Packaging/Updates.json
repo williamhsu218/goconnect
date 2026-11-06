@@ -1,0 +1,10 @@
+{
+  "enabled": true,
+  "feedURL": "https://raw.githubusercontent.com/williamhsu218/goconnect/updates/appcast.xml",
+  "publicKey": "yoZPyYSmkseQ5kBGctYNGSuVCaNP/59l23vdNqJxA70=",
+  "channel": "stable",
+  "keychainAccount": "com.willhsu.GoConnect",
+  "sparkleVersion": "2.10.1",
+  "sparkleSourceURL": "https://github.com/sparkle-project/Sparkle/archive/refs/tags/2.10.1.tar.gz",
+  "sparkleSourceSHA256": "cd6f47568af791c2d2bb49da6a55519b1726ecaad7dad032c9f86590953ff3a9"
+}

@@ -21,9 +21,9 @@ GoConnect 是一款 macOS 网络连接工具。你可以接入公司的 AnyConne
 
 从 [Releases](https://github.com/williamhsu218/goconnect/releases/latest) 下载适用于 Apple Silicon 的安装包，解压后将 `GoConnect.app` 放入“应用程序”文件夹。请按所下载版本确认系统要求。
 
-最新预发布版为 [0.11.17 / build 57](https://github.com/williamhsu218/goconnect/releases/tag/v0.11.17)，采用浅色精密界面，增加每条线路的本机流量统计，并将“应用白名单”改名为“代理应用与服务”。AnyConnect 的真实 UDP 稳定性门禁仍未通过，因此按预发布版提供；完整说明见 [0.11.17 发布记录](docs/RELEASE_0.11.17.md)。
+当前版本为 [1.0.1 / build 58](https://github.com/williamhsu218/goconnect/releases/tag/v1.0.1)，加入团队开发签名、GitHub 签名在线更新和新的双路径 G 图标。首次从旧版迁移需正常断开、退出并替换一次应用；后续可在应用菜单或设置中检查更新。详见 [1.0.1 发布记录](docs/RELEASE_1.0.1.md)及[更新维护说明](docs/UPDATES.md)。
 
-本机已验收正式版为 **0.11.14 / build 51**，唯一保留回滚版为 **0.11.13 / build 50**，清单见 `dist/releases.json`。修复、30 分钟视频渲染测试及保留边界见 [0.11.14 正式版记录](docs/RELEASE_0.11.14.md)；本机验收不代表已发布到 GitHub Releases。
+本版正式验收范围包含 HY2 订阅线路、界面、本机流量统计和更新链路。**AnyConnect UDP 稳定性仍是已知限制，未宣称已修复或通过。** 本机保留正式包为 **1.0.1 / build 58**，紧邻回滚正式包为 **0.11.14 / build 51**，清单见 `dist/releases.json`。
 
 更新前，请先断开 GoConnect 的 VPN 连接并退出应用，再替换旧版。熟悉开发工具的用户也可以按[构建说明](docs/BUILD.md)自行生成应用。
 

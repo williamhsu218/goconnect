@@ -1,5 +1,5 @@
 {
-  "version": "0.11.17",
-  "build": "57",
+  "version": "1.0.1",
+  "build": "58",
   "deploymentTarget": "14.0"
 }

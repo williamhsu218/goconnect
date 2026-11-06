@@ -42,6 +42,19 @@ def main():
     third_party = args.app / "Contents/Resources/ThirdParty"
     manifest, downloads = [], []
     for directory in sorted(third_party.iterdir()):
+        source_metadata = directory / "source.json"
+        if source_metadata.is_file() and directory.name.startswith("Sparkle-"):
+            source = json.loads(source_metadata.read_text())
+            if source["name"] != "Sparkle" or not source["url"].startswith("https://github.com/sparkle-project/Sparkle/archive/refs/tags/"):
+                raise ValueError("Unexpected Sparkle source provenance")
+            destination = output / "components" / directory.name
+            destination.mkdir(parents=True, exist_ok=args.resume)
+            for item in directory.iterdir():
+                if item.is_file(): shutil.copy2(item, destination / item.name)
+            record = {"component": directory.name, "url": source["url"], "sha256": source["sha256"],
+                      "file": str((destination / Path(urlsplit(source["url"]).path).name).relative_to(output))}
+            manifest.append(record); downloads.append(record)
+            continue
         sbom = directory / "sbom.spdx.json"
         if not sbom.is_file():
             continue
