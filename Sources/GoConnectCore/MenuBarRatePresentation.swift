@@ -16,6 +16,7 @@ public enum MenuBarRateDirection: String, CaseIterable, Sendable {
 public struct MenuBarRatePresentation: Equatable, Sendable {
     public static let freshnessInterval: TimeInterval = 5
     public let title: String
+    public let lines: [String]
     public let accessibilityDescription: String?
     public let expiresAt: Date?
 
@@ -23,7 +24,7 @@ public struct MenuBarRatePresentation: Equatable, Sendable {
                 state: VPNControlState, available: Bool, sampledAt: Date?,
                 download: Double, upload: Double, now: Date = Date()) {
         guard enabled else {
-            title = ""; accessibilityDescription = nil; expiresAt = nil
+            title = ""; lines = []; accessibilityDescription = nil; expiresAt = nil
             return
         }
         let age = sampledAt.map { now.timeIntervalSince($0) }
@@ -36,14 +37,17 @@ public struct MenuBarRatePresentation: Equatable, Sendable {
         let selectedAvailable: Bool
         switch direction {
         case .both:
+            lines = ["↓ \(down)", "↑ \(up)"]
             title = "↓ \(down)  ↑ \(up)"
             accessibilityDescription = downDescription + "，" + upDescription
             selectedAvailable = down != "—" || up != "—"
         case .download:
+            lines = ["↓ \(down)"]
             title = "↓ \(down)"
             accessibilityDescription = downDescription
             selectedAvailable = down != "—"
         case .upload:
+            lines = ["↑ \(up)"]
             title = "↑ \(up)"
             accessibilityDescription = upDescription
             selectedAvailable = up != "—"

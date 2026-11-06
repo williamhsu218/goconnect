@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 COMPONENTS = [
     "Sources/GoConnect/App/AppBranding.swift",
     "Sources/GoConnect/App/MenuBarStatusIcon.swift",
+    "Sources/GoConnect/App/MenuBarRateImage.swift",
     "Sources/GoConnect/App/MenuBarController.swift",
     "Sources/GoConnect/App/MenuBarPreferences.swift",
     "Sources/GoConnect/Views/MenuBarSettings.swift",
