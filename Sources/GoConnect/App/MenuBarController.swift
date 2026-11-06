@@ -10,6 +10,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private static let itemName = "GoConnectStatusItem"
     private let store: AppStore
     private let openMainWindow: () -> Void
+    private let openSettings: () -> Void
     private let defaults: UserDefaults
     private var statusItem: NSStatusItem?
     private var preferenceObservation: AnyCancellable?
@@ -20,10 +21,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private let menu = NSMenu()
     private let logger = Logger(subsystem: Product.bundleID, category: "MenuBar")
 
-    init(store: AppStore, defaults: UserDefaults = .standard, openMainWindow: @escaping () -> Void) {
+    init(store: AppStore, defaults: UserDefaults = .standard,
+         openSettings: @escaping () -> Void, openMainWindow: @escaping () -> Void) {
         self.store = store
         self.defaults = defaults
         self.openMainWindow = openMainWindow
+        self.openSettings = openSettings
         super.init()
         menu.autoenablesItems = false
         menu.delegate = self
@@ -197,6 +200,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 self.store.navigate(to: page)
             }
         }
+        add("设置…", symbol: "gearshape", key: ",") { [weak self] in self?.openSettings() }
         menu.addItem(.separator())
         add("退出 GoConnect", key: "q") { NSApp.terminate(nil) }
     }

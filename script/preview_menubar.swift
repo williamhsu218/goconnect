@@ -49,7 +49,8 @@ enum Page: String {
     @NSApplicationDelegateAdaptor(MenuBarPreviewDelegate.self) private var delegate
     var body: some Scene {
         WindowGroup("GoConnect · 菜单栏验收", id: "preview") {
-            MenuBarPreviewContent(store: delegate.store, restore: { delegate.menuBar?.restoreAndShow() })
+            MenuBarPreviewContent(store: delegate.store, restore: { delegate.menuBar?.restoreAndShow() },
+                                  registerSettings: { delegate.settingsOpener = $0 })
         }
         .defaultSize(width: 580, height: 570)
         .windowResizability(.contentSize)
@@ -60,10 +61,14 @@ enum Page: String {
 @MainActor final class MenuBarPreviewDelegate: NSObject, NSApplicationDelegate {
     let store = AppStore()
     var menuBar: MenuBarController?
+    var settingsOpener: (() -> Void)?
     private var auditTimer: Timer?
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
-        menuBar = MenuBarController(store: store) {
+        menuBar = MenuBarController(store: store, openSettings: { [weak self] in
+            NSApp.activate(ignoringOtherApps: true)
+            self?.settingsOpener?()
+        }) {
             NSApp.activate(ignoringOtherApps: true)
             NSApp.windows.first?.makeKeyAndOrderFront(nil)
         }
@@ -105,12 +110,14 @@ enum Page: String {
         }
     }
     func applicationWillTerminate(_ notification: Notification) { auditTimer?.invalidate(); menuBar?.tearDown() }
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 }
 
 private struct MenuBarPreviewContent: View {
     @Bindable var store: AppStore
     let restore: () -> Void
+    let registerSettings: (@escaping () -> Void) -> Void
+    @Environment(\.openSettings) private var openSettings
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -146,6 +153,7 @@ private struct MenuBarPreviewContent: View {
         .formStyle(.grouped)
         .frame(width: 580, height: 650)
         .preferredColorScheme(store.dark ? .dark : .light)
+        .onAppear { registerSettings { openSettings() } }
         .onReceive(tick) { _ in store.sample() }
     }
 
