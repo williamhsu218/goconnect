@@ -70,6 +70,16 @@ final class AppUpdaterTests: XCTestCase {
         XCTAssertFalse(app.blocksNewConnection)
     }
 
+    func testAlreadyCurrentIsNotReportedAsFailedCheck() throws {
+        let (app, sparkle, _) = try fixture(state: { UpdateSafetyState(connectionOrServiceActive: true) })
+        try app.updater(sparkle, mayPerform: .updates)
+        app.updater(sparkle, didFinishUpdateCycleFor: .updates,
+                    error: NSError(domain: SUSparkleErrorDomain, code: Int(SUError.noUpdateError.rawValue)))
+        XCTAssertFalse(app.blocksNewConnection)
+        XCTAssertFalse(app.isUpdateCycleActive)
+        XCTAssertEqual(app.statusDescription, "当前已是最新版本，可保持 VPN 连接。")
+    }
+
     func testRelaunchPolicyQueryHasNoInstallationSideEffects() throws {
         let (app, sparkle, defaults) = try fixture(state: { UpdateSafetyState(connectionOrServiceActive: true) })
         XCTAssertTrue(app.updaterShouldRelaunchApplication(sparkle))

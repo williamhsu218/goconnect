@@ -239,7 +239,11 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
             if installationPrepared { hasUnconfirmedInstallation = true }
             clearInstallationPending()
         } else if !installationPrepared { clearInstallationPending() }
-        if error != nil { statusDescription = "本次更新检查未完成，可从“检查更新”重试。" }
+        let noUpdate = (error as NSError?).map {
+            $0.domain == SUSparkleErrorDomain && $0.code == SUError.noUpdateError.rawValue
+        } ?? false
+        if noUpdate { statusDescription = "当前已是最新版本，可保持 VPN 连接。" }
+        else if error != nil { statusDescription = "本次更新检查未完成，可从“检查更新”重试。" }
         else if !installationInProgress { statusDescription = "可从“检查更新”查看 GitHub 上的可用版本。" }
     }
 }
