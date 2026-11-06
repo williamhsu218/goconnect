@@ -11,10 +11,12 @@ public struct TransportEvent: Decodable, Sendable {
     public var gateway: String?
     public var received: UInt64?
     public var sent: UInt64?
+    public var publicIP: String?
     public var passed: Bool?
     public var tun: Bool?
     public var code: String?
     public var value: Int?
+    public var bridge: BridgeDiagnostic?
     public init(event: String, message: String? = nil) { self.event = event; self.message = message }
 }
 

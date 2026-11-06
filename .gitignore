@@ -1,4 +1,6 @@
 .build/
+# Local accepted releases are not disposable caches. Use release_artifacts.py
+# clean; git clean -fdX/-fdx is unsafe for this directory.
 dist/
 .DS_Store
 Transport/bin/

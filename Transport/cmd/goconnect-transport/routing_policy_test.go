@@ -134,6 +134,33 @@ malformed link#25 UCS utun9`
 	}
 }
 
+func TestDarwinAbbreviatedRoutePrefixesRetainNetworkWidth(t *testing.T) {
+	for input, want := range map[string]string{
+		"10": "10.0.0.0/8", "172.16": "172.16.0.0/16",
+		"203.0.113": "203.0.113.0/24", "203.0.113.0": "203.0.113.0/32",
+		"203.0.113/25": "203.0.113.0/25", "203.0.113.5": "203.0.113.5/32",
+	} {
+		got, ok := parseRoutePrefix(input)
+		if !ok || got.String() != want {
+			t.Fatalf("route %q: got %v, %v; want %s", input, got, ok, want)
+		}
+	}
+	route := transparentRoute{Prefix: "203.0.113.0/24", Interface: "utun100"}
+	if !ownedTransparentRouteInTable([]byte("203.0.113 link#42 UCS utun100\n"), route) {
+		t.Fatal("Darwin abbreviated /24 route was not recognized")
+	}
+	for _, row := range []string{
+		"203.0.113.0 link#42 UCS utun100\n", // A host is not the /24 network.
+		"203.0.112 link#42 UCS utun100\n",
+		"203.0.113 link#42 UCS utun101\n",
+		"203.0.113 link#42 UCSI utun100\n",
+	} {
+		if ownedTransparentRouteInTable([]byte(row), route) {
+			t.Fatalf("accepted unowned route %q", row)
+		}
+	}
+}
+
 func TestDomainExceptionsDoNotExpandWhitelistCapture(t *testing.T) {
 	r := routeRequest{RoutingMode: modeWhitelist, Gateway: "192.0.2.10", DirectDomains: []domainRule{{"example.com", true}}}
 	apps := []capturedApp{{GID: 61010}}

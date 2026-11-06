@@ -16,7 +16,7 @@ public enum DisconnectReason: Int, Sendable {
         case "openconnect.tls_read_failed": self = .tlsRead
         case "openconnect.tls_write_failed": self = .tlsWrite
         case "openconnect.tls_failed": self = .tls
-        case "openconnect.reconnect_failed": self = .reconnect
+        case "openconnect.reconnect_failed", "openconnect.recovery_expired": self = .reconnect
         default: return nil
         }
     }
@@ -37,10 +37,22 @@ public enum DisconnectReason: Int, Sendable {
     }
 
     public func merging(_ next: Self) -> Self {
-        // Preserve the specific first cause when a generic termination or
-        // failed reconnect follows it. All observations remain in the log.
-        if self == .unknown || (self == .server && [.idleTimeout, .sessionExpired, .cookieRejected].contains(next)) { return next }
+        // A server decision explains why recovery must stop, even if a TLS or
+        // DPD failure initiated it. Keep that initial observation in the log;
+        // generic follow-up failures must not hide a terminal server reason.
+        if self == .unknown { return next }
+        let serverReasons: [Self] = [.server, .idleTimeout, .sessionExpired, .cookieRejected]
+        if !serverReasons.contains(self), serverReasons.contains(next) { return next }
+        if self == .server, [.idleTimeout, .sessionExpired, .cookieRejected].contains(next) { return next }
         return self
+    }
+
+    public var recoverySuggestion: String? {
+        switch self {
+        case .cookieRejected: "服务器不再接受此会话，请重新开启连接以完成身份认证。"
+        case .sessionExpired: "会话已到期，请重新开启连接以完成身份认证。"
+        default: nil
+        }
     }
 
     public static func isCoreDiagnostic(_ event: FaultEvent) -> Bool {

@@ -10,7 +10,7 @@ extension AppStore {
     var connectionControlState: VPNControlState {
         VPNControlState(phase: phase, passwordRequested: passwordRequested,
                         testOnly: passwordRequested ? pendingPasswordTest : testOnly,
-                        routingCheck: routingCheckRunning,
+                        routingCheck: false,
                         hasUnmanagedApps: false)
     }
     var connectionControlSubtitle: String {

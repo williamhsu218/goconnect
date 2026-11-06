@@ -21,6 +21,7 @@ type Stack struct {
 	Network  *netstack.Net
 	Received atomic.Uint64
 	Sent     atomic.Uint64
+	Observe  Observer
 	once     sync.Once
 }
 
@@ -54,10 +55,14 @@ func (s *Stack) Pump(ctx context.Context, transport io.ReadWriteCloser) error {
 			if n == 0 {
 				continue
 			}
+			id := packetProbe(buffer[:n])
+			observe(s.Observe, "pipe_read", id, 0, n, nil)
 			if _, err = s.Device.Write([][]byte{buffer[:n]}, 0); err != nil {
+				observe(s.Observe, "stack_deliver", id, 0, n, err)
 				results <- err
 				return
 			}
+			observe(s.Observe, "stack_deliver", id, 0, n, nil)
 			s.Received.Add(uint64(n))
 		}
 	}()
@@ -75,7 +80,13 @@ func (s *Stack) Pump(ctx context.Context, transport io.ReadWriteCloser) error {
 				if discard {
 					continue
 				}
+				id := packetProbe(buffers[i][:sizes[i]])
+				observe(s.Observe, "pipe_write_start", id, 0, sizes[i], nil)
 				written, err := writePacket(ctx, transport, buffers[i][:sizes[i]])
+				if err == nil && written != sizes[i] {
+					err = io.ErrShortWrite
+				}
+				observe(s.Observe, "pipe_write", id, 0, written, err)
 				if err != nil {
 					results <- err
 					discard = true
@@ -104,16 +115,30 @@ func (s *Stack) Pump(ctx context.Context, transport io.ReadWriteCloser) error {
 // Darwin UNIX datagram sockets can report ENOBUFS during a short burst. Preserve
 // packet boundaries and apply bounded back pressure while OpenConnect drains it.
 func writePacket(ctx context.Context, target io.Writer, packet []byte) (int, error) {
-	deadline := time.Now().Add(time.Second)
+	return writePacketWithin(ctx, target, packet, 75*time.Second)
+}
+
+func writePacketWithin(ctx context.Context, target io.Writer, packet []byte, budget time.Duration) (int, error) {
+	deadline := time.Now().Add(budget)
+	// A blocked socket write must share the same finite budget as ENOBUFS
+	// retries. Pump closes the channel on cancellation to unblock a write.
+	if conn, ok := target.(net.Conn); ok {
+		if err := conn.SetWriteDeadline(deadline); err != nil {
+			return 0, err
+		}
+	}
 	for {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 		n, err := target.Write(packet)
-		if err == nil || (!errors.Is(err, syscall.ENOBUFS) && !errors.Is(err, syscall.EAGAIN)) || time.Now().After(deadline) {
+		if n != 0 || err == nil || (!errors.Is(err, syscall.ENOBUFS) && !errors.Is(err, syscall.EAGAIN)) || !time.Now().Before(deadline) {
 			return n, err
 		}
 		select {
 		case <-ctx.Done():
 			return 0, ctx.Err()
-		case <-time.After(time.Millisecond):
+		case <-time.After(10 * time.Millisecond):
 		}
 	}
 }

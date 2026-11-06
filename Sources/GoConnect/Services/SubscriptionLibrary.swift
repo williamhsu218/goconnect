@@ -41,6 +41,14 @@ struct SubscriptionPayload: Codable, Sendable {
 struct Subscription: Codable, Identifiable, Sendable {
     var id = UUID()
     var payload: SubscriptionPayload
+    var quotaValues: [String: Int64] {
+        var result: [String: Int64] = [:]
+        for field in payload.userInfo.split(separator: ";") {
+            let pair = field.split(separator: "=", maxSplits: 1)
+            if pair.count == 2 { result[pair[0].trimmingCharacters(in: .whitespaces)] = Int64(pair[1].trimmingCharacters(in: .whitespaces)) }
+        }
+        return result
+    }
     var quotaText: String? {
         var values: [String: Int64] = [:]
         for item in payload.userInfo.split(separator: ";") {
@@ -50,7 +58,8 @@ struct Subscription: Codable, Identifiable, Sendable {
         guard let total = values["total"], total > 0 else { return nil }
         let upload = max(0, values["upload"] ?? 0), download = max(0, values["download"] ?? 0)
         let used = upload > Int64.max - download ? Int64.max : upload + download
-        var text = "已用 \(ByteCountFormatter.string(fromByteCount: used, countStyle: .binary)) / \(ByteCountFormatter.string(fromByteCount: total, countStyle: .binary))"
+        let remaining = used >= total ? 0 : total - used
+        var text = "剩余 \(ByteCountFormatter.string(fromByteCount: remaining, countStyle: .binary)) · 已用 \(ByteCountFormatter.string(fromByteCount: used, countStyle: .binary)) / \(ByteCountFormatter.string(fromByteCount: total, countStyle: .binary))"
         if let expiry = values["expire"], expiry > 0 { text += " · 到期 " + Date(timeIntervalSince1970: Double(expiry)).formatted(date: .abbreviated, time: .omitted) }
         return text
     }
@@ -67,15 +76,16 @@ struct SubscriptionLibrary {
         try JSONEncoder().encode(items).write(to: url, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
-    static func request(runtime: URL, importing: Bool, url: String = "") async throws -> [SubscriptionPayload] {
+    static func request(runtime: URL, importing: Bool, url: String = "", fileContent: String? = nil, name: String = "") async throws -> [SubscriptionPayload] {
         try await Task.detached {
             let p = Process(), input = Pipe(), output = Pipe()
             p.executableURL = runtime.appendingPathComponent("bin/GoConnectTransport")
-            p.arguments = [importing ? "subscription-import" : "subscription-fetch"]
+            p.arguments = [fileContent != nil ? "subscription-file" : importing ? "subscription-import" : "subscription-fetch"]
             p.environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "en_US.UTF-8"]
             p.standardInput = input; p.standardOutput = output; p.standardError = FileHandle.nullDevice
             try p.run()
-            if !importing { try input.fileHandleForWriting.write(contentsOf: JSONEncoder().encode(["url": url])) }
+            if let fileContent { try input.fileHandleForWriting.write(contentsOf: JSONEncoder().encode(["content": fileContent, "name": name])) }
+            else if !importing { try input.fileHandleForWriting.write(contentsOf: JSONEncoder().encode(["url": url])) }
             try input.fileHandleForWriting.close()
             let data = output.fileHandleForReading.readDataToEndOfFile(); p.waitUntilExit()
             guard p.terminationStatus == 0 else {

@@ -42,6 +42,9 @@ func TestTransparentCleanupUsesExactOwnedRoutes(t *testing.T) {
 		{"owned scoped v4", transparentRoute{Prefix: "0.0.0.0/0", Interface: "en0", Gateway: "192.168.1.1", Scoped: true}, "default 192.168.1.1 UGScIg en0\n", true},
 		{"unscoped default", transparentRoute{Prefix: "0.0.0.0/0", Interface: "en0", Gateway: "192.168.1.1", Scoped: true}, "default 192.168.1.1 UGScg en0\n", false},
 		{"owned scoped v6", transparentRoute{Prefix: "::/0", Interface: "en0", Gateway: "fe80::1%en0", Scoped: true}, "default fe80::1%en0 UGScIg en0\n", true},
+		{"normalized scoped v6", transparentRoute{Prefix: "::/0", Interface: "en0", Gateway: "fe80::1%en0", Scoped: true}, "default fe80:0:0:0:0:0:0:1%en0 UGScIg en0\n", true},
+		{"normalized v6 pin", transparentRoute{Prefix: "2001:db8::20/128", Interface: "en0", Gateway: "fe80::1%en0"}, "2001:db8:0:0:0:0:0:20/128 fe80:0:0:0:0:0:0:1%en0 UGHS en0\n", true},
+		{"foreign gateway zone", transparentRoute{Prefix: "2001:db8::20/128", Interface: "en0", Gateway: "fe80::1%en0"}, "2001:db8::20 fe80::1%en1 UGHS en0\n", false},
 		{"owned v6 capture", transparentRoute{Prefix: "8000::/1", Interface: "utun100"}, "8000::/1 link#30 USc utun100\n", true},
 		{"gone v6", transparentRoute{Prefix: "::/1", Interface: "utun100"}, "Internet6:\nDestination Gateway Flags Netif\n", false},
 	}
@@ -119,6 +122,9 @@ func TestAbandonedSessionRecoversAfterCoreCrashWithoutLeakingConfiguration(t *te
 			return nil, nil
 		}
 		// The TUN routes vanished on core exit; the owned gateway pin remains.
+		if len(deleted) > 0 {
+			return nil, nil
+		}
 		return []byte("203.0.113.5 192.168.1.1 UGHS en0\n"), nil
 	}
 	err := recoverTransparentDirectory(dir, uint32(os.Getuid()), nil, nil, command, func(_ string, data []byte) error { backup = append([]byte(nil), data...); return nil })

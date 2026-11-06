@@ -8,40 +8,40 @@ struct ApplicationRoutingCard: View {
 
     var body: some View {
         Surface {
-            HStack {
-                Text("分流规则").font(.headline)
-                Button { showingHelp.toggle() } label: { Image(systemName: "questionmark.circle") }
-                    .buttonStyle(.borderless).foregroundStyle(.secondary)
-                    .accessibilityLabel("查看分流说明").help("连接边界与分流优先级")
-                    .popover(isPresented: $showingHelp) { ConnectionBoundaryHelpView(mode: mode) }
-                Spacer()
-                ModeBadge(mode: mode)
-            }
-            Text(store.accessExplanation).font(.callout).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true).padding(.top, 8).padding(.bottom, 12)
-            Divider()
-            HStack {
-                Label(mode == .global ? "直连 App / 服务" : "白名单 App / 服务", systemImage: mode == .global ? "arrow.triangle.branch" : "square.grid.2x2")
-                Spacer()
-                Text("\(store.configuration.routingApplications.count) 个").foregroundStyle(.secondary).monospacedDigit()
-                Button("管理名单") {
-                    store.navigate(to: mode == .global ? .exclusions : .applications)
-                }.appInlineActionStyle()
-            }.font(.callout).padding(.vertical, 12)
-            Divider()
-            HStack {
-                Label("直连域名与 IP", systemImage: "globe")
-                Spacer()
-                Text("\(store.configuration.directDomains.count) 条").foregroundStyle(.secondary).monospacedDigit()
-                Button("配置规则") {
-                    if store.profileDraft == nil { store.beginEditingProfile(store.configuration.activeProfileID) }
-                    else { store.navigate(to: .profiles) }
-                }.appInlineActionStyle()
-            }.font(.callout).padding(.vertical, 12)
-            if store.usesCompanyRoutes {
+            VStack(alignment: .leading, spacing: 10) {
+                SectionHeader("分流规则", symbol: "arrow.triangle.branch") {
+                    Button { showingHelp.toggle() } label: { Image(systemName: "questionmark.circle") }
+                        .buttonStyle(.borderless).foregroundStyle(.secondary)
+                        .accessibilityLabel("查看分流说明").help("连接边界与分流优先级")
+                        .popover(isPresented: $showingHelp) { ConnectionBoundaryHelpView(mode: mode) }
+                    ModeBadge(mode: mode)
+                }
+                Text(store.accessExplanation).font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 Divider()
-                LabeledContent("公司内网网段", value: "\(store.configuration.activeConnection.remoteNetworks.count) 个")
-                    .font(.callout).padding(.top, 12)
+                HStack(spacing: 8) {
+                    Label(mode == .global ? "直连 App / 服务" : "代理应用与服务", systemImage: mode == .global ? "arrow.triangle.branch" : "square.grid.2x2")
+                    Spacer(minLength: 6)
+                    Text("\(store.configuration.routingApplications.count) 个").foregroundStyle(.secondary).monospacedDigit()
+                    Button("管理名单") {
+                        store.navigate(to: mode == .global ? .exclusions : .applications)
+                    }.appInlineActionStyle()
+                }.font(.callout)
+                Divider()
+                HStack(spacing: 8) {
+                    Label("直连域名与 IP", systemImage: "globe")
+                    Spacer(minLength: 6)
+                    Text("\(store.configuration.directDomains.count) 条").foregroundStyle(.secondary).monospacedDigit()
+                    Button("配置规则") {
+                        if store.profileDraft == nil { store.beginEditingProfile(store.configuration.activeProfileID) }
+                        else { store.navigate(to: .profiles) }
+                    }.appInlineActionStyle()
+                }.font(.callout)
+                if store.usesCompanyRoutes {
+                    Divider()
+                    LabeledContent("公司内网网段", value: "\(store.configuration.activeConnection.remoteNetworks.count) 个")
+                        .font(.callout).monospacedDigit()
+                }
             }
         }
     }

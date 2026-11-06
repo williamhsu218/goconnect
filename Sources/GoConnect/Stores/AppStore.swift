@@ -4,9 +4,9 @@ import GoConnectCore
 import UniformTypeIdentifiers
 
 enum Page: String, CaseIterable, Identifiable {
-    case connection = "连接", profiles = "线路配置", subscriptions = "订阅管理", applications = "应用白名单", exclusions = "直连 App", diagnostics = "诊断"
+    case connection = "连接", profiles = "线路配置", subscriptions = "订阅管理", traffic = "流量统计", applications = "代理应用与服务", exclusions = "直连 App", diagnostics = "诊断"
     var id: String { rawValue }
-    var icon: String { switch self { case .connection: "network"; case .profiles: "server.rack"; case .subscriptions: "square.stack.3d.up"; case .applications: "square.grid.2x2"; case .exclusions: "arrow.triangle.branch"; case .diagnostics: "waveform.path.ecg" } }
+    var icon: String { switch self { case .connection: "network"; case .profiles: "server.rack"; case .subscriptions: "square.stack.3d.up"; case .traffic: "chart.bar.xaxis"; case .applications: "square.grid.2x2"; case .exclusions: "arrow.triangle.branch"; case .diagnostics: "waveform.path.ecg" } }
 }
 
 struct ActivityEntry: Identifiable {
@@ -21,15 +21,14 @@ final class AppStore {
     var page: Page = .connection
     var configuration = Configuration()
     var subscriptions: [Subscription] = []
+    var updateOperationBlocked = false
     var subscriptionWorking = false
     var subscriptionsReadable = true
     var password = ""
     var catalog: [AllowedApplication] = []
     var scanning = false
-    private var pendingAppUpdate: (sequence: UInt64, connection: SavedConnection)?
-    var updatingApplications: Bool { pendingAppUpdate != nil }
     var canEditApplications: Bool {
-        configurationReadable && !updatingApplications && !busy
+        configurationReadable && !busy
     }
     var search = ""
     var phase = "idle" { didSet { if phase != oldValue, let event = FaultEvent(rawValue: "phase." + phase) { diagnostics.record(event) } } }
@@ -40,6 +39,15 @@ final class AppStore {
     var addresses: [String] = []
     var received: UInt64 = 0
     var sent: UInt64 = 0
+    var trafficAvailable = false
+    var trafficUpdatedAt: Date?
+    var downloadRate: Double = 0
+    var uploadRate: Double = 0
+    @ObservationIgnored private var trafficMeter = SessionTrafficMeter()
+    var publicIP: String?
+    var publicIPChecking = false
+    var publicIPFailed = false
+    var publicIPCheckedAt: Date?
     var connectedAt: Date?
     var localReady = false
     var hasOtherRouter = false
@@ -50,9 +58,6 @@ final class AppStore {
     var discardProfileChangesRequested = false
     var pendingProfilePage: Page?
     var routeSnapshot: RouteSnapshot?
-    var routingCheckRunning = false
-    var routingCheckPassed: Bool?
-    var routingCheckSteps: [String] = []
     var passwordRequested = false
     private(set) var pendingPasswordTest = false
     private var token = ""
@@ -60,29 +65,45 @@ final class AppStore {
     private var routeReported = false
     private var stopFailed = false
     private var disconnectReason = DisconnectReason.unknown
+    private var disconnectRecoverySuggestion: String?
     private var unexpectedDisconnectReported = false
-    private var handledCommand: UInt64 = 0
-    private let transport = TransportClient()
-    private let route = RouteClient()
-    private let proxyFront = TransportClient()
-    var proxyPort: UInt16?
-    let proxyConnectivity = ProxyConnectivityChecker()
+    private var transportRecovering = false
+    private let transport: TransportClient
+    private let publicIPChecker: PublicIPChecker
+    private let route: RouteClient
+    private var connectionGeneration = UUID()
     var recoveryRequired = false
     var accessTitle: String { configuration.routingMode.title }
     var usesCompanyRoutes: Bool { configuration.activeConnection.usesCompanyRoutes }
     var accessExplanation: String { configuration.routingMode.explanation }
-    private let routingCheck = RoutingCheckClient()
     let networkService = NetworkServiceClient()
     let keychain = KeychainStore()
     let nodeLatency: NodeLatencyStore
+    @ObservationIgnored private var legacyYunyooUsage: YunyooUsageStore?
+    // Kept for legacy data/types; the current UI never mounts quota/login views.
+    // Do not load provider credentials or caches during ordinary app startup.
+    var yunyooUsage: YunyooUsageStore {
+        if let legacyYunyooUsage { return legacyYunyooUsage }
+        let value = YunyooUsageStore(file: file.url.deletingLastPathComponent().appendingPathComponent("yunyoo-usage.json"))
+        legacyYunyooUsage = value
+        return value
+    }
+    let trafficHistory: ProfileTrafficStore
+    var trafficProfileID: UUID?
     let file: ConfigurationFile
     private let diagnostics: FaultDiagnostics
 
-    init(dataDirectory: URL? = nil, diagnostics: FaultDiagnostics = .shared, refreshRuntime: Bool = true) {
+    init(dataDirectory: URL? = nil, diagnostics: FaultDiagnostics = .shared, refreshRuntime: Bool = true,
+         transportClient: TransportClient? = nil, routeClient: RouteClient? = nil, publicIPChecker: PublicIPChecker? = nil,
+         yunyooUsageStore: YunyooUsageStore? = nil) {
+        self.publicIPChecker = publicIPChecker ?? PublicIPChecker()
+        self.transport = transportClient ?? TransportClient(); self.route = routeClient ?? RouteClient()
         self.diagnostics = diagnostics
         let base = dataDirectory ?? ProcessInfo.processInfo.environment["GOCONNECT_DATA_DIR"].map { URL(fileURLWithPath: $0) }
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent(Product.bundleID)
         file = ConfigurationFile(url: base.appendingPathComponent("configuration.json"))
+        trafficHistory = ProfileTrafficStore(file: base.appendingPathComponent("traffic-history.sqlite"))
+        legacyYunyooUsage = yunyooUsageStore
         let quarantineURL = base.appendingPathComponent("network-quarantine.json")
         if let data = try? Data(contentsOf: quarantineURL) {
             recoveryRequired = (try? JSONDecoder().decode(NetworkQuarantine.self, from: data).applies()) ?? true
@@ -91,41 +112,37 @@ final class AppStore {
         do { configuration = try file.load() }
         catch { configurationReadable = false; show(error.localizedDescription, error: true) }
         transport.onEvent = { [weak self] event in self?.handle(event) }
-        proxyFront.onEvent = { [weak self] event in self?.handleProxy(event) }
         route.onState = { [weak self] state in self?.handleRoute(state) }
         route.onSnapshot = { [weak self] snapshot in
             guard let self else { return }
             self.routeSnapshot = snapshot
-            if let result = snapshot.commandResult, result.sequence > self.handledCommand {
-                self.handledCommand = result.sequence
-                if let pending = self.pendingAppUpdate, pending.sequence == result.sequence {
-                    self.pendingAppUpdate = nil
-                    if result.success {
-                        guard let index = self.configuration.connections.firstIndex(where: { $0.id == pending.connection.id }) else {
-                            self.show("名单已在本次连接生效，但原线路不存在，无法保存。", error: true); return
-                        }
-                        // Preserve unrelated profile edits made while waiting for the service.
-                        self.configuration.connections[index].applications = pending.connection.applications
-                        self.configuration.connections[index].excludedApplications = pending.connection.excludedApplications
-                        do { try self.file.save(self.configuration) }
-                        catch { self.show("名单已在本次连接生效，但保存失败：" + error.localizedDescription, error: true); return }
-                    }
-                    self.show(result.message ?? (result.success ? "名单已实时生效。" : "更新失败，已保留原名单。"), error: !result.success)
-                }
-            }
         }
-        routingCheck.onEvent = { [weak self] event in self?.handleRoutingCheck(event) }
-        routingCheck.onStopped = { [weak self] in
-            guard let self else { return }
-            self.routingCheckRunning = false
-            self.phase = "idle"
-            if self.routingCheckPassed == nil { self.routingCheckPassed = false; self.show("分流自检已结束，未取得完整验证结果。", error: true) }
+        self.publicIPChecker.onResult = { [weak self] ip in
+            guard let self, self.connectedAt != nil, ["connected", "authorizing", "testing"].contains(self.phase) else { return }
+            self.publicIP = ip; self.publicIPChecking = false; self.publicIPFailed = ip == nil
+            self.publicIPCheckedAt = ip == nil ? nil : Date()
         }
         do { subscriptions = try subscriptionFile.load() }
         catch { subscriptionsReadable = false; show("订阅缓存无法读取，原文件已保留。", error: true) }
         if refreshRuntime { refreshEnvironment() }
     }
+    var updateSafetyState: UpdateSafetyState {
+        UpdateSafetyState(connectionOrServiceActive: busy || transport.isRunning || route.isRunning || networkService.status.busy || recoveryRequired,
+                          hasUnsavedDraft: profileDraft != nil, isTestingNodes: nodeLatency.isRunning,
+                          isUpdatingSubscriptions: subscriptionWorking)
+    }
+    func allowsOperationDuringUpdate() -> Bool {
+        guard !updateOperationBlocked else {
+            show("请先结束应用更新，再连接或维护网络服务。", error: true)
+            return false
+        }
+        return true
+    }
     var busy: Bool { passwordRequested || networkService.working || !["idle", "failed"].contains(phase) }
+    func showTraffic(for id: UUID) {
+        trafficProfileID = id
+        navigate(to: .traffic)
+    }
     var statusTitle: String {
         switch phase {
         case "connecting": "正在建立隧道"
@@ -133,6 +150,7 @@ final class AppStore {
         case "serviceMaintenance": "正在维护本机服务"
         case "authorizing": "正在准备透明分流"
         case "connected": "\(accessTitle)已启动"
+        case "reconnecting": "正在恢复连接"
         case "testing": "隧道测试中"
         case "protected": "VPN 中断，已匹配连接暂停"
         case "stopping": "正在断开"
@@ -144,6 +162,7 @@ final class AppStore {
     var statusSubtitle: String {
         switch phase {
         case "connected": accessExplanation
+        case "reconnecting": "隧道暂时不可用，正在自动恢复；分流规则保持，可随时关闭连接。"
         case "testing": configuration.activeConnection.subscription == nil ? "临时隧道已建立，尚未接管任何 App 流量。" : "节点代理已就绪，尚未接管 App 流量；实际可达性需通过请求验证。"
         case "authorizing": "正在准备连接入口，不会自动打开应用。"
         case "preparingService", "preparingCheckService", "serviceMaintenance": "首次安装或更新服务需要管理员授权；日常连接无需重复授权。"
@@ -151,7 +170,7 @@ final class AppStore {
         case "connecting": configuration.activeConnection.subscription == nil ? "正在验证服务器并完成 AnyConnect 身份认证。" : "正在准备所选订阅节点。"
         case "stopping": "正在停止隧道并释放网络配置。"
         case "checking": "使用测试应用检查实际 TUN、TCP 和 UDP 路径。"
-        case "failed": "请检查线路配置，或在诊断中查看连接记录。"
+        case "failed": disconnectRecoverySuggestion ?? "请检查线路配置，或在诊断中查看连接记录。"
         default: "选择线路后，开启连接开关。"
         }
     }
@@ -177,6 +196,7 @@ final class AppStore {
         catch { configuration = previous; show(error.localizedDescription, error: true) }
     }
     func quickConnect(_ id: UUID) {
+        guard allowsOperationDuringUpdate() else { return }
         guard !busy, profileDraft == nil else { return }
         guard !recoveryRequired else { show("上次网络进程未能退出，已暂停重连。请导出诊断并重启 macOS 后再连接。", error: true); return }
         guard !nodeLatency.isRunning else { show("请先停止节点测试，再连接 VPN。", error: true); return }
@@ -213,11 +233,6 @@ final class AppStore {
         NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: app.path), configuration: options) { [weak self] _, error in
             if let error { Task { @MainActor in self?.show(error.localizedDescription, error: true) } }
         }
-    }
-    func copyProxyEndpoint() {
-        guard let port = proxyPort else { return }
-        NSPasteboard.general.clearContents(); NSPasteboard.general.setString("http://127.0.0.1:\(port)", forType: .string)
-        show("已复制 HTTP 代理地址。SOCKS5 使用同一端口，不需要密码。")
     }
     func filteredApps(excluded: Bool) -> [AllowedApplication] {
         let all = Dictionary((catalog + (excluded ? configuration.excludedApplications : configuration.applications)).map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first }).values
@@ -294,7 +309,7 @@ final class AppStore {
     }
     func addApplication(excluded: Bool = false) {
         guard canEditApplications else { return }
-        let panel = NSOpenPanel(); panel.title = excluded ? "添加直连应用" : "添加白名单应用"
+        let panel = NSOpenPanel(); panel.title = excluded ? "添加直连应用" : "添加代理应用"
         panel.allowedContentTypes = [.applicationBundle]; panel.allowsMultipleSelection = true
         panel.directoryURL = URL(fileURLWithPath: "/Applications")
         if panel.runModal() == .OK {
@@ -303,7 +318,7 @@ final class AppStore {
     }
     func addExecutableService(excluded: Bool = false) {
         guard canEditApplications else { return }
-        let panel = NSOpenPanel(); panel.title = excluded ? "添加直连可执行服务" : "添加白名单可执行服务"
+        let panel = NSOpenPanel(); panel.title = excluded ? "添加直连可执行服务" : "添加代理可执行服务"
         panel.allowedContentTypes = [.unixExecutable, .symbolicLink]; panel.allowsMultipleSelection = true
         panel.resolvesAliases = false
         panel.message = "可选择固定入口（如 /opt/homebrew/bin/claude），连接时会自动解析当前版本。"
@@ -321,6 +336,7 @@ final class AppStore {
         hasOtherRouter = false
     }
     func connect(test: Bool = false) {
+        guard allowsOperationDuringUpdate() else { return }
         guard !busy, profileDraft == nil else { return }
         guard !recoveryRequired else { show("上次网络进程未能退出，已暂停重连。请导出诊断并重启 macOS 后再连接。", error: true); return }
         guard !nodeLatency.isRunning else { show("请先停止节点测试，再连接 VPN。", error: true); return }
@@ -337,39 +353,52 @@ final class AppStore {
             guard configuration.activeConnection.subscription != nil || !secret.isEmpty else { pendingPasswordTest = test; passwordRequested = true; return }
             guard !secret.contains("\n"), !secret.contains("\r") else { show("密码不能包含换行。", error: true); return }
             guard save() else { return }
-            testOnly = test; routeReported = false; stopFailed = false; routeSnapshot = nil; handledCommand = 0; connectedAt = nil; addresses = []; received = 0; sent = 0
+            testOnly = test; routeReported = false; stopFailed = false; routeSnapshot = nil; connectedAt = nil; addresses = []; received = 0; sent = 0
+            trafficHistory.endSession()
+            resetSessionMetrics()
             disconnectReason = .unknown; unexpectedDisconnectReported = false
+            disconnectRecoverySuggestion = nil
+            transportRecovering = false
             token = UUID().uuidString + UUID().uuidString
+            connectionGeneration = UUID()
+            let attempt = connectionGeneration
             phase = test ? "connecting" : "preparingService"
             show("正在准备透明 App 分流服务。")
             password = ""
             Task {
+                guard connectionGeneration == attempt else { return }
                 do {
                     if !test { try await networkService.ensureReady() }
+                    guard connectionGeneration == attempt else { return }
                     guard phase == "preparingService" || phase == "connecting" else { finishStopping(); return }
                     phase = "connecting"
                     if let node = selectedSubscriptionNode { try transport.start(node: node, token: token) }
                     else { try transport.start(profile: configuration.profile, password: secret, token: token) }
-                } catch { phase = "failed"; show(error.localizedDescription, error: true) }
+                } catch {
+                    guard connectionGeneration == attempt else { return }
+                    phase = "failed"; show(error.localizedDescription, error: true)
+                }
             }
         } catch { phase = "failed"; show(error.localizedDescription, error: true) }
     }
     func disconnect() {
         guard busy else { return }
         if passwordRequested { passwordRequested = false; return }
-        if routingCheckRunning { phase = "stopping"; routingCheck.stop(); return }
         diagnostics.record(.disconnectRequested)
         stopFailed = false
         stopAll()
     }
     private func stopAll() {
-        pendingAppUpdate = nil
-        proxyConnectivity.reset()
-        phase = "stopping"; proxyPort = nil; proxyFront.stop(); route.stop(); transport.stop()
+        trafficHistory.endSession()
+        publicIPChecker.stop(); publicIPChecking = false; publicIP = nil; publicIPCheckedAt = nil
+        trafficAvailable = false
+        connectionGeneration = UUID()
+        transportRecovering = false
+        phase = "stopping"; route.stop(); transport.stop()
         finishStopping()
     }
     private func finishStopping() {
-        if phase == "stopping", !route.isRunning, !transport.isRunning, !proxyFront.isRunning {
+        if phase == "stopping", !route.isRunning, !transport.isRunning {
             phase = stopFailed ? "failed" : "idle"
             if !stopFailed { show("已断开。") }
         }
@@ -378,10 +407,26 @@ final class AppStore {
         switch event.event {
         case "diagnostic":
             if let code = event.code, let reason = DisconnectReason(diagnosticCode: code) { disconnectReason = disconnectReason.merging(reason) }
+        case "reconnecting":
+            guard connectedAt != nil, ["connected", "authorizing", "testing"].contains(phase), !transportRecovering else { return }
+            transportRecovering = true
+            publicIPChecker.stop(); publicIP = nil; publicIPChecking = false; publicIPCheckedAt = nil
+            if phase == "connected" { phase = "reconnecting" }
+            show("隧道暂时不可用，正在自动恢复。")
+        case "reconnected":
+            guard transportRecovering, ["reconnecting", "authorizing", "testing"].contains(phase) else { return }
+            transportRecovering = false
+            disconnectReason = .unknown
+            if phase == "reconnecting" { phase = "connected" }
+            refreshPublicIP()
+            show("隧道连接已恢复。")
         case "ready":
             guard phase == "connecting", let port = event.port else { return }
             socksPort = port; addresses = event.addresses ?? []; connectedAt = Date()
-            if testOnly { phase = "testing"; show(configuration.activeConnection.subscription == nil ? "VPN 隧道已建立；App 白名单尚未启用。" : "节点代理已就绪，尚未启用 App 分流。") }
+            if !testOnly {
+                trafficHistory.beginSession(profileID: configuration.activeProfileID, name: configuration.activeConnection.displayName)
+            }
+            if testOnly { phase = "testing"; show(configuration.activeConnection.subscription == nil ? "VPN 隧道已建立；应用分流尚未启用。" : "节点代理已就绪，尚未启用 App 分流。") }
             else {
                 phase = "authorizing"
                 do {
@@ -393,8 +438,21 @@ final class AppStore {
                 }
                 catch { show(error.localizedDescription, error: true); stopFailed = true; stopAll() }
             }
+            refreshPublicIP()
         case "quarantined": quarantineNetwork()
-        case "stats": received = event.received ?? received; sent = event.sent ?? sent
+        case "stats":
+            guard connectedAt != nil, ["authorizing", "connected", "reconnecting", "testing"].contains(phase),
+                  let received = event.received, let sent = event.sent else { return }
+            let now = Date()
+            let rates = trafficMeter.sample(received: received, sent: sent, time: now.timeIntervalSinceReferenceDate)
+            self.received = received; self.sent = sent
+            downloadRate = rates.download; uploadRate = rates.upload
+            trafficAvailable = true; trafficUpdatedAt = now
+            if !testOnly { trafficHistory.consume(received: received, sent: sent, at: now) }
+        case "stats_unavailable":
+            guard connectedAt != nil, ["authorizing", "connected", "reconnecting", "testing"].contains(phase) else { return }
+            trafficAvailable = false
+            trafficMeter.reset(); downloadRate = 0; uploadRate = 0
         case "error":
             if connectedAt != nil && !["idle", "failed", "stopping"].contains(phase) {
                 reportUnexpectedDisconnect(source: 1)
@@ -412,6 +470,19 @@ final class AppStore {
         default: break
         }
     }
+    func refreshPublicIP() {
+        guard connectedAt != nil, ["authorizing", "connected", "testing"].contains(phase), socksPort > 0 else { return }
+        publicIPChecking = true; publicIPFailed = false; publicIP = nil; publicIPCheckedAt = nil
+        do { try publicIPChecker.start(runtime: transport.runtimeURL, port: socksPort, token: token) }
+        catch { publicIPChecking = false; publicIPFailed = true }
+    }
+
+    private func resetSessionMetrics() {
+        publicIPChecker.stop()
+        trafficAvailable = false; trafficUpdatedAt = nil
+        trafficMeter.reset(); downloadRate = 0; uploadRate = 0
+        publicIP = nil; publicIPChecking = false; publicIPFailed = false; publicIPCheckedAt = nil
+    }
     private func reportUnexpectedDisconnect(source: Int) {
         guard !unexpectedDisconnectReported else { return }
         unexpectedDisconnectReported = true
@@ -419,42 +490,34 @@ final class AppStore {
         diagnostics.record(.disconnectSource, value: source)
         if let connectedAt { diagnostics.record(.connectionDuration, value: max(0, Int(Date().timeIntervalSince(connectedAt)))) }
         let component = source == 2 ? "本机分流服务意外结束" : source == 3 ? "代理入口意外结束" : disconnectReason.explanation
-        show("连接意外断开：\(component)。已记录诊断日志，请在「诊断」中导出以分析原因。", error: true)
+        disconnectRecoverySuggestion = source == 1 ? disconnectReason.recoverySuggestion : nil
+        let guidance = disconnectRecoverySuggestion ?? "已记录诊断日志，请在「诊断」中导出以分析原因。"
+        show("连接意外断开：\(component)。\(guidance)", error: true)
         // Make background/menu-bar use visible without taking focus or
         // requiring notification permission during a live VPN session.
         if !NSApp.isActive { NSApp.requestUserAttention(.criticalRequest) }
     }
     private func handleRoute(_ state: String) {
+        if ["failed", "serviceFailed"].contains(state), phase == "stopping" {
+            stopFailed = true
+            show(state == "failed" ? (routeSnapshot?.message ?? "本机分流清理未完成，请导出诊断后处理。") : "分流监督进程已结束，尚未确认路由清理完成；请导出诊断。", error: true)
+            finishStopping()
+            return
+        }
         if state == "ready" && phase == "authorizing" {
             routeReported = true
-            phase = "connected"
+            phase = transportRecovering ? "reconnecting" : "connected"
             show(configuration.routingMode.title + "已启用，应用无需配置代理。")
         } else if ["failed", "serviceFailed"].contains(state) && phase != "stopping" {
-            if phase == "connected" || phase == "protected" { reportUnexpectedDisconnect(source: 2) }
+            if ["connected", "reconnecting", "protected"].contains(phase) { reportUnexpectedDisconnect(source: 2) }
             else { show(routeSnapshot?.message ?? "本机分流服务未能启动，请在诊断中重新检测服务和网络环境。", error: true) }
             stopFailed = true; stopAll()
         } else if state == "stopped" {
             if phase == "stopping" { finishStopping() }
             else {
-                if phase == "connected" || phase == "protected" { reportUnexpectedDisconnect(source: 2) }
+                if ["connected", "reconnecting", "protected"].contains(phase) { reportUnexpectedDisconnect(source: 2) }
                 else { show("分流进程已结束，请重新连接。", error: true) }
                 stopFailed = true; stopAll()
-            }
-        }
-    }
-    private func handleProxy(_ event: TransportEvent) {
-        if event.event == "quarantined" { quarantineNetwork(); return }
-        if event.event == "ready", phase == "authorizing", let port = event.port {
-            proxyPort = port; phase = "connected"; show(usesCompanyRoutes ? "代理与公司网段已就绪，共用当前 AnyConnect 会话。" : "代理入口已就绪。请在目标应用中设置代理；仅加入名单不会生效。")
-            proxyConnectivity.check(port: port)
-        } else if event.event == "error" {
-            if phase == "connected" { reportUnexpectedDisconnect(source: 3) }
-            else { show(event.message ?? "代理入口异常。", error: true) }
-            if phase != "stopping" { stopFailed = true; stopAll() }
-        } else if event.event == "stopped" {
-            if phase == "stopping" { finishStopping() }
-            else if phase == "connected" || phase == "authorizing" {
-                reportUnexpectedDisconnect(source: 3); stopFailed = true; stopAll()
             }
         }
     }
@@ -468,10 +531,8 @@ final class AppStore {
         } catch { /* The in-memory guard remains active even when storage fails. */ }
         show("网络进程尚未退出，已暂停重连；请导出诊断并重启 macOS 后再连接。", error: true)
     }
-    func checkRouting(mode: RoutingMode? = nil) {
-        show("请连接后使用普通启动的应用验证名单路由；公司内网需验证实际服务端口。")
-    }
     func manageNetworkService(uninstall: Bool = false) {
+        guard allowsOperationDuringUpdate() else { return }
         guard !busy else { return }
         phase = "serviceMaintenance"
         Task {
@@ -488,28 +549,18 @@ final class AppStore {
         passwordRequested = false
         connect(test: pendingPasswordTest)
     }
-    private func handleRoutingCheck(_ event: TransportEvent) {
-        switch event.event {
-        case "check-progress":
-            if let message = event.message { routingCheckSteps.append(message) }
-        case "error": show(event.message ?? "分流自检未通过。", error: true)
-        case "check-finished":
-            routingCheckPassed = event.passed == true && event.tun == true
-            if routingCheckPassed == true { show("本机 TUN 分流自检通过，原网络已恢复。") }
-        default: break
-        }
-    }
     func revealConfiguration() { NSWorkspace.shared.activateFileViewerSelecting([file.url]) }
     func exportDiagnostics() {
         let panel = NSSavePanel(); panel.nameFieldStringValue = "GoConnect-diagnostics.txt"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        let report = "GoConnect \(Product.version)\nmacOS \(ProcessInfo.processInfo.operatingSystemVersionString)\n运行组件: \(localReady)\n状态: \(phase)\n模式: \(accessTitle)\n白名单数量: \(configuration.applications.count)\n直连排除数量: \(configuration.excludedApplications.count)\nTailscale 已识别: \(routeSnapshot?.tailscaleActive == true)\n\n" + "本次运行事件数: \(activity.count)；错误数: \(activity.filter(\.isError).count)\n原始消息可能含服务器或路径信息，导出仅包含结构化故障事件。"
+        let report = "GoConnect \(Product.version)\nmacOS \(ProcessInfo.processInfo.operatingSystemVersionString)\n运行组件: \(localReady)\n状态: \(phase)\n模式: \(accessTitle)\n代理名单数量: \(configuration.applications.count)\n直连排除数量: \(configuration.excludedApplications.count)\nTailscale 已识别: \(routeSnapshot?.tailscaleActive == true)\n\n" + "本次运行事件数: \(activity.count)；错误数: \(activity.filter(\.isError).count)\n原始消息可能含服务器或路径信息，导出仅包含结构化故障事件。"
         Task {
             let appLogs = await diagnostics.export()
             let serviceLogs = await networkService.diagnosticLogs()
-            let legend = "\n断线日志说明：connection.disconnect_requested=主动断开；connection.unexpected_disconnect=意外断开（value: 0原因未知/1服务器断开/2空闲超时/3会话到期/4会话凭据被拒/5DPD超时/6TLS读取/7TLS写入/8TLS连接/9重连失败）；connection.disconnect_source: 1隧道/2本机分流/3代理入口；connection.duration_seconds=连接持续秒数。openconnect.exit_code 与 openconnect.exit_signal 为实际 VPN 进程退出信息，transport.exited 为包装组件退出码。network.*、system.sleep/wake 可用于时间关联，不单独证明根因。\n"
-            let serviceLegend = "\n分流日志说明：session.exit_first=清理前的首次退出原因；session.exit_final=相同原因及清理结果，value 为会话毫秒数；details.stage/reason/check 标明阶段、退出原因与具体检查结果。system.command_timeout/failed/slow/late_result 记录系统命令超时、失败、慢执行和超时后返回；以 PID 与 operationID 关联，durationMs/timeoutMs 为毫秒。transparent.route_cleanup_failed 区分读表、删除和复核失败，routeIndex 对应会话路由清单序号；worker.exited 的 details 包含退出码与信号。worker.exit.json 保留最近退出摘要，请核对 PID 和时间；服务旧版可能没有这些字段。\n"
-            let output = report + legend + serviceLegend + "\n\n持久故障日志（UTC；仅固定代码、类别与数值）\n" + appLogs + "\n\n网络服务日志\n" + serviceLogs
+            let legend = "\n断线日志说明：connection.disconnect_requested=主动断开；connection.unexpected_disconnect=意外断开（value: 0原因未知/1服务器断开/2空闲超时/3会话到期/4会话凭据被拒/5DPD超时/6TLS读取/7TLS写入/8TLS连接/9重连失败）；connection.disconnect_source: 1隧道/2本机分流/3代理入口；connection.duration_seconds=连接持续秒数。openconnect.exit_code 与 openconnect.exit_signal 为实际 VPN 进程退出信息，transport.exited 为包装组件退出码。openconnect.reconnecting/reconnected/recovery_expired 分别表示正在恢复、恢复成功、超过 75 秒总恢复上限；reconnect_failed 是恢复失败线索，不单独等于已退出。network.*、system.sleep/wake 可用于时间关联，不单独证明根因。\n"
+            let serviceLegend = "\n分流日志说明：session.exit_first=清理前的首次退出原因；session.exit_final=相同原因及清理结果，value 为会话毫秒数；details.stage/reason/check 标明阶段、退出原因与具体检查结果。system.command_timeout/failed/slow/late_result 记录系统命令超时、失败、慢执行和超时后返回；以 PID 与 operationID 关联，durationMs/timeoutMs 为毫秒。transparent.route_cleanup_failed 区分读表、删除和复核失败，routeIndex 对应会话路由清单序号；worker.exited 的 details 包含退出码与信号。transparent.health_deferred/health_recovered 表示只读健康查询进入有界容错窗口/完整检查恢复；route_missing 是首次退出原因，route_add_incomplete 是路由清理失败原因，不是独立事件名。worker.exit.json 保留最近退出摘要，请核对 PID 和时间；服务旧版可能没有这些字段。\n"
+            let bridgeLegend = "\n桥接日志说明：bridge.jsonl/.1 的 bridge.trace 只记录固定阶段及数值；transaction 为显式标记探针的匿名事务号，flow 为目标连接编号，details.pid 为桥接 PID（外层 pid 为 App），timeMicros 为 UTC 微秒。socks_receive → udp_write_start/udp_write → pipe_write_start/pipe_write → pipe_read → stack_deliver → udp_read → socks_send 是关联环节，并非并发日志的严格写入顺序；udp_dial 标记拨号失败，udp_queue 标记队列拒绝或待发报文丢弃（0.11.14 起）。outcome/errno 为固定结果及错误号，bytes 为该阶段字节数，packetKind 为 STUN 类型。先检查同一桥接 PID 内的 sequence 连续性、dropped 与 appDropped；导出每个文件仅保留末尾 128 KiB，缺少记录不等于丢包。pipe_write 成功只证明交给本地通道，不证明远端收到。\n"
+            let output = report + legend + serviceLegend + bridgeLegend + "\n\n持久故障日志（UTC；仅固定代码、类别与数值）\n" + appLogs + "\n\n网络服务日志\n" + serviceLogs
             do {
                 try await Task.detached {
                     try output.write(to: url, atomically: true, encoding: .utf8)

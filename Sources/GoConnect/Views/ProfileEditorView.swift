@@ -106,7 +106,7 @@ struct ProfileEditorView: View {
             }
             .pickerStyle(.segmented).disabled(readOnly)
             Text(draft.connection.routingMode.explanation).font(.callout).foregroundStyle(.secondary)
-            LabeledContent("白名单 App / 服务", value: "\(draft.connection.applications.count) 个")
+            LabeledContent("代理应用与服务", value: "\(draft.connection.applications.count) 个")
             LabeledContent("直连 App / 服务", value: "\(draft.connection.excludedApplications.count) 个")
             Button("管理应用名单", systemImage: "arrow.up.forward") {
                 store.navigate(to: draft.connection.routingMode == .global ? .exclusions : .applications)

@@ -77,7 +77,10 @@ func parseRoutePrefix(value string) (netip.Prefix, bool) {
 		if len(octets) > 4 {
 			return netip.Prefix{}, false
 		}
-		bits = 32
+		// Darwin netstat omits trailing zero octets and the implied network
+		// width (203.0.113 means 203.0.113.0/24). A four-octet host remains /32;
+		// an explicit /prefix below always takes precedence.
+		bits = 8 * len(octets)
 		for len(octets) < 4 {
 			octets = append(octets, "0")
 		}

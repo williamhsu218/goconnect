@@ -5,9 +5,11 @@ enum AppTheme {
     static let accent = Color.accentColor
     static let success = Color.green
     static let warning = Color.orange
-    static let cardRadius: CGFloat = 18
+    static let cardRadius: CGFloat = 14
+    static let floatingRadius: CGFloat = 18
     static let itemRadius: CGFloat = 10
     static let buttonRadius: CGFloat = 8
+    static let surfacePadding: CGFloat = 18
     static let pagePadding: CGFloat = 24
     static let sectionSpacing: CGFloat = 20
     static let contentWidth: CGFloat = 980
@@ -16,6 +18,7 @@ enum AppTheme {
     static let windowBackground = Color(nsColor: .windowBackgroundColor)
     static let controlBackground = Color(nsColor: .controlBackgroundColor)
     static let subtleBorder = Color(nsColor: .separatorColor).opacity(0.4)
+    static let surfaceBorder = Color(nsColor: .separatorColor).opacity(0.6)
     static let selectedBackground = Color.accentColor.opacity(0.08)
 }
 
@@ -78,7 +81,7 @@ private struct CardSurface: ViewModifier {
         content
             .background(AppTheme.controlBackground, in: RoundedRectangle(cornerRadius: AppTheme.cardRadius, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: AppTheme.cardRadius, style: .continuous)
-                .strokeBorder(contrast == .increased ? Color.primary.opacity(0.5) : (emphasized ? AppTheme.accent.opacity(0.25) : Color.clear), lineWidth: 1))
+                .strokeBorder(contrast == .increased ? Color.primary.opacity(0.5) : (emphasized ? AppTheme.accent.opacity(0.25) : AppTheme.surfaceBorder), lineWidth: 1))
     }
 }
 
@@ -86,15 +89,27 @@ extension View {
     func cardSurface(emphasized: Bool = false) -> some View { modifier(CardSurface(emphasized: emphasized)) }
 }
 
+private struct SurfaceFillsHeightKey: EnvironmentKey { static let defaultValue = false }
+
+extension EnvironmentValues {
+    /// Lets side-by-side surfaces share a row height without changing surfaces elsewhere.
+    var surfaceFillsHeight: Bool {
+        get { self[SurfaceFillsHeightKey.self] }
+        set { self[SurfaceFillsHeightKey.self] = newValue }
+    }
+}
+
 struct Surface<Content: View>: View {
     let emphasized: Bool
     let content: Content
+    @Environment(\.surfaceFillsHeight) private var fillsHeight
     init(emphasized: Bool = false, @ViewBuilder content: () -> Content) {
         self.emphasized = emphasized; self.content = content()
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 0) { content }
-            .padding(20).frame(maxWidth: .infinity, alignment: .leading)
+            .padding(AppTheme.surfacePadding)
+            .frame(maxWidth: .infinity, maxHeight: fillsHeight ? .infinity : nil, alignment: .topLeading)
             .cardSurface(emphasized: emphasized)
     }
 }
@@ -153,13 +168,97 @@ private struct FloatingSurface: ViewModifier {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @ViewBuilder func body(content: Content) -> some View {
         if reduceTransparency {
-            content.background(AppTheme.controlBackground, in: RoundedRectangle(cornerRadius: AppTheme.cardRadius))
-                .overlay(RoundedRectangle(cornerRadius: AppTheme.cardRadius).strokeBorder(AppTheme.subtleBorder))
+            content.background(AppTheme.controlBackground, in: RoundedRectangle(cornerRadius: AppTheme.floatingRadius))
+                .overlay(RoundedRectangle(cornerRadius: AppTheme.floatingRadius).strokeBorder(AppTheme.subtleBorder))
         } else if #available(macOS 26.0, *) {
-            content.glassEffect(.regular, in: RoundedRectangle(cornerRadius: AppTheme.cardRadius))
+            content.glassEffect(.regular, in: RoundedRectangle(cornerRadius: AppTheme.floatingRadius))
         } else {
-            content.background(.regularMaterial, in: RoundedRectangle(cornerRadius: AppTheme.cardRadius))
+            content.background(.regularMaterial, in: RoundedRectangle(cornerRadius: AppTheme.floatingRadius))
         }
+    }
+}
+
+/// A faint, static wash behind connection content. Sidebar and toolbar keep their own
+/// materials, and the wash drops away when the system asks for plainer surfaces.
+struct ConnectionBackdrop: View {
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    var body: some View {
+        if contrast != .increased && !reduceTransparency {
+            LinearGradient(
+                colors: [AppTheme.accent.opacity(0.05), AppTheme.accent.opacity(0)],
+                startPoint: .topLeading,
+                endPoint: UnitPoint(x: 0.75, y: 0.55)
+            )
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
+    }
+}
+
+struct SectionHeader<Accessory: View>: View {
+    let title: String
+    let symbol: String
+    let accessory: Accessory
+
+    init(_ title: String, symbol: String, @ViewBuilder accessory: () -> Accessory) {
+        self.title = title; self.symbol = symbol; self.accessory = accessory()
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Label(title, systemImage: symbol).font(.headline)
+            Spacer(minLength: 8)
+            accessory
+        }
+    }
+}
+
+/// A primary reading with a smaller unit, for example "12.6" and "MB/s".
+struct MetricValueText: View {
+    let value: String
+    var size: CGFloat = 26
+
+    private var number: String {
+        value.lastIndex(of: " ").map { String(value[..<$0]) } ?? value
+    }
+    private var unit: String? {
+        value.lastIndex(of: " ").map { String(value[value.index(after: $0)...]) }
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 3) {
+            Text(number)
+                .font(.system(size: size, weight: .semibold))
+                .monospacedDigit()
+                .foregroundStyle(value == "—" ? Color.secondary : Color.primary)
+            if let unit {
+                Text(unit)
+                    .font(.system(size: size * 0.5, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .lineLimit(1)
+        .minimumScaleFactor(0.7)
+    }
+}
+
+/// Stale or risky data stays fully readable; the symbol carries the meaning alongside color.
+struct InlineNotice: View {
+    let text: String
+    var symbol = "exclamationmark.triangle.fill"
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: symbol)
+                .foregroundStyle(AppTheme.warning)
+                .accessibilityHidden(true)
+            Text(text)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .font(.subheadline)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

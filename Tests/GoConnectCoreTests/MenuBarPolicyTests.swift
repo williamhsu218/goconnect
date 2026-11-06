@@ -22,7 +22,7 @@ final class MenuBarPolicyTests: XCTestCase {
             XCTAssertEqual(p.actionTitle, "取消连接")
             XCTAssertFalse(p.quickConnectEnabled)
         }
-        for state in [VPNControlState.connected, .needsRestart, .interrupted] {
+        for state in [VPNControlState.connected, .reconnecting, .needsRestart, .interrupted] {
             let p = policy(state, busy: true, readable: false, draft: true)
             XCTAssertTrue(p.actionEnabled)
             XCTAssertEqual(p.actionTitle, "断开连接")

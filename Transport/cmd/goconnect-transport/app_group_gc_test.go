@@ -63,11 +63,13 @@ func TestDirectorySnapshotAndAllProfileProtection(t *testing.T) {
 	if xml.Unmarshal([]byte(`<plist><dict><key>a</key><array/><key>a</key><array/></dict></plist>`), &dup) == nil {
 		t.Fatal("accepted duplicate attribute")
 	}
-	paths, err := decodeConfiguredGroupPaths([]byte(`{"schemaVersion":5,"connections":[{"applications":[{"path":"/A.app"}]},{"excludedApplications":[{"path":"/B.app"}]}]}`))
-	if err != nil || !paths["/A.app"] || !paths["/B.app"] {
-		t.Fatal("lost other profile or direct app", err)
+	for _, version := range []int{5, 6, 7} {
+		paths, err := decodeConfiguredGroupPaths([]byte(fmt.Sprintf(`{"schemaVersion":%d,"connections":[{"applications":[{"path":"/A.app"}]},{"excludedApplications":[{"path":"/B.app"}]}]}`, version)))
+		if err != nil || !paths["/A.app"] || !paths["/B.app"] {
+			t.Fatal("lost other profile or direct app", version, err)
+		}
 	}
-	for _, data := range []string{`{}`, `{"schemaVersion":99,"connections":[{}]}`, `invalid`} {
+	for _, data := range []string{`{}`, `{"schemaVersion":4,"connections":[{}]}`, `{"schemaVersion":8,"connections":[{}]}`, `{"schemaVersion":99,"connections":[{}]}`, `invalid`} {
 		if _, err := decodeConfiguredGroupPaths([]byte(data)); err == nil {
 			t.Fatal("GC must skip unknown config")
 		}

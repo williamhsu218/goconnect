@@ -48,7 +48,7 @@ func main() {
 	}
 	switch os.Args[1] {
 	case "version":
-		fmt.Println("GoConnectTransport 0.11.10")
+		fmt.Println("GoConnectTransport " + transportVersion)
 	case "service-diagnostics":
 		err = serviceDiagnostics()
 	case "service-status":
@@ -81,12 +81,16 @@ func main() {
 		err = subscriptionCommand(ctx, true)
 	case "subscription-fetch":
 		err = subscriptionCommand(ctx, false)
+	case "subscription-file":
+		err = subscriptionFileCommand(ctx)
 	case "proxy-front":
 		err = proxyFrontSession(ctx)
 	case "company-hook":
 		err = errors.New("separate company VPN sessions are disabled")
 	case "subscription-session":
 		err = subscriptionSession(ctx)
+	case "public-ip":
+		err = publicIPCommand(ctx)
 	case "session":
 		err = session(ctx)
 	case "routing-check":
@@ -170,7 +174,7 @@ func session(parent context.Context) error {
 	defer cancel()
 	// Keeping stdin open is the lifetime lease from the GUI. EOF means stop.
 	go func() { _, _ = io.Copy(io.Discard, reader); cancel() }()
-	args := []string{"--protocol=anyconnect", "--verbose", "--non-inter", "--passwd-on-stdin", "--reconnect-timeout=0", "--script-tun", "--script", "exec " + shellQuote(self) + " pipe", "--user", r.Username}
+	args := []string{"--protocol=anyconnect", "--verbose", "--non-inter", "--passwd-on-stdin", "--reconnect-timeout=" + strconv.Itoa(reconnectTimeoutSeconds), "--script-tun", "--script", "exec " + shellQuote(self) + " pipe", "--user", r.Username}
 	if r.Group != "" {
 		args = append(args, "--authgroup", r.Group)
 	}
@@ -210,18 +214,35 @@ func session(parent context.Context) error {
 	stdoutWrite.Close()
 	stderrWrite.Close()
 	emitCoreDiagnostic("openconnect.started", cmd.Process.Pid)
-	emitCoreDiagnostic("openconnect.reconnect_timeout_seconds", 0)
+	emitCoreDiagnostic("openconnect.reconnect_timeout_seconds", reconnectTimeoutSeconds)
 	r.Password = ""
 	line = nil
 	var readers sync.WaitGroup
 	readers.Add(2)
 	ready := make(chan struct{}, 1)
 	var diagnosticMu sync.Mutex
+	var recovery transportRecovery
+	recoveryEvent := func(event string) {
+		if event == "" || ctx.Err() != nil {
+			return
+		}
+		if event == "recovery_expired" {
+			emitCoreDiagnostic("openconnect.recovery_expired", int(transportRecoveryLimit.Seconds()))
+			fail("隧道持续无法恢复，已结束本次连接。")
+			cancel()
+			return
+		}
+		emitCoreDiagnostic("openconnect."+event, 0)
+		emit(map[string]any{"event": event})
+	}
 	seen := make(map[string]int)
 	observeCoreLine := func(line string) {
 		diagnosticMu.Lock()
 		defer diagnosticMu.Unlock()
 		for _, d := range classifyOpenConnect(line) {
+			// State transitions must precede diagnostic deduplication: a second
+			// outage can have exactly the same DPD and keepalive values.
+			recoveryEvent(recovery.observe(d.Code, time.Now()))
 			if value, exists := seen[d.Code]; exists && value == d.Value {
 				continue
 			}
@@ -229,9 +250,11 @@ func session(parent context.Context) error {
 			emitCoreDiagnostic(d.Code, d.Value)
 			if d.Code == "openconnect.certificate_failed" {
 				fail("服务器证书校验未通过。请确认服务器地址或配置受信任的证书。")
+				cancel()
 			}
 			if d.Code == "openconnect.authentication_failed" {
 				fail("身份认证失败，请检查账号、密码和连接组。")
+				cancel()
 			}
 		}
 	}
@@ -293,8 +316,16 @@ func session(parent context.Context) error {
 	}()
 	timer := time.NewTimer(75 * time.Second)
 	defer timer.Stop()
+	recoveryTick := time.NewTicker(time.Second)
+	defer recoveryTick.Stop()
 	for {
 		select {
+		case <-recoveryTick.C:
+			diagnosticMu.Lock()
+			if recovery.expire(time.Now()) {
+				recoveryEvent("recovery_expired")
+			}
+			diagnosticMu.Unlock()
 		case <-ready:
 			emitCoreDiagnostic("openconnect.ready", 0)
 			if !timer.Stop() {
@@ -383,7 +414,14 @@ func packetPipe(parent context.Context) error {
 	defer listener.Close()
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
-	go func() { _ = (&bridge.SOCKSServer{Dialer: stack, Token: token}).Serve(ctx, listener); cancel() }()
+	packetDiagnostics := bridge.NewDiagnostics(ctx, func(observation bridge.Observation) {
+		emit(map[string]any{"event": "bridge_diagnostic", "bridge": observation})
+	})
+	stack.Observe = packetDiagnostics.Observe
+	go func() {
+		_ = (&bridge.SOCKSServer{Dialer: stack, Token: token, Observe: packetDiagnostics.Observe}).Serve(ctx, listener)
+		cancel()
+	}()
 	gateway := os.Getenv("VPNGATEWAY")
 	remoteNetworks, remoteExcluded, err := advertisedRemoteNetworks(os.Getenv)
 	if err != nil {

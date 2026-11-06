@@ -17,38 +17,37 @@ import (
 	"time"
 )
 
-func ownedTransparentRouteInTable(table []byte, r transparentRoute) bool {
+func routeDestinationMatches(value string, r transparentRoute) bool {
 	want, err := netip.ParsePrefix(r.Prefix)
 	if err != nil {
 		return false
 	}
+	if value == "default" {
+		return want.Bits() == 0
+	}
+	prefix, ok := parseRoutePrefix(value)
+	return ok && prefix == want.Masked()
+}
+func routeDestinationInTable(table []byte, r transparentRoute) bool {
 	for _, line := range strings.Split(string(table), "\n") {
 		f := strings.Fields(line)
-		if len(f) < 4 || f[3] != r.Interface || !strings.Contains(f[2], "U") || !strings.Contains(f[2], "S") || strings.ContainsAny(f[2], "WLY") {
-			continue
+		if len(f) >= 4 && (!r.Scoped || f[3] == r.Interface) && strings.Contains(f[2], "I") == r.Scoped && routeDestinationMatches(f[0], r) {
+			return true
 		}
-		// Scoped and global entries are separate owners, even on the same NIC.
-		if strings.Contains(f[2], "I") != r.Scoped {
-			continue
-		}
-		var prefix netip.Prefix
-		if f[0] == "default" {
-			prefix = netip.PrefixFrom(want.Addr().Unmap(), 0).Masked()
-		} else {
-			var ok bool
-			prefix, ok = parseRoutePrefix(f[0])
-			if !ok {
-				continue
-			}
-		}
-		if prefix != want.Masked() {
+	}
+	return false
+}
+func ownedTransparentRouteInTable(table []byte, r transparentRoute) bool {
+	for _, line := range strings.Split(string(table), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 4 || f[3] != r.Interface || !strings.Contains(f[2], "U") || !strings.Contains(f[2], "S") || strings.ContainsAny(f[2], "WLY") || strings.Contains(f[2], "I") != r.Scoped || !routeDestinationMatches(f[0], r) {
 			continue
 		}
 		if r.Gateway != "" {
-			if f[1] != r.Gateway {
+			if !sameRouteGateway(f[1], r.Gateway) {
 				continue
 			}
-		} else if !strings.HasPrefix(f[1], "link#") || strings.Contains(f[2], "G") {
+		} else if (!strings.HasPrefix(f[1], "link#") && f[1] != r.Interface) || strings.Contains(f[2], "G") {
 			continue
 		}
 		return true
@@ -89,7 +88,7 @@ func validateRecoveryState(s transparentState) error {
 		if r.Scoped && p.Bits() == 0 {
 			continue
 		}
-		if !r.Scoped && p.Addr().Is4() && p.Bits() == 32 {
+		if !r.Scoped && p.Bits() == p.Addr().BitLen() {
 			continue
 		}
 		return errors.New("unrecognized recovery route")
@@ -99,31 +98,104 @@ func validateRecoveryState(s transparentState) error {
 
 func readRecoveryState(directory string, uid uint32) (transparentState, []byte, error) {
 	var s transparentState
-	st, err := os.Lstat(directory)
+	data, err := readRecoveryJournal(directory, uid)
 	if err != nil {
 		return s, nil, err
 	}
+	if err = decodeRecoveryJournal(data, &s); err != nil {
+		return s, nil, err
+	}
+	return s, data, validateRecoveryState(s)
+}
+
+func decodeRecoveryJournal(data []byte, value any) error {
+	d := json.NewDecoder(bytes.NewReader(data))
+	d.DisallowUnknownFields()
+	if err := d.Decode(value); err != nil {
+		return err
+	}
+	if d.Decode(new(any)) != io.EOF {
+		return errors.New("trailing recovery data")
+	}
+	return nil
+}
+
+func readRecoveryJournal(directory string, uid uint32) ([]byte, error) {
+	st, err := os.Lstat(directory)
+	if err != nil {
+		return nil, err
+	}
 	if !st.IsDir() || st.Mode().Perm() != 0700 {
-		return s, nil, errors.New("unsafe recovery directory")
+		return nil, errors.New("unsafe recovery directory")
 	}
 	f, err := os.Open(directory)
 	if err != nil {
-		return s, nil, err
+		return nil, err
 	}
 	defer f.Close()
 	data, _, err := readOwned(f, "state.json", uid)
-	if err != nil {
-		return s, nil, err
+	return data, err
+}
+
+func validateCompanyRecoveryState(s companyState) error {
+	// Old company journals do not contain a PID. Recovery additionally requires
+	// absence of every managed root core and of the recorded TUN interface.
+	if err := validateRecoveryState(transparentState{Device: s.Device, State: s.State}); err != nil {
+		return err
 	}
-	d := json.NewDecoder(bytes.NewReader(data))
-	d.DisallowUnknownFields()
-	if err = d.Decode(&s); err != nil {
-		return s, nil, err
+	if len(s.Networks) == 0 || len(s.Networks) > 256 || len(s.Added) > 256 || len(s.Pending) > 256 || len(s.Addresses) > 256 {
+		return errors.New("invalid company journal")
 	}
-	if d.Decode(new(any)) != io.EOF {
-		return s, nil, errors.New("trailing recovery data")
+	networks := map[string]bool{}
+	for _, value := range s.Networks {
+		p, ok := remotePrefix(value)
+		if !ok || p.String() != value || networks[value] {
+			return errors.New("invalid company network")
+		}
+		networks[value] = true
 	}
-	return s, data, validateRecoveryState(s)
+	added := map[string]bool{}
+	for _, value := range s.Added {
+		if !networks[value] || added[value] {
+			return errors.New("unrecognized company route")
+		}
+		added[value] = true
+	}
+	pending := map[string]bool{}
+	for _, value := range s.Pending {
+		if !added[value] || pending[value] {
+			return errors.New("unrecognized pending company route")
+		}
+		pending[value] = true
+	}
+	return nil
+}
+
+func recoverCompanyDirectory(directory string, uid uint32, processes []processIdentity, interfaces []net.Interface, command func(string, ...string) ([]byte, error), backup func(string, []byte) error) error {
+	data, err := readRecoveryJournal(directory, uid)
+	var s companyState
+	if err != nil || decodeRecoveryJournal(data, &s) != nil || validateCompanyRecoveryState(s) != nil {
+		return errors.New("残留公司会话记录无效，已保留现场；请导出诊断。")
+	}
+	if len(s.Pending) > 0 {
+		return errors.New("公司路由操作结果尚未确认，已保留现场；请导出诊断。")
+	}
+	if !recoverySafe(transparentState{Device: s.Device}, processes, interfaces) {
+		return errors.New("旧公司分流进程或虚拟网卡仍在使用，已暂停恢复；请导出诊断。")
+	}
+	if err = backup(filepath.Base(directory), data); err != nil {
+		return errors.New("无法备份残留公司会话，未清理；请导出诊断。")
+	}
+	trace("session.recovery_started", int64(len(s.Added)))
+	if err = cleanupCompanyWith(filepath.Join(directory, "state.json"), s, command); err != nil {
+		trace("session.recovery_failed", 1)
+		return err
+	}
+	if err = os.RemoveAll(directory); err != nil {
+		return errors.New("无法释放残留公司会话目录；请导出诊断。")
+	}
+	trace("session.recovery_ok", 1)
+	return nil
 }
 
 func recoverySafe(s transparentState, processes []processIdentity, interfaces []net.Interface) bool {
@@ -190,18 +262,34 @@ func recoverySummary() string {
 		return "unavailable"
 	}
 	var record struct {
-		Time    string           `json:"time"`
-		Journal transparentState `json:"journal"`
+		Time    string          `json:"time"`
+		Session string          `json:"session"`
+		Journal json.RawMessage `json:"journal"`
 	}
-	if json.Unmarshal(data, &record) != nil || validateRecoveryState(record.Journal) != nil {
+	if json.Unmarshal(data, &record) != nil {
 		return "unavailable"
+	}
+	var previous string
+	var routes int
+	if strings.HasPrefix(record.Session, "company-") {
+		var s companyState
+		if decodeRecoveryJournal(record.Journal, &s) != nil || validateCompanyRecoveryState(s) != nil {
+			return "unavailable"
+		}
+		previous, routes = s.State, len(s.Added)
+	} else {
+		var s transparentState
+		if decodeRecoveryJournal(record.Journal, &s) != nil || validateRecoveryState(s) != nil {
+			return "unavailable"
+		}
+		previous, routes = s.State, len(s.Routes)
 	}
 	// Expose only bounded metadata through the existing authenticated diagnostics.
 	result, _ := json.Marshal(struct {
 		Time          string `json:"time"`
 		PreviousState string `json:"previousState"`
 		Routes        int    `json:"recordedRoutes"`
-	}{record.Time, record.Journal.State, len(record.Journal.Routes)})
+	}{record.Time, previous, routes})
 	return string(result)
 }
 
@@ -210,6 +298,11 @@ func recoverTransparentDirectory(directory string, uid uint32, processes []proce
 	if err != nil {
 		trace("session.recovery_invalid", 1)
 		return errors.New("残留会话记录无效，已保留现场；请导出诊断。")
+	}
+	for _, route := range s.Routes {
+		if route.Pending {
+			return errors.New("残留路由操作结果尚未确认，已保留现场；请导出诊断，避免误删其它服务路由。")
+		}
 	}
 	if !recoverySafe(s, processes, interfaces) {
 		trace("session.recovery_active", 1)
@@ -242,10 +335,7 @@ func recoverAbandonedSessions() error {
 	}
 	var directories []string
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), "company-") {
-			return errors.New("存在旧公司路由记录，已保留现场；请导出诊断。")
-		}
-		if strings.HasPrefix(entry.Name(), "transparent-") {
+		if strings.HasPrefix(entry.Name(), "transparent-") || strings.HasPrefix(entry.Name(), "company-") {
 			directories = append(directories, filepath.Join(serviceRunDirectory, entry.Name()))
 		}
 	}
@@ -267,7 +357,11 @@ func recoverAbandonedSessions() error {
 		if err = secureRootPath(directory, true); err != nil {
 			return err
 		}
-		if err = recoverTransparentDirectory(directory, 0, processes, interfaces, systemCommand, backupRecoveryState); err != nil {
+		recover := recoverTransparentDirectory
+		if strings.HasPrefix(filepath.Base(directory), "company-") {
+			recover = recoverCompanyDirectory
+		}
+		if err = recover(directory, 0, processes, interfaces, systemCommand, backupRecoveryState); err != nil {
 			return err
 		}
 	}

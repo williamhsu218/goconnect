@@ -4,13 +4,27 @@ import GoConnectCore
 struct DiagnosticsView: View {
     let store: AppStore
     @State private var clearingLogs = false
+    @State private var showingServiceDetails = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: AppTheme.sectionSpacing) {
                 PageHeading(title: "连接诊断", subtitle: "查看本地环境和本次运行状态。")
 
-                NetworkServiceCard(store: store)
+                    DisclosureGroup(isExpanded: $showingServiceDetails) {
+                        NetworkServiceCard(store: store)
+                            .padding(.top, 12)
+                    } label: {
+                        HStack(spacing: 10) {
+                            Label("本机网络服务", systemImage: "gearshape.2")
+                                .font(.headline)
+                            Spacer()
+                            Text(store.networkService.status.title)
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.vertical, 6)
 
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 280), spacing: AppTheme.sectionSpacing, alignment: .topLeading)], alignment: .leading, spacing: AppTheme.sectionSpacing) {
                     Surface {
@@ -42,7 +56,7 @@ struct DiagnosticsView: View {
                                     Text("实时连接分流").font(.callout)
                                     Spacer()
                                     HStack(spacing: 6) {
-                                        Label("\(snapshot.vpn) VPN", systemImage: "shield.fill")
+                                        Label("\(snapshot.vpn) VPN", systemImage: "network")
                                             .font(.caption.weight(.semibold).monospacedDigit())
                                             .foregroundStyle(AppTheme.accent)
                                         Text("·").foregroundStyle(.secondary)
@@ -345,9 +359,11 @@ struct NetworkServiceCard: View {
 
 struct PreferencesView: View {
     var showMenuBar: () -> Void = {}
+    var updater: AppUpdater? = nil
     var body: some View {
         Form {
-            Section("菜单栏") { Button("重新显示菜单栏快捷菜单", action: showMenuBar) }
+            MenuBarSettings(showMenuBar: showMenuBar)
+            if let updater { AppUpdateSettings(updater: updater) }
             Section("关于 GoConnect") {
                 LabeledContent("版本", value: Product.version)
                 LabeledContent("连接协议", value: "AnyConnect / Clash 订阅节点")

@@ -100,18 +100,25 @@ func startHelper(t *testing.T, server, ca string) *helper {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stdout, err := h.cmd.StdoutPipe()
+	stdout, stdoutWrite, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
+	h.cmd.Stdout = stdoutWrite
 	if err = h.cmd.Start(); err != nil {
+		stdout.Close()
+		stdoutWrite.Close()
 		t.Fatal(err)
 	}
+	stdoutWrite.Close()
 	r := map[string]any{"server": server, "username": "fixture-user", "password": "synthetic-secret-never-log", "group": "", "token": strings.Repeat("local-fixture-token-", 3), "openconnectPath": filepath.Join(runtime, "bin/openconnect"), "caFile": ca}
 	if err = json.NewEncoder(h.input).Encode(r); err != nil {
 		t.Fatal(err)
 	}
+	drained := make(chan struct{})
 	go func() {
+		defer close(drained)
+		defer stdout.Close()
 		scanner := bufio.NewScanner(stdout)
 		for scanner.Scan() {
 			var event map[string]any
@@ -121,7 +128,7 @@ func startHelper(t *testing.T, server, ca string) *helper {
 		}
 		close(h.events)
 	}()
-	go func() { h.ended <- h.cmd.Wait() }()
+	go func() { err := h.cmd.Wait(); <-drained; h.ended <- err }()
 	t.Cleanup(func() {
 		_ = h.input.Close()
 		select {

@@ -15,13 +15,18 @@ type coreDiagnostic struct {
 
 var cstpTiming = regexp.MustCompile(`^CSTP connected\. DPD ([0-9]{1,9}), Keepalive ([0-9]{1,9})$`)
 var cstpTimeout = regexp.MustCompile(`^X-CSTP-(Session-Timeout|Session-Timeout-Remaining|Idle-Timeout): ([0-9]{1,9})$`)
+var reconnectWait = regexp.MustCompile(`^sleep ([0-9]{1,9})s, remaining timeout ([0-9]{1,9})s$`)
 
 func classifyOpenConnect(line string) []coreDiagnostic {
 	line = strings.TrimSpace(line)
 	if match := cstpTiming.FindStringSubmatch(line); match != nil {
 		dpd, _ := strconv.Atoi(match[1])
 		keepalive, _ := strconv.Atoi(match[2])
-		return []coreDiagnostic{{"openconnect.dpd_seconds", dpd}, {"openconnect.keepalive_seconds", keepalive}}
+		return []coreDiagnostic{{"openconnect.cstp_connected", 0}, {"openconnect.dpd_seconds", dpd}, {"openconnect.keepalive_seconds", keepalive}}
+	}
+	if match := reconnectWait.FindStringSubmatch(line); match != nil {
+		seconds, _ := strconv.Atoi(match[1])
+		return []coreDiagnostic{{"openconnect.retry_wait_seconds", seconds}}
 	}
 	if match := cstpTimeout.FindStringSubmatch(line); match != nil {
 		codes := map[string]string{"Session-Timeout": "openconnect.session_timeout_seconds", "Session-Timeout-Remaining": "openconnect.session_remaining_seconds", "Idle-Timeout": "openconnect.idle_timeout_seconds"}
@@ -42,15 +47,15 @@ func classifyOpenConnect(line string) []coreDiagnostic {
 		}
 	case lower == "session terminated by server; exiting.", lower == "received server disconnect":
 		code = "openconnect.server_disconnect"
-	case lower == "cookie was rejected by server; exiting.":
+	case lower == "cookie was rejected by server; exiting.", lower == "cookie is no longer valid, ending session":
 		code = "openconnect.cookie_rejected"
 	case lower == "server terminated connection (session expired)", lower == "vpn session expired":
 		code = "openconnect.session_expired"
 	case strings.HasPrefix(lower, "cstp dead peer detection detected dead peer"):
 		code = "openconnect.dpd_timeout"
-	case strings.HasPrefix(lower, "ssl read error"), strings.HasPrefix(lower, "ssl_read"):
+	case strings.HasPrefix(lower, "ssl read error"), strings.HasPrefix(lower, "ssl_read"), strings.HasPrefix(lower, "read error on ssl session:"), lower == "server has closed connection":
 		code = "openconnect.tls_read_failed"
-	case strings.HasPrefix(lower, "ssl write error"), strings.HasPrefix(lower, "ssl_write"):
+	case strings.HasPrefix(lower, "ssl write error"), strings.HasPrefix(lower, "ssl_write"), strings.HasPrefix(lower, "write error on ssl session:"):
 		code = "openconnect.tls_write_failed"
 	case strings.HasPrefix(lower, "ssl connection failure"), lower == "creating ssl connection failed":
 		code = "openconnect.tls_failed"

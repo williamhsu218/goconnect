@@ -22,19 +22,32 @@ struct ProfilesView: View {
         }
     }
 
+    private var newDraftID: UUID? {
+        guard let draft = store.profileDraft, draft.isNew else { return nil }
+        return draft.id
+    }
+
+    /// The saved line being viewed; an unsaved new draft has no history yet.
+    private var trafficTargetID: UUID? {
+        if let draft = store.profileDraft { return draft.isNew ? nil : draft.id }
+        return selectedProfileID ?? store.configuration.activeProfileID
+    }
+
     var body: some View {
-        HStack(spacing: 0) {
-            // Master Pane (Left)
+        HSplitView {
             masterPane
-                .frame(width: 260)
-
-            Divider()
-
-            // Detail Pane (Right)
+                .frame(minWidth: 220, idealWidth: 240, maxWidth: 300)
             detailPane
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: 380, maxWidth: .infinity, maxHeight: .infinity)
         }
         .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button("查看线路流量", systemImage: "chart.bar.xaxis") {
+                    if let trafficTargetID { store.showTraffic(for: trafficTargetID) }
+                }
+                .disabled(trafficTargetID == nil)
+                .help(trafficTargetID == nil ? "保存线路后可查看流量" : "查看这条线路的流量统计")
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button("新建线路", systemImage: "plus") { createNewProfile() }
                     .disabled(!store.configurationReadable || store.configuration.connections.count >= 64)
@@ -90,7 +103,7 @@ struct ProfilesView: View {
                 HStack(alignment: .center) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("线路配置")
-                            .font(.system(size: 17, weight: .bold))
+                            .font(.headline)
                         Text("\(store.configuration.connections.count) 条已保存线路")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -117,7 +130,8 @@ struct ProfilesView: View {
             Divider()
 
             // List of profile cards
-            List(selection: Binding<UUID?>(get: { selectedProfileID }, set: { id in
+            ScrollViewReader { proxy in
+              List(selection: Binding<UUID?>(get: { selectedProfileID }, set: { id in
                 if let id { selectProfileItem(id) }
             })) {
                     if let draft = store.profileDraft, draft.isNew {
@@ -145,10 +159,21 @@ struct ProfilesView: View {
                             canDelete: (!store.busy || connection.id != store.configuration.activeProfileID) && store.configuration.connections.count > 1 && store.configurationReadable
                         )
                         .tag(connection.id)
+                        .id(connection.id)
                     }
             }
+            // Recreate the native list when a draft enters or leaves; macOS can
+            // otherwise keep the inserted row at its default single-line height.
+            .id(newDraftID)
             .listStyle(.inset)
             .scrollContentBackground(.hidden)
+            .task(id: selectedProfileID) {
+                await Task.yield()
+                if let selectedProfileID {
+                    proxy.scrollTo(selectedProfileID, anchor: .center)
+                }
+            }
+            }
         }
     }
 
@@ -158,7 +183,7 @@ struct ProfilesView: View {
                 Image(systemName: "plus.circle.fill")
                     .font(.system(size: 15))
                     .foregroundStyle(AppTheme.accent)
-                Text(draft.connection.displayName.isEmpty ? "新建线路（草稿）" : draft.connection.displayName)
+                Text(draft.connection.profile.name.isEmpty ? "新建线路" : draft.connection.displayName)
                     .font(.system(size: 13, weight: .semibold))
                     .lineLimit(1)
                 Spacer()
@@ -171,6 +196,10 @@ struct ProfilesView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
+        // Preserve both lines when the native list measures the draft card.
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .id(draft.id)
         .background(
             RoundedRectangle(cornerRadius: AppTheme.itemRadius, style: .continuous)
                 .fill(AppTheme.selectedBackground)
@@ -179,6 +208,7 @@ struct ProfilesView: View {
             RoundedRectangle(cornerRadius: AppTheme.itemRadius, style: .continuous)
                 .strokeBorder(AppTheme.accent.opacity(0.45), lineWidth: 1.5)
         )
+        .accessibilityElement(children: .combine)
     }
 
     private var detailPane: some View {
@@ -263,7 +293,7 @@ struct ProfilesView: View {
     }
 
     private func selectProfileItem(_ id: UUID) {
-        guard id != store.profileDraft?.id || store.profileDraft?.isNew == true else { return }
+        guard id != store.profileDraft?.id else { return }
         if store.profileDraftHasChanges {
             pendingProfileSwitch = id
             store.cancelProfileEditing()
@@ -337,7 +367,7 @@ private struct ProfileMasterCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 5) {
                 HStack(alignment: .center, spacing: 8) {
                     Image(systemName: connection.subscription != nil ? "arrow.triangle.swap" : "network")
                         .font(.system(size: 14, weight: .medium))
@@ -348,6 +378,7 @@ private struct ProfileMasterCard: View {
                         .font(.system(size: 13, weight: isSelected ? .semibold : .medium))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
+                        .help(connection.displayName)
 
                     Spacer()
 
@@ -373,7 +404,7 @@ private struct ProfileMasterCard: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .padding(.vertical, 8)
+            .padding(.vertical, 7)
             .contentShape(Rectangle())
             .accessibilityElement(children: .combine)
         .contextMenu {

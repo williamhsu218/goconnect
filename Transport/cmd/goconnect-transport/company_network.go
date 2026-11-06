@@ -23,6 +23,7 @@ type companyState struct {
 	Device    string   `json:"device"`
 	Networks  []string `json:"networks"`
 	Added     []string `json:"added"`
+	Pending   []string `json:"pending,omitempty"`
 	Addresses []string `json:"addresses"`
 	State     string   `json:"state"`
 }
@@ -136,8 +137,19 @@ func cleanupCompany(path string) error {
 	if err != nil {
 		return err
 	}
+	return cleanupCompanyWith(path, s, systemCommand)
+}
+
+func cleanupCompanyWith(path string, s companyState, command func(string, ...string) ([]byte, error)) error {
+	if err := validateCompanyRecoveryState(s); err != nil {
+		return err
+	}
 	var remaining []string
 	for _, value := range s.Added {
+		if containsCompanyPending(s, value) {
+			remaining = append(remaining, value)
+			continue
+		}
 		p, ok := remotePrefix(value)
 		if !ok {
 			return errors.New("invalid recorded route")
@@ -146,17 +158,22 @@ func cleanupCompany(path string) error {
 		if p.Addr().Is4() {
 			family = "-inet"
 		}
-		current, e := systemCommand("/sbin/route", "-n", "get", family, p.Addr().String())
+		route := transparentRoute{Prefix: p.String(), Interface: s.Device}
+		current, e := command("/usr/sbin/netstat", "-rn", "-f", strings.TrimPrefix(family, "-"))
 		if e != nil {
 			remaining = append(remaining, value)
 			continue
 		}
 		// Never delete a route that another network service replaced.
-		if companyRouteInterface(current) != s.Device {
+		if !ownedTransparentRouteInTable(current, route) {
 			continue
 		}
-		if _, e = systemCommand("/sbin/route", "-n", "delete", family, "-net", p.String(), "-interface", s.Device); e != nil {
-			remaining = append(remaining, value)
+		_, e = command("/sbin/route", transparentRouteArguments("delete", route)...)
+		{
+			current, queryErr := command("/usr/sbin/netstat", "-rn", "-f", strings.TrimPrefix(family, "-"))
+			if queryErr != nil || ownedTransparentRouteInTable(current, route) {
+				remaining = append(remaining, value)
+			}
 		}
 	}
 	s.Added = remaining
@@ -164,7 +181,7 @@ func cleanupCompany(path string) error {
 	if len(remaining) > 0 {
 		s.State = "cleanupFailed"
 	}
-	if err = saveCompanyState(path, s); err != nil {
+	if err := saveCompanyState(path, s); err != nil {
 		return err
 	}
 	if len(remaining) > 0 {
@@ -194,28 +211,50 @@ func makeSharedCompanyConfig(r routeRequest, device string, port uint16) map[str
 	}
 }
 
+func containsCompanyPending(s companyState, value string) bool {
+	for _, pending := range s.Pending {
+		if pending == value {
+			return true
+		}
+	}
+	return false
+}
+
 func installCompanyRoutes(path string) error {
 	s, err := readCompanyState(path)
 	if err != nil {
 		return err
 	}
-	for _, value := range s.Networks {
-		p, _ := remotePrefix(value)
-		family := "-inet6"
-		if p.Addr().Is4() {
-			family = "-inet"
+	return installCompanyRoutesWith(path, &s, systemCommand)
+}
+
+func installCompanyRoutesWith(path string, s *companyState, command func(string, ...string) ([]byte, error)) error {
+	if err := validateCompanyRecoveryState(*s); err != nil {
+		return err
+	}
+	journal := transparentState{Device: s.Device, State: s.State}
+	for _, value := range s.Added {
+		journal.Routes = append(journal.Routes, transparentRoute{Prefix: value, Interface: s.Device, Pending: containsCompanyPending(*s, value)})
+	}
+	save := func(state transparentState) error {
+		s.Added, s.Pending = nil, nil
+		for _, route := range state.Routes {
+			s.Added = append(s.Added, route.Prefix)
+			if route.Pending {
+				s.Pending = append(s.Pending, route.Prefix)
+			}
 		}
-		// Journal before mutation. No route replacement; a collision is an error.
-		s.Added = append(s.Added, value)
-		if err = saveCompanyState(path, s); err != nil {
+		s.State = state.State
+		return saveCompanyState(path, *s)
+	}
+	for _, value := range s.Networks {
+		route := transparentRoute{Prefix: value, Interface: s.Device}
+		if err := addTransparentRouteWithJournal(&journal, route, command, save); err != nil {
 			return err
 		}
-		if _, err = systemCommand("/sbin/route", "-n", "add", family, "-net", p.String(), "-interface", s.Device); err != nil {
-			return errors.New("公司路由冲突，已停止配置。")
-		}
 	}
-	s.State = "ready"
-	return saveCompanyState(path, s)
+	journal.State = "ready"
+	return save(journal)
 }
 
 func companySessionForOwner(ctx context.Context, path string, uid uint32, pid int) (result error) {
@@ -231,25 +270,14 @@ func companySessionForOwner(ctx context.Context, path string, uid uint32, pid in
 	}
 	c.snapshot.CaptureMode = "shared-company-routes"
 	c.write("starting")
-	defer func() {
-		if result != nil {
-			c.snapshot.Message = result.Error()
-			c.write("failed")
-		} else {
-			c.write("stopped")
-		}
-	}()
+	defer c.finishSession(&result)
 	lock, err := captureLock()
 	if err != nil {
 		return err
 	}
 	defer lock.Close()
-	leftovers, err := filepath.Glob(filepath.Join(serviceRunDirectory, "company-*"))
-	if err != nil {
+	if err = recoverAbandonedSessions(); err != nil {
 		return err
-	}
-	if len(leftovers) > 0 {
-		return errors.New("发现未清理的公司路由，已暂停新连接；请先检查诊断。")
 	}
 	local, err := discoverLocalNetworks()
 	if err != nil {
@@ -309,23 +337,27 @@ func companySessionForOwner(ctx context.Context, path string, uid uint32, pid in
 	if err != nil {
 		return err
 	}
-	dir, err := os.MkdirTemp(serviceRunDirectory, "company-")
+	dir, err := initializeSessionDirectory(serviceRunDirectory, "company-", func(path string) error {
+		return saveCompanyState(path, companyState{Device: device, Networks: networks, State: "starting"})
+	})
 	if err != nil {
 		return err
 	}
 	statePath := filepath.Join(dir, "state.json")
-	if err = saveCompanyState(statePath, companyState{Device: device, Networks: networks, State: "starting"}); err != nil {
-		return err
-	}
-	safeToClean := true
+	var child *exec.Cmd
+	var done chan error
 	defer func() {
-		if !safeToClean {
+		cleanupErr := cleanupCompany(statePath)
+		var stopErr error
+		if child != nil {
+			stopErr = stopChild(child, done)
+		}
+		if cleanupErr != nil || stopErr != nil {
+			result = errors.Join(result, cleanupErr, stopErr)
 			return
 		}
-		if e := cleanupCompany(statePath); e != nil {
-			result = e
-		} else {
-			_ = os.RemoveAll(dir)
+		if e := os.RemoveAll(dir); e != nil {
+			result = errors.Join(result, e)
 		}
 	}()
 	data, err := json.Marshal(makeSharedCompanyConfig(c.request, device, port))
@@ -341,17 +373,15 @@ func companySessionForOwner(ctx context.Context, path string, uid uint32, pid in
 	cmd.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LANG=C"}
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
+	if ctx.Err() != nil || !c.alive() {
+		return nil
+	}
 	if err = cmd.Start(); err != nil {
 		return err
 	}
-	done := make(chan error, 1)
+	child = cmd
+	done = make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
-	defer func() {
-		if e := stopChild(cmd, done); e != nil {
-			safeToClean = false
-			result = e
-		}
-	}()
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 	started := time.Now()
@@ -383,8 +413,24 @@ func companySessionForOwner(ctx context.Context, path string, uid uint32, pid in
 					if _, e = companyPlan(networks, local, tails); e != nil {
 						return e
 					}
-					if e = installCompanyRoutes(statePath); e != nil {
+					command := func(name string, args ...string) ([]byte, error) {
+						if name == "/sbin/route" && len(args) > 1 && args[1] == "add" && (ctx.Err() != nil || !c.alive()) {
+							return nil, errSessionEnded
+						}
+						return systemCommand(name, args...)
+					}
+					state, e := readCompanyState(statePath)
+					if e != nil {
 						return e
+					}
+					if e = installCompanyRoutesWith(statePath, &state, command); e != nil {
+						if errors.Is(e, errSessionEnded) {
+							return nil
+						}
+						return e
+					}
+					if ctx.Err() != nil || !c.alive() {
+						return nil
 					}
 					isReady = true
 					c.snapshot.SystemDevice = device
@@ -397,6 +443,17 @@ func companySessionForOwner(ctx context.Context, path string, uid uint32, pid in
 				}
 			} else if time.Since(lastScope) > 15*time.Second {
 				lastScope = time.Now()
+				if !ready(client, port, c.request.Token, device) {
+					return errors.New("公司网段转发核心未响应，已停止连接。")
+				}
+				required := make([]transparentRoute, 0, len(networks))
+				for _, prefix := range networks {
+					required = append(required, transparentRoute{Prefix: prefix, Interface: device})
+				}
+				if _, e := verifyTransparentRoutePlan(required, systemCommand); e != nil {
+					return e
+				}
+
 				local, e := discoverLocalNetworks()
 				if e != nil {
 					return e

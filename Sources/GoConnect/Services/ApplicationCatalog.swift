@@ -19,12 +19,13 @@ struct ApplicationCatalog {
         guard !name.isEmpty else { return nil }
         return AllowedApplication(name: name, bundleID: "executable." + name, path: path)
     }
-    static func scan() -> [AllowedApplication] {
-        let roots = [URL(fileURLWithPath: "/Applications"), FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications"), URL(fileURLWithPath: "/System/Applications")]
+    static func scan(roots: [URL] = [URL(fileURLWithPath: "/Applications"), FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications"), URL(fileURLWithPath: "/System/Applications")], maximumDepth: Int = 3) -> [AllowedApplication] {
+        guard maximumDepth > 0 else { return [] }
         var result: [AllowedApplication] = []
         for root in roots {
             guard let iterator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { continue }
             for case let url as URL in iterator {
+                if iterator.level >= maximumDepth { iterator.skipDescendants() }
                 if let app = application(at: url), app.bundleID != Product.bundleID { result.append(app) }
             }
         }

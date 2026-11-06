@@ -1,9 +1,11 @@
 import Foundation
 import GoConnectCore
+import AppKit
+import UniformTypeIdentifiers
 
 extension AppStore {
     var canTestNodes: Bool {
-        localReady && !nodeLatency.isRunning && !subscriptionWorking && !routingCheckRunning &&
+        !updateOperationBlocked && localReady && !nodeLatency.isRunning && !subscriptionWorking &&
         (!busy || (phase == "connected" && !usesCompanyRoutes))
     }
     func testNodes(_ nodes: [SubscriptionNode], in subscription: Subscription) {
@@ -12,24 +14,39 @@ extension AppStore {
     }
 
     var subscriptionFile: SubscriptionLibrary { SubscriptionLibrary(url: file.url.deletingLastPathComponent().appendingPathComponent("subscriptions.json")) }
+    var selectedSubscription: Subscription? {
+        guard let selection = configuration.activeConnection.subscription else { return nil }
+        return subscriptions.first { $0.id == selection.subscriptionID }
+    }
     var selectedSubscriptionNode: SubscriptionNode? {
         guard let selection = configuration.activeConnection.subscription else { return nil }
         return subscriptions.first { $0.id == selection.subscriptionID }?.payload.nodes.first { $0.name == selection.nodeName }
     }
     func importSubscriptions() { loadSubscriptions(importing: true) }
+    func importSubscriptionFile() {
+        let panel = NSOpenPanel(); panel.title = "导入 Clash YAML 订阅"
+        panel.allowedContentTypes = [UTType(filenameExtension: "yaml") ?? .text, UTType(filenameExtension: "yml") ?? .text, .json]
+        panel.allowsMultipleSelection = false; panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let data = try Data(contentsOf: url)
+            guard data.count <= 8_388_608, let content = String(data: data, encoding: .utf8) else { throw CocoaError(.fileReadTooLarge) }
+            loadSubscriptions(importing: false, name: url.deletingPathExtension().lastPathComponent, fileContent: content)
+        } catch { show("无法读取 YAML 文件，已保留现有配置。", error: true) }
+    }
     func updateSubscription(_ item: Subscription) { loadSubscriptions(importing: false, url: item.payload.url, existingID: item.id) }
     func addSubscription(name: String, url: String) { loadSubscriptions(importing: false, url: url, name: name) }
-    private func loadSubscriptions(importing: Bool, url: String = "", existingID: UUID? = nil, name: String? = nil) {
-        guard !subscriptionWorking, configurationReadable, subscriptionsReadable else { return }
+    private func loadSubscriptions(importing: Bool, url: String = "", existingID: UUID? = nil, name: String? = nil, fileContent: String? = nil) {
+        guard allowsOperationDuringUpdate(), !subscriptionWorking, configurationReadable, subscriptionsReadable else { return }
         nodeLatency.stop()
         subscriptionWorking = true
         Task {
             defer { subscriptionWorking = false }
             do {
-                let payloads = try await SubscriptionLibrary.request(runtime: Bundle.main.resourceURL!.appendingPathComponent("Runtime"), importing: importing, url: url.trimmingCharacters(in: .whitespacesAndNewlines))
+                let payloads = try await SubscriptionLibrary.request(runtime: Bundle.main.resourceURL!.appendingPathComponent("Runtime"), importing: importing, url: url.trimmingCharacters(in: .whitespacesAndNewlines), fileContent: fileContent, name: name ?? "本地订阅")
                 var next = subscriptions
                 for var payload in payloads {
-                    if let index = next.firstIndex(where: { $0.id == existingID || $0.payload.url == payload.url }) {
+                    if let index = next.firstIndex(where: { $0.id == existingID || $0.payload.url == payload.url || (fileContent != nil && $0.payload.url.hasPrefix("local://") && $0.payload.nodes == payload.nodes) }) {
                         payload.name = next[index].payload.name
                         next[index].payload = payload
                     } else {

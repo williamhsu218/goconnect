@@ -92,7 +92,7 @@ func TestLeaseDiagnosticReasons(t *testing.T) {
 			case "lease_token_mismatch":
 				err = os.WriteFile(lease, []byte("SECRET_WRONG_TOKEN"), 0600)
 			case "lease_expired", "lease_future":
-				stamp := time.Now().Add(-10 * time.Second)
+				stamp := time.Now().Add(-leaseTimeout - time.Second)
 				if reason == "lease_future" {
 					stamp = time.Now().Add(10 * time.Second)
 				}
@@ -112,7 +112,7 @@ func TestLeaseDiagnosticReasons(t *testing.T) {
 				}
 				return
 			}
-			if d.Reason != reason || d.TimeoutMS != 5000 || c.alive() {
+			if d.Reason != reason || d.TimeoutMS != leaseTimeout.Milliseconds() || c.alive() {
 				t.Fatalf("lease failure not distinguished: %+v %v", d, err)
 			}
 			if reason == "lease_missing" && !errors.Is(err, os.ErrNotExist) {

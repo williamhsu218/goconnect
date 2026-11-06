@@ -81,7 +81,8 @@ python3 script/prepare_release_sources.py \
 cp "$GOCONNECT_RELEASE_WORK/$GOCONNECT_RELEASE_SOURCES.tar.gz" "$GOCONNECT_RELEASE_ASSETS/"
 python3 script/prepare_update.py "$GOCONNECT_RELEASE_ASSETS/$GOCONNECT_RELEASE_ZIP" \
   --sparkle-bin "$GOCONNECT_SPARKLE_BIN" \
-  --output "$GOCONNECT_RELEASE_ASSETS/appcast.xml"
+  --output "$GOCONNECT_RELEASE_ASSETS/appcast.xml" \
+  --summary "本版更新摘要。安装前请断开 VPN 并保存线路草稿。"
 ```
 
 `prepare_update.py` 校验归档、包身份、团队、运行时和本机更新公钥，分别签名 ZIP 与整个 feed 并回验，不执行任何上传。核对 feed 的 version/build、最低系统、stable 渠道、enclosure 的长度及精确版本下载 URL。每次改 XML 必须重新签名；ZIP 有任何改变均重跑上述检查和相关验收。

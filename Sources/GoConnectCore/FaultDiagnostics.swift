@@ -19,11 +19,14 @@ public enum FaultEvent: String, Sendable {
     case coreCookieRejected = "openconnect.cookie_rejected", coreDPDTimeout = "openconnect.dpd_timeout"
     case coreTLSReadFailed = "openconnect.tls_read_failed", coreTLSWriteFailed = "openconnect.tls_write_failed", coreTLSFailed = "openconnect.tls_failed"
     case coreReconnectStarted = "openconnect.reconnect_started", coreReconnectFailed = "openconnect.reconnect_failed"
+    case coreReconnecting = "openconnect.reconnecting", coreReconnected = "openconnect.reconnected", coreRecoveryExpired = "openconnect.recovery_expired"
+    case coreCSTPConnected = "openconnect.cstp_connected", coreRetryWait = "openconnect.retry_wait_seconds"
     case coreCertificateFailed = "openconnect.certificate_failed", coreAuthenticationFailed = "openconnect.authentication_failed"
     case coreDPDSeconds = "openconnect.dpd_seconds", coreKeepaliveSeconds = "openconnect.keepalive_seconds"
     case coreReconnectTimeout = "openconnect.reconnect_timeout_seconds", coreSessionTimeout = "openconnect.session_timeout_seconds"
     case coreSessionRemaining = "openconnect.session_remaining_seconds", coreIdleSeconds = "openconnect.idle_timeout_seconds"
     case idle = "phase.idle", connecting = "phase.connecting", connected = "phase.connected", failed = "phase.failed"
+    case reconnecting = "phase.reconnecting"
     case stopping = "phase.stopping", protected = "phase.protected", authorizing = "phase.authorizing", testing = "phase.testing"
     case preparingService = "phase.preparingService", preparingCheckService = "phase.preparingCheckService"
     case checking = "phase.checking", serviceMaintenance = "phase.serviceMaintenance"
@@ -40,6 +43,9 @@ public final class FaultDiagnostics: @unchecked Sendable {
     }
     private let queue = DispatchQueue(label: "com.willhsu.GoConnect.diagnostics", qos: .utility)
     private let capacity = DispatchSemaphore(value: 128)
+    private let bridgeCapacity = DispatchSemaphore(value: 64)
+    private let bridgeLock = NSLock()
+    private var bridgeDropped = 0
     private let logger = Logger(subsystem: "com.willhsu.GoConnect", category: "FaultDiagnostics")
     private let directory: URL
     private let limit: Int
@@ -61,6 +67,27 @@ public final class FaultDiagnostics: @unchecked Sendable {
             } catch { logger.error("diagnostic file write failed") }
         }
     }
+    public func recordBridge(_ observation: BridgeDiagnostic) {
+        guard observation.isValid else { return }
+        guard bridgeCapacity.wait(timeout: .now()) == .success else {
+            bridgeLock.withLock { bridgeDropped += 1 }
+            return
+        }
+        let lost = bridgeLock.withLock { bridgeDropped }
+        let timestamp = Date()
+        queue.async { [self] in
+            defer { bridgeCapacity.signal() }
+            struct Entry: Encodable { let time: Date; let pid: Int32; let event: String; let details: BridgeDiagnostic; let appDropped: Int }
+            let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601; encoder.outputFormatting = .sortedKeys
+            do {
+                let data = try encoder.encode(Entry(time: timestamp, pid: getpid(), event: "bridge.trace", details: observation, appDropped: lost)) + Data([10])
+                try append(data, name: "bridge")
+            } catch {
+                bridgeLock.withLock { bridgeDropped += 1 }
+                logger.error("bridge diagnostic file write failed")
+            }
+        }
+    }
     private func prepareDirectory() throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         var st = stat()
@@ -75,7 +102,7 @@ public final class FaultDiagnostics: @unchecked Sendable {
         }
         return fd
     }
-    private func append(_ data: Data) throws {
+    private func append(_ data: Data, name: String = "app") throws {
         try prepareDirectory()
         if lockFD < 0 {
             let fd = try openFile(directory.appendingPathComponent("app.lock"), flags: O_CREAT | O_RDWR)
@@ -83,7 +110,7 @@ public final class FaultDiagnostics: @unchecked Sendable {
             lockFD = fd
         }
         guard data.count <= limit else { throw CocoaError(.fileWriteOutOfSpace) }
-        let path = directory.appendingPathComponent("app.jsonl")
+        let path = directory.appendingPathComponent(name + ".jsonl")
         var fd = try openFile(path, flags: O_CREAT | O_WRONLY | O_APPEND)
         defer { Darwin.close(fd) }
         var st = stat(); guard fstat(fd, &st) == 0 else { throw CocoaError(.fileReadUnknown) }
@@ -109,7 +136,7 @@ public final class FaultDiagnostics: @unchecked Sendable {
                 var result = ""
                 do {
                     try prepareDirectory()
-                    for name in ["app.jsonl.1", "app.jsonl"] {
+                    for name in ["app.jsonl.1", "app.jsonl", "bridge.jsonl.1", "bridge.jsonl"] {
                         result += "\n--- \(name) ---\n"
                         guard let fd = try? openFile(directory.appendingPathComponent(name), flags: O_RDONLY) else { result += "unavailable\n"; continue }
                         let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
