@@ -67,6 +67,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private(set) var menuBar: MenuBarController?
     private var openMainWindow: (() -> Void)?
     private var pendingMainWindow = false
+    private var openSettingsWindow: (() -> Void)?
+    private var pendingSettingsWindow = false
+
+    func registerSettingsOpener(_ opener: @escaping () -> Void) {
+        openSettingsWindow = opener
+        if pendingSettingsWindow {
+            pendingSettingsWindow = false
+            showSettingsWindow()
+        }
+    }
+
+    private func showSettingsWindow() {
+        NSApp.activate(ignoringOtherApps: true)
+        if let openSettingsWindow { openSettingsWindow() }
+        else { pendingSettingsWindow = true }
+    }
 
     func registerMainWindowOpener(_ openMainWindow: @escaping () -> Void) {
         self.openMainWindow = openMainWindow
@@ -92,7 +108,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !Self.isUpdateQA { AppFaultMonitor.shared.start() }
         NSApp.setActivationPolicy(.regular)
         // App lifetime owns the status item; it must not depend on a window appearing.
-        if !Self.isUpdateQA { menuBar = MenuBarController(store: store) { [weak self] in self?.showMainWindow() } }
+        if !Self.isUpdateQA {
+            menuBar = MenuBarController(store: store,
+                openSettings: { [weak self] in self?.showSettingsWindow() },
+                openMainWindow: { [weak self] in self?.showMainWindow() })
+        }
         updateObservation = updater.$installationInProgress
             .sink { [weak self] installation in self?.store.updateOperationBlocked = installation }
         if Self.isUpdateQA || ProcessInfo.processInfo.environment["GOCONNECT_DATA_DIR"] == nil { updater.start() }
@@ -123,6 +143,7 @@ private struct MainWindowContent: View {
     let store: AppStore
     let delegate: AppDelegate
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         Group {
@@ -131,6 +152,7 @@ private struct MainWindowContent: View {
         }
             .onAppear {
                 delegate.registerMainWindowOpener { openWindow(id: "main") }
+                delegate.registerSettingsOpener { openSettings() }
             }
     }
 }

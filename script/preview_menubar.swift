@@ -49,7 +49,9 @@ enum Page: String {
     @NSApplicationDelegateAdaptor(MenuBarPreviewDelegate.self) private var delegate
     var body: some Scene {
         WindowGroup("GoConnect · 菜单栏验收", id: "preview") {
-            MenuBarPreviewContent(store: delegate.store, restore: { delegate.menuBar?.restoreAndShow() })
+            MenuBarPreviewContent(store: delegate.store, restore: { delegate.menuBar?.restoreAndShow() },
+                                  registerSettings: { delegate.settingsOpener = $0 },
+                                  invokeSettingsItem: { delegate.invokeSettingsMenuItem(closeMain: $0) })
         }
         .defaultSize(width: 580, height: 570)
         .windowResizability(.contentSize)
@@ -60,10 +62,34 @@ enum Page: String {
 @MainActor final class MenuBarPreviewDelegate: NSObject, NSApplicationDelegate {
     let store = AppStore()
     var menuBar: MenuBarController?
+    var settingsOpener: (() -> Void)?
+    private var settingsRequests = 0
+    private var settingsRequestHadVisibleMain = true
+
+    // QA button dispatches the actual NSMenuItem and its production callback;
+    // it does not call the settings opener directly or simulate a shortcut.
+    func invokeSettingsMenuItem(closeMain: Bool) {
+        if closeMain {
+            NSApp.windows.filter { $0.identifier?.rawValue.hasPrefix("preview") == true }.forEach { $0.close() }
+        }
+        guard let menuBar,
+              let item = Mirror(reflecting: menuBar).children.first(where: { $0.label == "statusItem" })?.value as? NSStatusItem,
+              let menu = item.menu else { return }
+        menuBar.menuNeedsUpdate(menu)
+        guard let index = menu.items.firstIndex(where: { $0.title == "设置…" }) else { return }
+        menu.performActionForItem(at: index)
+    }
     private var auditTimer: Timer?
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
-        menuBar = MenuBarController(store: store) {
+        menuBar = MenuBarController(store: store, openSettings: { [weak self] in
+            NSApp.activate(ignoringOtherApps: true)
+            self?.settingsRequests += 1
+            self?.settingsRequestHadVisibleMain = NSApp.windows.contains {
+                $0.identifier?.rawValue.hasPrefix("preview") == true && $0.isVisible
+            }
+            self?.settingsOpener?()
+        }) {
             NSApp.activate(ignoringOtherApps: true)
             NSApp.windows.first?.makeKeyAndOrderFront(nil)
         }
@@ -91,6 +117,10 @@ enum Page: String {
             "appearance": button.effectiveAppearance.name.rawValue,
             "direction": UserDefaults.standard.string(forKey: MenuBarPreferences.rateDirectionKey) ?? "both",
             "imageHeight": button.image?.size.height ?? 0,
+            "settingsRequests": settingsRequests,
+            "settingsRequestHadVisibleMain": settingsRequestHadVisibleMain,
+            "visibleSettingsWindows": NSApp.windows.filter { $0.identifier?.rawValue == "com_apple_SwiftUI_Settings_window" && $0.isVisible }.count,
+            "menuItems": item.menu?.items.map { ["title": $0.title, "key": $0.keyEquivalent, "enabled": $0.isEnabled] as [String: Any] } ?? [],
         ]
         if let data = try? JSONSerialization.data(withJSONObject: record, options: [.sortedKeys]) {
             try? data.write(to: URL(fileURLWithPath: path + "/native-status.json"), options: .atomic)
@@ -105,17 +135,26 @@ enum Page: String {
         }
     }
     func applicationWillTerminate(_ notification: Notification) { auditTimer?.invalidate(); menuBar?.tearDown() }
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 }
 
 private struct MenuBarPreviewContent: View {
     @Bindable var store: AppStore
     let restore: () -> Void
+    let registerSettings: (@escaping () -> Void) -> Void
+    let invokeSettingsItem: (Bool) -> Void
+    @Environment(\.openSettings) private var openSettings
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
         Form {
             MenuBarSettings(showMenuBar: restore)
+            Section("设置入口验收") {
+                Button("打开设置（实际菜单项动作）") { invokeSettingsItem(false) }
+                Button("关闭主窗口后打开设置") { invokeSettingsItem(true) }
+                Text("触发同一个原生菜单项；未包含网络或凭据操作。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             if let image = store.nativeMenuImage {
                 Section("当前原生菜单栏按钮 · 原样") {
                     Image(nsImage: image).padding(8)
@@ -146,6 +185,7 @@ private struct MenuBarPreviewContent: View {
         .formStyle(.grouped)
         .frame(width: 580, height: 650)
         .preferredColorScheme(store.dark ? .dark : .light)
+        .onAppear { registerSettings { openSettings() } }
         .onReceive(tick) { _ in store.sample() }
     }
 
