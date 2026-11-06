@@ -6,16 +6,16 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/williamhsu218/goconnect/releases</link>
     <description>GoConnect signed updates</description>
     <item>
-      <title>GoConnect 1.0.6</title>
-      <pubDate>Fri, 06 Nov 2026 06:41:57 +0000</pubDate>
-      <sparkle:version>65</sparkle:version>
-      <sparkle:shortVersionString>1.0.6</sparkle:shortVersionString>
+      <title>GoConnect 1.0.7</title>
+      <pubDate>Fri, 06 Nov 2026 15:36:42 +0000</pubDate>
+      <sparkle:version>67</sparkle:version>
+      <sparkle:shortVersionString>1.0.7</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
-      <description>菜单栏新增“设置…”快捷入口（⌘,），主窗口关闭后仍可直接打开；保留固定紧凑速率与连接修复。可保持 VPN 检查和下载更新。</description>
-      <enclosure url="https://github.com/williamhsu218/goconnect/releases/download/v1.0.6/GoConnect-1.0.6-macos-arm64.zip" length="31693825" type="application/octet-stream" sparkle:edSignature="+kVuiqh2mE5UjPMWrFgv4c3W8ppu3ePBrUGzLPPNCP54dSHjKQJCKNX7jSVXZzk46qhvY27qjohDuIbQgh/EDA=="></enclosure>
+      <description>修复 HY2 公网 UDP DNS 超时：经所选线路使用可靠 DoH，保留系统及内网 DNS。正式 build 67；安装后按诊断页提示更新服务。可保持 VPN 检查和下载，确认安装后才断开。</description>
+      <enclosure url="https://github.com/williamhsu218/goconnect/releases/download/v1.0.7/GoConnect-1.0.7-macos-arm64.zip" length="31696716" type="application/octet-stream" sparkle:edSignature="JGLhB0MXFQujdIyehVzoZWfTlasrrhTw7MRhpPyMVGYWIK1/xBb64Uz4FL3fDn0UPp5APcKwHRwFexX5AtZKDA=="></enclosure>
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: /daEhGabYtBA1ouga8GoGXVfR20ujfevDsk2T+lu6W6sxm0njtir+15M984hkhrfOIxE9w5I0cMfdbcGa9cMDQ==
-length: 1379
+edSignature: 5nHqbxOtx3+GaYgMHhi8JN0kd3YrQvW9IhxWJshxan5xVyd7AbvmFppdT0DOPNWa/zoDIN2IlaWO8Jpd0z8WAQ==
+length: 1421
 -->
