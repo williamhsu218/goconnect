@@ -19,7 +19,7 @@ struct GoConnectApp: App {
                 Button("新建线路") { store.beginNewProfile() }.keyboardShortcut("n")
                     .disabled(store.profileDraft != nil || !store.configurationReadable || store.configuration.connections.count >= 64)
                 Button("保存线路") { store.saveProfileDraft() }.keyboardShortcut("s").disabled(!store.canSaveProfileDraft)
-                Button("添加白名单应用…") { store.addApplication() }.keyboardShortcut("o").disabled(store.busy || store.profileDraft != nil)
+                Button("添加代理应用…") { store.addApplication() }.keyboardShortcut("o").disabled(store.busy || store.profileDraft != nil)
             }
             CommandMenu("VPN") {
                 Button(store.menuBarControlPolicy.actionTitle) {
@@ -73,7 +73,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AppBranding.refreshDockIcon()
         NSApp.activate(ignoringOtherApps: true)
     }
-    func applicationWillTerminate(_ notification: Notification) { FaultDiagnostics.shared.record(.appStopping); menuBar?.tearDown(); store.nodeLatency.stop(); store.disconnect() }
+    func applicationWillTerminate(_ notification: Notification) { FaultDiagnostics.shared.record(.appStopping); menuBar?.tearDown(); store.nodeLatency.stop(); store.disconnect(); store.trafficHistory.flush() }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

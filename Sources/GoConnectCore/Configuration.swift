@@ -17,11 +17,11 @@ public enum RoutingMode: String, Codable, CaseIterable, Identifiable, Sendable {
     case whitelist, global
     public var id: String { rawValue }
     public var title: String {
-        switch self { case .whitelist: "App 白名单"; case .global: "全局模式" }
+        switch self { case .whitelist: "按名单代理"; case .global: "全局模式" }
     }
     public var explanation: String {
         switch self {
-        case .whitelist: "白名单应用默认走线路，其它应用直连；直连域名和直连 App 优先。"
+        case .whitelist: "代理名单中的应用与服务默认走线路，其余流量直连；直连规则优先。"
         case .global: "除直连 App 外，其余应用走线路；直连域名、本地与 Tailscale 路径优先。"
         }
     }

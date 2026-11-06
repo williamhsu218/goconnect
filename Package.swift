@@ -15,7 +15,7 @@ let package = Package(
     targets: [
         .target(name: "GoConnectCore"),
         .executableTarget(name: "GoConnect", dependencies: ["GoConnectCore"],
-                          linkerSettings: [.linkedFramework("SwiftUI"), .linkedFramework("Security")]),
+                          linkerSettings: [.linkedFramework("SwiftUI"), .linkedFramework("Security"), .linkedLibrary("sqlite3")]),
         .testTarget(name: "GoConnectCoreTests", dependencies: ["GoConnectCore"]),
         .testTarget(name: "GoConnectAppTests", dependencies: ["GoConnect", "GoConnectCore"])
     ]

@@ -33,8 +33,8 @@ struct ApplicationsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: AppTheme.sectionSpacing) {
             PageHeading(
-                title: excluded ? "直连 App / 服务" : "应用 / 服务白名单",
-                subtitle: excluded ? "这些 App 和服务使用原网络，直连规则优先。" : "白名单模式仅让名单中的 App 和服务走 VPN。"
+                title: excluded ? "直连 App / 服务" : "代理应用与服务",
+                subtitle: excluded ? "这些 App 和服务使用原网络，直连规则优先。" : "按名单代理模式仅让名单中的应用与服务走所选线路。"
             )
 
             if store.busy {
@@ -44,7 +44,7 @@ struct ApplicationsView: View {
             }
 
             if !excluded && store.configuration.routingMode == .global {
-                Label("当前使用全局模式；此白名单保留供切换模式后使用。", systemImage: "info.circle")
+                Label("当前使用全局模式；代理名单保留，切换为按名单代理后生效。", systemImage: "info.circle")
                     .font(.callout).foregroundStyle(.secondary)
             }
 
@@ -143,19 +143,13 @@ struct ApplicationsView: View {
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
-                    Text("·")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                    Text(store.selected(app, excluded: excluded) ? (excluded ? "已加入直连名单" : "已加入白名单") : "未加入名单")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
             }
 
             Spacer()
 
             Toggle(
-                "将 \(app.name) 加入\(excluded ? "直连名单" : "白名单")",
+                "将 \(app.name) 加入\(excluded ? "直连名单" : "代理名单")",
                 isOn: Binding(
                     get: { store.selected(app, excluded: excluded) },
                     set: { _ in store.toggle(app, excluded: excluded) }
@@ -274,7 +268,7 @@ struct ApplicationsView: View {
                     Text("释放以添加到名单")
                         .font(.headline)
                         .foregroundStyle(AppTheme.accent)
-                    Text(excluded ? "添加至直连名单" : "添加至白名单")
+                    Text(excluded ? "添加至直连名单" : "添加至代理名单")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

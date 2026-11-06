@@ -18,28 +18,29 @@ struct YunyooUsageCard: View {
         if eligible {
             Surface {
                 VStack(alignment: .leading, spacing: 14) {
-                    HStack {
+                    ViewThatFits(in: .horizontal) {
+                      HStack {
                         Label("云悠套餐流量", systemImage: "chart.pie").font(.headline)
                         Spacer()
-                        YunyooRelayControls(store: store, subscription: subscription)
-                        if let binding {
-                            if store.state(for: binding) == .refreshing { ProgressView().controlSize(.small) }
-                            Button("刷新", systemImage: "arrow.clockwise") { Task { await store.refresh(binding) } }
-                                .appActionStyle().disabled(store.state(for: binding) == .refreshing || store.relayPublishing)
-                            Button(store.state(for: binding) == .loginRequired ? "重新登录" : "登录云悠") { store.loginBinding = binding }.appActionStyle()
-                        } else {
-                            Button("关联云悠流量") { settingUp = true }.appActionStyle(primary: true).disabled(!store.readable)
-                        }
+                        usageActions
+                      }
+                      VStack(alignment: .leading, spacing: 10) {
+                        Label("云悠套餐流量", systemImage: "chart.pie").font(.headline)
+                        usageActions
+                      }
                     }
                     if let binding {
                         if let value = store.snapshot(for: binding) {
-                            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                                Text("剩余").foregroundStyle(.secondary)
-                                Text(YunyooTrafficSnapshot.formatGB(value.remainingGB))
-                                    .font(.system(size: 26, weight: .semibold, design: .rounded)).monospacedDigit()
-                                Spacer()
-                                Text("已用 \(YunyooTrafficSnapshot.formatGB(value.displayedUsedGB)) / 总量 \(YunyooTrafficSnapshot.formatGB(value.totalGB))")
-                                    .font(.callout).foregroundStyle(.secondary)
+                            ViewThatFits(in: .horizontal) {
+                                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                    remainingAmount(value)
+                                    Spacer()
+                                    usageSummary(value)
+                                }
+                                VStack(alignment: .leading, spacing: 6) {
+                                    remainingAmount(value)
+                                    usageSummary(value)
+                                }
                             }
                             ProgressView(value: value.usedFraction).tint(value.exceeded ? .orange : AppTheme.accent)
                             if value.exceeded { Text("当前已超过套餐额度。").font(.caption).foregroundStyle(.orange) }
@@ -63,6 +64,34 @@ struct YunyooUsageCard: View {
                 if loginAfterSetup { loginAfterSetup = false; store.loginBinding = binding }
             }) { setupSheet }
         }
+    }
+
+    private var usageActions: some View {
+        HStack(spacing: 8) {
+            YunyooRelayControls(store: store, subscription: subscription)
+            if let binding {
+                if store.state(for: binding) == .refreshing { ProgressView().controlSize(.small) }
+                Button("刷新", systemImage: "arrow.clockwise") { Task { await store.refresh(binding) } }
+                    .appActionStyle().disabled(store.state(for: binding) == .refreshing || store.relayPublishing)
+                Button(store.state(for: binding) == .loginRequired ? "重新登录" : "登录云悠") { store.loginBinding = binding }.appActionStyle()
+            } else {
+                Button("关联云悠流量") { settingUp = true }.appActionStyle(primary: true).disabled(!store.readable)
+            }
+        }
+    }
+
+    private func remainingAmount(_ value: YunyooTrafficSnapshot) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text("剩余").font(.callout).foregroundStyle(.secondary)
+            Text(YunyooTrafficSnapshot.formatGB(value.remainingGB))
+                .font(.system(size: 26, weight: .semibold)).monospacedDigit()
+        }
+    }
+
+    private func usageSummary(_ value: YunyooTrafficSnapshot) -> some View {
+        Text("已用 \(YunyooTrafficSnapshot.formatGB(value.displayedUsedGB)) / 总量 \(YunyooTrafficSnapshot.formatGB(value.totalGB))")
+            .font(.caption).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     @ViewBuilder private func status(_ binding: YunyooUsageBinding) -> some View {

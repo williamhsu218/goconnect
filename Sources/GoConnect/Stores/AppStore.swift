@@ -4,9 +4,9 @@ import GoConnectCore
 import UniformTypeIdentifiers
 
 enum Page: String, CaseIterable, Identifiable {
-    case connection = "连接", profiles = "线路配置", subscriptions = "订阅管理", applications = "应用白名单", exclusions = "直连 App", diagnostics = "诊断"
+    case connection = "连接", profiles = "线路配置", subscriptions = "订阅管理", traffic = "流量统计", applications = "代理应用与服务", exclusions = "直连 App", diagnostics = "诊断"
     var id: String { rawValue }
-    var icon: String { switch self { case .connection: "network"; case .profiles: "server.rack"; case .subscriptions: "square.stack.3d.up"; case .applications: "square.grid.2x2"; case .exclusions: "arrow.triangle.branch"; case .diagnostics: "waveform.path.ecg" } }
+    var icon: String { switch self { case .connection: "network"; case .profiles: "server.rack"; case .subscriptions: "square.stack.3d.up"; case .traffic: "chart.bar.xaxis"; case .applications: "square.grid.2x2"; case .exclusions: "arrow.triangle.branch"; case .diagnostics: "waveform.path.ecg" } }
 }
 
 struct ActivityEntry: Identifiable {
@@ -78,7 +78,17 @@ final class AppStore {
     let networkService = NetworkServiceClient()
     let keychain = KeychainStore()
     let nodeLatency: NodeLatencyStore
-    let yunyooUsage: YunyooUsageStore
+    @ObservationIgnored private var legacyYunyooUsage: YunyooUsageStore?
+    // Kept for legacy data/types; the current UI never mounts quota/login views.
+    // Do not load provider credentials or caches during ordinary app startup.
+    var yunyooUsage: YunyooUsageStore {
+        if let legacyYunyooUsage { return legacyYunyooUsage }
+        let value = YunyooUsageStore(file: file.url.deletingLastPathComponent().appendingPathComponent("yunyoo-usage.json"))
+        legacyYunyooUsage = value
+        return value
+    }
+    let trafficHistory: ProfileTrafficStore
+    var trafficProfileID: UUID?
     let file: ConfigurationFile
     private let diagnostics: FaultDiagnostics
 
@@ -91,7 +101,8 @@ final class AppStore {
         let base = dataDirectory ?? ProcessInfo.processInfo.environment["GOCONNECT_DATA_DIR"].map { URL(fileURLWithPath: $0) }
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent(Product.bundleID)
         file = ConfigurationFile(url: base.appendingPathComponent("configuration.json"))
-        yunyooUsage = yunyooUsageStore ?? YunyooUsageStore(file: base.appendingPathComponent("yunyoo-usage.json"))
+        trafficHistory = ProfileTrafficStore(file: base.appendingPathComponent("traffic-history.sqlite"))
+        legacyYunyooUsage = yunyooUsageStore
         let quarantineURL = base.appendingPathComponent("network-quarantine.json")
         if let data = try? Data(contentsOf: quarantineURL) {
             recoveryRequired = (try? JSONDecoder().decode(NetworkQuarantine.self, from: data).applies()) ?? true
@@ -115,6 +126,10 @@ final class AppStore {
         if refreshRuntime { refreshEnvironment() }
     }
     var busy: Bool { passwordRequested || networkService.working || !["idle", "failed"].contains(phase) }
+    func showTraffic(for id: UUID) {
+        trafficProfileID = id
+        navigate(to: .traffic)
+    }
     var statusTitle: String {
         switch phase {
         case "connecting": "正在建立隧道"
@@ -280,7 +295,7 @@ final class AppStore {
     }
     func addApplication(excluded: Bool = false) {
         guard canEditApplications else { return }
-        let panel = NSOpenPanel(); panel.title = excluded ? "添加直连应用" : "添加白名单应用"
+        let panel = NSOpenPanel(); panel.title = excluded ? "添加直连应用" : "添加代理应用"
         panel.allowedContentTypes = [.applicationBundle]; panel.allowsMultipleSelection = true
         panel.directoryURL = URL(fileURLWithPath: "/Applications")
         if panel.runModal() == .OK {
@@ -289,7 +304,7 @@ final class AppStore {
     }
     func addExecutableService(excluded: Bool = false) {
         guard canEditApplications else { return }
-        let panel = NSOpenPanel(); panel.title = excluded ? "添加直连可执行服务" : "添加白名单可执行服务"
+        let panel = NSOpenPanel(); panel.title = excluded ? "添加直连可执行服务" : "添加代理可执行服务"
         panel.allowedContentTypes = [.unixExecutable, .symbolicLink]; panel.allowsMultipleSelection = true
         panel.resolvesAliases = false
         panel.message = "可选择固定入口（如 /opt/homebrew/bin/claude），连接时会自动解析当前版本。"
@@ -324,6 +339,7 @@ final class AppStore {
             guard !secret.contains("\n"), !secret.contains("\r") else { show("密码不能包含换行。", error: true); return }
             guard save() else { return }
             testOnly = test; routeReported = false; stopFailed = false; routeSnapshot = nil; connectedAt = nil; addresses = []; received = 0; sent = 0
+            trafficHistory.endSession()
             resetSessionMetrics()
             disconnectReason = .unknown; unexpectedDisconnectReported = false
             disconnectRecoverySuggestion = nil
@@ -358,6 +374,7 @@ final class AppStore {
         stopAll()
     }
     private func stopAll() {
+        trafficHistory.endSession()
         publicIPChecker.stop(); publicIPChecking = false; publicIP = nil; publicIPCheckedAt = nil
         trafficAvailable = false
         connectionGeneration = UUID()
@@ -391,7 +408,10 @@ final class AppStore {
         case "ready":
             guard phase == "connecting", let port = event.port else { return }
             socksPort = port; addresses = event.addresses ?? []; connectedAt = Date()
-            if testOnly { phase = "testing"; show(configuration.activeConnection.subscription == nil ? "VPN 隧道已建立；App 白名单尚未启用。" : "节点代理已就绪，尚未启用 App 分流。") }
+            if !testOnly {
+                trafficHistory.beginSession(profileID: configuration.activeProfileID, name: configuration.activeConnection.displayName)
+            }
+            if testOnly { phase = "testing"; show(configuration.activeConnection.subscription == nil ? "VPN 隧道已建立；应用分流尚未启用。" : "节点代理已就绪，尚未启用 App 分流。") }
             else {
                 phase = "authorizing"
                 do {
@@ -413,6 +433,7 @@ final class AppStore {
             self.received = received; self.sent = sent
             downloadRate = rates.download; uploadRate = rates.upload
             trafficAvailable = true; trafficUpdatedAt = now
+            if !testOnly { trafficHistory.consume(received: received, sent: sent, at: now) }
         case "stats_unavailable":
             guard connectedAt != nil, ["authorizing", "connected", "reconnecting", "testing"].contains(phase) else { return }
             trafficAvailable = false
@@ -516,7 +537,7 @@ final class AppStore {
     func exportDiagnostics() {
         let panel = NSSavePanel(); panel.nameFieldStringValue = "GoConnect-diagnostics.txt"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        let report = "GoConnect \(Product.version)\nmacOS \(ProcessInfo.processInfo.operatingSystemVersionString)\n运行组件: \(localReady)\n状态: \(phase)\n模式: \(accessTitle)\n白名单数量: \(configuration.applications.count)\n直连排除数量: \(configuration.excludedApplications.count)\nTailscale 已识别: \(routeSnapshot?.tailscaleActive == true)\n\n" + "本次运行事件数: \(activity.count)；错误数: \(activity.filter(\.isError).count)\n原始消息可能含服务器或路径信息，导出仅包含结构化故障事件。"
+        let report = "GoConnect \(Product.version)\nmacOS \(ProcessInfo.processInfo.operatingSystemVersionString)\n运行组件: \(localReady)\n状态: \(phase)\n模式: \(accessTitle)\n代理名单数量: \(configuration.applications.count)\n直连排除数量: \(configuration.excludedApplications.count)\nTailscale 已识别: \(routeSnapshot?.tailscaleActive == true)\n\n" + "本次运行事件数: \(activity.count)；错误数: \(activity.filter(\.isError).count)\n原始消息可能含服务器或路径信息，导出仅包含结构化故障事件。"
         Task {
             let appLogs = await diagnostics.export()
             let serviceLogs = await networkService.diagnosticLogs()

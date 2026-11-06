@@ -16,6 +16,7 @@ struct ContentView: View {
                     Section("线路与节点") {
                         sidebarRow(for: .profiles)
                         sidebarRow(for: .subscriptions)
+                        sidebarRow(for: .traffic)
                     }
 
                     Section("分流规则") {
@@ -47,6 +48,7 @@ struct ContentView: View {
                     case .connection: ConnectionView(store: store)
                     case .profiles: ProfilesView(store: store)
                     case .subscriptions: SubscriptionsView(store: store)
+                    case .traffic: TrafficHistoryView(store: store)
                     case .applications: ApplicationsView(store: store)
                     case .exclusions: ApplicationsView(store: store, excluded: true)
                     case .diagnostics: DiagnosticsView(store: store)
@@ -73,25 +75,20 @@ struct ContentView: View {
         .tint(AppTheme.accent)
         .navigationTitle(store.page.rawValue)
         .toolbar {
-            activeConnectionToolbar
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    store.navigate(to: .connection)
-                } label: {
-                    Label(store.connectionControlState.title, systemImage: store.connectionControlState == .off ? "network" : store.connectionControlState.symbol)
+            if store.page != .connection {
+                activeConnectionToolbar
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        store.navigate(to: .connection)
+                    } label: {
+                        Label(store.connectionControlState.title, systemImage: store.connectionControlState == .off ? "network" : store.connectionControlState.symbol)
+                    }
+                    .help("查看连接状态")
+                    .accessibilityLabel("查看连接状态：\(store.connectionControlState.title)")
                 }
-                .help("查看连接状态")
-                .accessibilityLabel("查看连接状态：\(store.connectionControlState.title)")
             }
         }
         .sheet(isPresented: $store.passwordRequested) { ConnectionPasswordSheet(store: store) }
-        .sheet(item: Binding(get: { store.yunyooUsage.loginBinding }, set: { store.yunyooUsage.loginBinding = $0 })) { binding in
-            YunyooLoginView(store: store.yunyooUsage, binding: binding) { authorized in
-                if let subscription = store.subscriptions.first(where: { $0.id == authorized.subscriptionID }) {
-                    store.updateSubscription(subscription)
-                }
-            }
-        }
         .confirmationDialog("放弃未保存的更改？", isPresented: $store.discardProfileChangesRequested) {
             Button("放弃更改", role: .destructive) { store.discardProfileChanges() }
             Button("继续编辑", role: .cancel) { store.pendingProfilePage = nil }
@@ -128,7 +125,12 @@ struct ContentView: View {
 
     private func sidebarRow(for page: Page) -> some View {
         HStack(spacing: 8) {
-            Label(page.rawValue, systemImage: page.icon)
+            Label {
+                Text(page.rawValue)
+            } icon: {
+                Image(systemName: page.icon)
+                    .foregroundStyle(store.page == page ? .primary : .secondary)
+            }
             Spacer()
             pageIndicator(for: page)
         }
@@ -155,6 +157,8 @@ struct ContentView: View {
                 ProgressView()
                     .controlSize(.mini)
             }
+        case .traffic:
+            EmptyView()
         case .diagnostics:
             if store.connectionControlState == .diagnostic {
                 Image(systemName: "waveform.path.ecg").foregroundStyle(.secondary).accessibilityLabel("正在诊断")
