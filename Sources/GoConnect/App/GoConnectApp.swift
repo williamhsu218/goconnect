@@ -59,6 +59,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }()
     lazy var updater = AppUpdater(safetyState: { [weak self] in
         self?.store.updateSafetyState ?? UpdateSafetyState(connectionOrServiceActive: true)
+    }, prepareForInstallation: { [weak self] in
+        guard let self else { return false }
+        return await self.store.prepareForUpdateInstallation()
     }, notify: { [weak self] text in self?.store.show(text, error: true) })
     private var updateObservation: AnyCancellable?
     private(set) var menuBar: MenuBarController?
@@ -90,8 +93,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         // App lifetime owns the status item; it must not depend on a window appearing.
         if !Self.isUpdateQA { menuBar = MenuBarController(store: store) { [weak self] in self?.showMainWindow() } }
-        updateObservation = updater.$isUpdateCycleActive.combineLatest(updater.$installationInProgress)
-            .sink { [weak self] cycle, installation in self?.store.updateOperationBlocked = cycle || installation }
+        updateObservation = updater.$installationInProgress
+            .sink { [weak self] installation in self?.store.updateOperationBlocked = installation }
         if Self.isUpdateQA || ProcessInfo.processInfo.environment["GOCONNECT_DATA_DIR"] == nil { updater.start() }
         AppBranding.refreshDockIcon()
         NSApp.activate(ignoringOtherApps: true)

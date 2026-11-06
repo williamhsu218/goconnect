@@ -129,14 +129,32 @@ final class AppStore {
     var updateSafetyState: UpdateSafetyState {
         UpdateSafetyState(connectionOrServiceActive: busy || transport.isRunning || route.isRunning || networkService.status.busy || recoveryRequired,
                           hasUnsavedDraft: profileDraft != nil, isTestingNodes: nodeLatency.isRunning,
-                          isUpdatingSubscriptions: subscriptionWorking)
+                          isUpdatingSubscriptions: subscriptionWorking,
+                          isMaintainingService: networkService.working || phase == "serviceMaintenance")
     }
     func allowsOperationDuringUpdate() -> Bool {
         guard !updateOperationBlocked else {
-            show("请先结束应用更新，再连接或维护网络服务。", error: true)
+            show("正在安装应用更新，请等待重启后再连接或维护网络服务。", error: true)
             return false
         }
         return true
+    }
+    /// Called only after the user confirms installation of the fully downloaded update.
+    /// Keep the existing teardown path and wait for its actual completion before quitting.
+    func prepareForUpdateInstallation() async -> Bool {
+        if let reason = updateSafetyState.preparationBlockingReason {
+            show(reason, error: true)
+            return false
+        }
+        if updateSafetyState.connectionOrServiceActive { disconnect() }
+        for _ in 0..<200 {
+            guard !Task.isCancelled else { return false }
+            if updateSafetyState.blockingReason == nil { return true }
+            do { try await Task.sleep(for: .milliseconds(100)) }
+            catch { return false }
+        }
+        show("VPN 或网络服务尚未安全停止，已暂停安装；可检查诊断后重试。", error: true)
+        return false
     }
     var busy: Bool { passwordRequested || networkService.working || !["idle", "failed"].contains(phase) }
     func showTraffic(for id: UUID) {

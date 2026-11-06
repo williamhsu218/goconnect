@@ -82,7 +82,7 @@ cp "$GOCONNECT_RELEASE_WORK/$GOCONNECT_RELEASE_SOURCES.tar.gz" "$GOCONNECT_RELEA
 python3 script/prepare_update.py "$GOCONNECT_RELEASE_ASSETS/$GOCONNECT_RELEASE_ZIP" \
   --sparkle-bin "$GOCONNECT_SPARKLE_BIN" \
   --output "$GOCONNECT_RELEASE_ASSETS/appcast.xml" \
-  --summary "本版更新摘要。安装前请断开 VPN 并保存线路草稿。"
+  --summary "本版更新摘要。可保持 VPN 下载，确认安装重启后才断开；请先保存线路草稿。"
 ```
 
 `prepare_update.py` 校验归档、包身份、团队、运行时和本机更新公钥，分别签名 ZIP 与整个 feed 并回验，不执行任何上传。核对 feed 的 version/build、最低系统、stable 渠道、enclosure 的长度及精确版本下载 URL。每次改 XML 必须重新签名；ZIP 有任何改变均重跑上述检查和相关验收。
@@ -106,7 +106,8 @@ python3 script/prepare_update.py "$GOCONNECT_RELEASE_ASSETS/$GOCONNECT_RELEASE_Z
 QA 仅允许明确 QA 模式下的 `127.0.0.1` feed；保持签名强制开启，不修改生产 URL 或放宽生产信任。验收必须记录：
 
 - 旧 build 实际识别更高 build，显示正确版本；真实下载、验签、安装、重启，有新 PID 且只有一个主进程，安装文件与目标包一致。
-- 活跃 VPN、未保存草稿及其他互斥操作时不可更新；准备安装期间不可发起连接，退出前再次复核。
+- VPN 连接中可检查、下载和验签；下载完成前不得断开连接。未保存草稿、节点测试、订阅操作和服务维护只阻止最终安装。确认安装后调用正常断开路径，等待实际停止并复核；失败暂停安装并释放新连接门禁。
+- 自动检查开启后的冷启动、调度会话 true/false 边沿、无更新／失败／取消后均不得残留连接锁；新 build 启动后可连接。恢复的安装就绪状态不可静默断开 VPN，等待明确安装操作。
 - 篡改 feed 被拒绝、无更新 ZIP 下载；取消/失败后恢复可用状态。涉及更新中断或恢复逻辑时验证残留状态和重启恢复。
 - 已有数据和生产网络不受隔离验收影响。安装授权另行按已授权范围执行：正常断开、退出、备份、替换和读回；不因发布自动退出当前正式 App 或断开 VPN。
 
