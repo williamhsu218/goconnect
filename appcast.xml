@@ -6,16 +6,16 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/williamhsu218/goconnect/releases</link>
     <description>GoConnect signed updates</description>
     <item>
-      <title>GoConnect 1.0.3</title>
-      <pubDate>Fri, 06 Nov 2026 05:12:57 +0000</pubDate>
-      <sparkle:version>60</sparkle:version>
-      <sparkle:shortVersionString>1.0.3</sparkle:shortVersionString>
+      <title>GoConnect 1.0.4</title>
+      <pubDate>Fri, 06 Nov 2026 05:39:34 +0000</pubDate>
+      <sparkle:version>61</sparkle:version>
+      <sparkle:shortVersionString>1.0.4</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
-      <description>1.0.3：修复更新后连接锁；检查、下载和验签可保持 VPN，确认安装重启后才正常断开。请先保存线路草稿。</description>
-      <enclosure url="https://github.com/williamhsu218/goconnect/releases/download/v1.0.3/GoConnect-1.0.3-macos-arm64.zip" length="31689517" type="application/octet-stream" sparkle:edSignature="FQm1ZiMZGeY3LPx1phu9teqSx9YP9KyeKXogbUNXJwXD4qEYhpTHTDpEPQ4S0hdTHDH/rnF+Dg7gVrRFxwq5BQ=="></enclosure>
+      <description>1.0.4：菜单栏双向速率改为上下两行，宽度由192pt收紧到90pt；保留完整单位。可保持VPN下载，确认安装后才正常断开。</description>
+      <enclosure url="https://github.com/williamhsu218/goconnect/releases/download/v1.0.4/GoConnect-1.0.4-macos-arm64.zip" length="31690836" type="application/octet-stream" sparkle:edSignature="2k5ZaQOydfSGoG5LX8y4kN6YpWTWZ6AMoLVjsTE1R7umV0S86/ml/4zQTiwLlr9HWZPJKOrLDHYO+mHOzL5JDw=="></enclosure>
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: J89joLCeU9Yzix0VFCJpSK+KVeL6Bz+23jAc+fzUU2eiSEWeTdPiKGVaToQeUaTCtIP8/inB8OwWmFvPIaVzCg==
-length: 1346
+edSignature: wViiTY3T6rm9qTsaEFrMlALIN3y+xGy6ETbQpYF5C15oKxJUx3sZCh+bpKpKO71GaGcW51+xoM8vU57RMecwAg==
+length: 1360
 -->
