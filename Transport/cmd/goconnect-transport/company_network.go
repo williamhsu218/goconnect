@@ -370,7 +370,7 @@ func companySessionForOwner(ctx context.Context, path string, uid uint32, pid in
 	}
 	cmd := exec.Command(filepath.Join(runtime, "bin/mihomo"), "-d", dir, "-f", config)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LANG=C"}
+	cmd.Env = managedTunEnvironment()
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
 	if ctx.Err() != nil || !c.alive() {

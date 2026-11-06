@@ -29,6 +29,13 @@ type transparentRuntime struct {
 	removeDirectory func(string) error
 }
 
+// These cores own a dual-stack internal TUN even on IPv4-only physical networks.
+// Mihomo otherwise discards inet6-address during its host capability check.
+// Scope the documented override to this child; never change the host environment.
+func managedTunEnvironment() []string {
+	return []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LANG=C", "SKIP_SYSTEM_IPV6_CHECK=1"}
+}
+
 func defaultTransparentRuntime() transparentRuntime {
 	return transparentRuntime{
 		command: systemCommand, network: originalPhysicalNetwork, readiness: coreReadiness, stopCore: stopChild, now: time.Now,
@@ -40,7 +47,7 @@ func defaultTransparentRuntime() transparentRuntime {
 		startCore: func(runtime, dir, file string) (*exec.Cmd, error) {
 			cmd := exec.Command(filepath.Join(runtime, "bin/mihomo"), "-d", dir, "-f", file)
 			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-			cmd.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LANG=C"}
+			cmd.Env = managedTunEnvironment()
 			cmd.Stdout = io.Discard
 			cmd.Stderr = io.Discard
 			return cmd, cmd.Start()
