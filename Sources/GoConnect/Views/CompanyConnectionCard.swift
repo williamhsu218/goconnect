@@ -36,7 +36,7 @@ struct CompanyConnectionCard: View {
                             .disabled(Product.isIsolatedTestApp || store.phase != "connected" || !store.companyConfiguration.enabled || store.companyConfigurationIssue != nil || store.updateOperationBlocked)
                     }
                 }
-                Text("试用功能 · 默认关闭 · 真实双 VPN 场景待验收").font(.caption).foregroundStyle(.secondary)
+                Text("默认关闭 · 仅接管已配置的公司地址").font(.caption).foregroundStyle(.secondary)
                 if store.companyConfiguration.enabled {
                     HStack(spacing: 18) {
                         Label("\(store.companyConfiguration.networks.count) 个公司网段", systemImage: "point.3.connected.trianglepath.dotted")
@@ -90,7 +90,7 @@ struct CompanyConnectionSettings: View {
     private func lines(_ text: String) -> [String] { text.split(whereSeparator: { $0.isWhitespace || $0 == "," || $0 == ";" }).map(String.init) }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("公司副连接（试用）").font(.title2.weight(.semibold))
+            Text("公司副连接").font(.title2.weight(.semibold))
             Text("在连接主线路前完成配置。公司副线路断开后，这些公司地址保持阻断。").font(.callout).foregroundStyle(.secondary)
             Form {
                 LabeledContent("HY2 主线路", value: store.configuration.activeConnection.displayName)
@@ -103,7 +103,7 @@ struct CompanyConnectionSettings: View {
                 LabeledContent("公司域名") { TextField("", text: $domains, prompt: Text("corp.example.com，可留空"), axis: .vertical).labelsHidden().accessibilityLabel("公司域名").textFieldStyle(.roundedBorder).multilineTextAlignment(.leading).lineLimit(2...3).frame(maxWidth: .infinity) }
                 LabeledContent("DNS 覆盖") { TextField("", text: $dns, prompt: Text("留空自动获取"), axis: .vertical).labelsHidden().accessibilityLabel("公司 DNS 覆盖").textFieldStyle(.roundedBorder).multilineTextAlignment(.leading).lineLimit(1...2).frame(maxWidth: .infinity) }
             }.formStyle(.grouped)
-            Text("首版支持明确的 IPv4 私网与 TCP 业务。不添加公司默认路由或全局搜索域，连接结束后须手动重连；与局域网、Tailscale 或已有规则冲突时拒绝启用。").font(.caption).foregroundStyle(.secondary)
+            Text("支持明确的 IPv4 私网与 TCP 业务。不添加公司默认路由或全局搜索域，连接结束后须手动重连；与局域网、Tailscale 或已有规则冲突时拒绝启用。").font(.caption).foregroundStyle(.secondary)
             if let error { Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled) }
             HStack {
                 Button("取消", role: .cancel) { dismiss() }
