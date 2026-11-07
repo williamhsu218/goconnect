@@ -23,7 +23,7 @@ struct GoConnectPreviewApp: App {
                 }
             }
         }
-        Settings { PreferencesView().frame(width: 480, height: 480) }
+        Settings { PreferencesView(store: controller.store).frame(width: 500, height: 620) }
     }
 }
 

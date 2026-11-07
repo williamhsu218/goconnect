@@ -36,7 +36,7 @@ struct GoConnectApp: App {
             }
         }
         Settings {
-            PreferencesView(showMenuBar: { delegate.menuBar?.restoreAndShow() }, updater: delegate.updater)
+            PreferencesView(store: store, showMenuBar: { delegate.menuBar?.restoreAndShow() }, updater: delegate.updater)
                 .frame(width: 500, height: 620)
         }
     }

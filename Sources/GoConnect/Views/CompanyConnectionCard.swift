@@ -28,7 +28,7 @@ struct CompanyConnectionCard: View {
                             .font(.callout).foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 8)
-                    Button("配置…") { editing = true }.disabled(store.busy || company.isRunning || company.busy)
+                    Button("配置…") { editing = true }.disabled(!store.canEditCompanyConnectionSettings)
                     if company.isRunning || company.busy {
                         Button("断开公司连接") { company.disconnect() }.disabled(company.phase == "quarantined" || company.phase == "stopping")
                     } else {
@@ -72,7 +72,7 @@ struct CompanyConnectionCard: View {
     }
 }
 
-private struct CompanyConnectionSettings: View {
+struct CompanyConnectionSettings: View {
     @Bindable var store: AppStore
     @Environment(\.dismiss) private var dismiss
     @State private var draft: CompanyConnectionConfiguration
@@ -80,9 +80,10 @@ private struct CompanyConnectionSettings: View {
     @State private var domains: String
     @State private var dns: String
     @State private var error: String?
-    init(store: AppStore) {
+    init(store: AppStore, initiallyEnabled: Bool? = nil) {
         self.store = store
-        let config = store.companyConfiguration
+        var config = store.companyConfiguration
+        if let initiallyEnabled { config.enabled = initiallyEnabled }
         _draft = State(initialValue: config); _networks = State(initialValue: config.networks.joined(separator: "\n"))
         _domains = State(initialValue: config.domains.joined(separator: "\n")); _dns = State(initialValue: config.dnsServers.joined(separator: "\n"))
     }
@@ -108,13 +109,17 @@ private struct CompanyConnectionSettings: View {
                 Button("取消", role: .cancel) { dismiss() }
                 Spacer()
                 Button("保存") {
+                    guard store.canSaveCompanyConnectionSettings else {
+                        error = "请先结束连接、线路编辑或更新，再保存公司配置。"
+                        return
+                    }
                     draft.primaryProfileID = store.configuration.activeProfileID
                     draft.networks = lines(networks); draft.domains = lines(domains).map { $0.lowercased() }; draft.dnsServers = lines(dns)
                     do {
                         draft = try draft.validated(in: store.configuration)
                         try store.companyFile.save(draft); store.companyConfiguration = draft; dismiss()
                     } catch { self.error = error.localizedDescription }
-                }.keyboardShortcut(.defaultAction).disabled(!store.companyConfigurationReadable)
+                }.keyboardShortcut(.defaultAction).disabled(!store.canSaveCompanyConnectionSettings)
             }
         }.padding(24).frame(width: 570, height: 560)
         .onAppear { store.companyDraftOpen = true }

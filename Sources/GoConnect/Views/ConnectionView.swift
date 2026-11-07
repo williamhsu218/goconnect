@@ -11,7 +11,9 @@ struct ConnectionView: View {
             VStack(alignment: .leading, spacing: groupSpacing) {
                 if Product.isNetworkTestApp { TestWorkspaceCard(store: store) }
                 VPNConnectionCard(store: store)
-                CompanyConnectionCard(store: store)
+                if store.showsCompanyConnection {
+                    CompanyConnectionCard(store: store)
+                }
 
                 if store.recoveryRequired {
                     HStack(alignment: .top, spacing: 10) {

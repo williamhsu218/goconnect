@@ -377,11 +377,13 @@ struct NetworkServiceCard: View {
 }
 
 struct PreferencesView: View {
+    var store: AppStore? = nil
     var showMenuBar: () -> Void = {}
     var updater: AppUpdater? = nil
     var body: some View {
         Form {
             MenuBarSettings(showMenuBar: showMenuBar)
+            if let store { CompanyFeatureSettings(store: store) }
             if let updater { AppUpdateSettings(updater: updater) }
             Section("关于 GoConnect") {
                 LabeledContent("版本", value: Product.version)
