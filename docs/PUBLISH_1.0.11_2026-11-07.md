@@ -56,6 +56,8 @@
 
 Claude Code 请求固定 claude-opus-5-5 / high，平台模型回执一致，未提供 effort 回执；Agy 请求固定 gemini-4-argon-medium / medium，返回审查文本但无独立模型/强度回执。Codex 实现与集成、纠偏、构建和实际 OTA；取消/计时补验由 Codex 子 agent 完成。模型审查不代替运行证据。
 
-公司业务范围为明确 IPv4 私网及 TCP；不包括 AnyConnect UDP 或 Finder 内核 SMB，睡眠恢复与其他企业环境需针对性验收。历史 AnyConnect UDP 限制未修复、未重新验收。完整包最低 macOS 26.0。
+公司业务范围为明确 IPv4 私网及 TCP；不包括 AnyConnect UDP 或 Finder 内核 SMB，睡眠恢复与其他企业环境需针对性验收。完整包最低 macOS 26.0。
+
+2026-11-07 用户明确确认 AnyConnect UDP 后续可能不再使用，并接受剩余历史问题放行。状态调整为 **部分缺陷已修复，剩余偶发超时已接受，发布非阻断**；尚未重新完成 UDP 实链路稳定性验收，不记为全部修复或 UDP 验收通过。不依赖该能力的后续版本不默认重复安排 UDP 长测；若修改该能力或业务重新依赖 UDP，则单独制定适用验收。TCP、DNS、路由、签名和更新等其他门禁继续执行。此项仅修正文档与 GitHub Release 说明，既有 tag、冻结附件和签名更新源保持原样。
 
 原始证据保留在项目外私有目录 `~/.codex/visualizations/2026/11/07/goconnect-release-1.0.11/`；不把公司地址、凭据或原始业务数据放入公开附件。

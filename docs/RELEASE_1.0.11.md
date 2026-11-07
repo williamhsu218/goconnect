@@ -16,6 +16,6 @@
 
 隔离回归覆盖 300 个顺序短请求的名额回收、400,000 字节延迟响应、服务器关闭通知、长连接复用、客户端重置、取消、公司会话撤销，以及持续慢响应的空闲计时刷新；相关计时与取消用例重复 10 次通过 Go race 检查。真实线路、最终签名包、完整构建及 OTA 放行结果见本版本发布记录；隔离测试不代替真实线路验收。
 
-当前功能范围不包含 AnyConnect UDP 和 Finder 内核 SMB；睡眠恢复及不同企业环境仍需要针对性验证。历史 AnyConnect UDP 限制未修复、未重新验收。
+当前功能范围不包含 AnyConnect UDP 和 Finder 内核 SMB；睡眠恢复及不同企业环境仍需要针对性验证。AnyConnect UDP 此前已修复部分本地缺陷，剩余历史偶发超时于 2026-11-07 经用户接受，标记为发布非阻断，不影响本版已验收的 IPv4 / TCP 公司副连接放行；尚未重新完成 UDP 实链路稳定性验收，不代表 UDP 全部修复或业务支持范围扩大。
 
 适用于 Apple Silicon / macOS 26.0 及以上。沿用团队 RX44JC39GB 的 Apple Development 签名和 Hardened Runtime，不是 Developer ID 分发签名，未经过 Apple 公证。应用 ZIP 与完整更新 feed 分别经原有 Ed25519 信任链签名；Bundle ID、公钥、账户及固定生产源不变。
