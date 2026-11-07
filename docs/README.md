@@ -1,5 +1,7 @@
 # 技术记录索引
 
+- [1.0.10 发布说明（公司副连接按需开启）](RELEASE_1.0.10.md) — 默认隐藏入口，设置中手动配置启用，关闭保留配置；[界面与配置保护验收](COMPANY_FEATURE_VISIBILITY_2026-11-07.md)；[正式发布与 OTA 记录](PUBLISH_1.0.10_2026-11-07.md)。
+
 - [无需更新正式 App 的临时公司通道测试器](COMPANY_TUNNEL_TESTER.md) — 用户态副隧道、物理出口校验与只读 DNS/内网探测；[两轮实链路验收](COMPANY_TUNNEL_LIVE_2026-11-07.md)。
 
 - [双 VPN 测试构建与验收边界](DUAL_CONNECTION_TEST_2026-11-07.md)；[方案](DUAL_CONNECTION_PLAN_2026-11-07.md)；[分块审查](DUAL_CONNECTION_REVIEW_2026-11-07.md)。
