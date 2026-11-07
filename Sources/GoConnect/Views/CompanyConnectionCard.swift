@@ -91,9 +91,9 @@ private struct CompanyConnectionSettings: View {
                     Text("请选择").tag(nil as UUID?)
                     ForEach(store.configuration.connections.filter { $0.subscription == nil && $0.id != store.configuration.activeProfileID }) { line in Text(line.displayName).tag(Optional(line.id)) }
                 }
-                LabeledContent("公司网段") { TextField("10.20.0.0/16，每行一个", text: $networks, axis: .vertical).lineLimit(3...5) }
-                LabeledContent("公司域名") { TextField("corp.example.com，可留空", text: $domains, axis: .vertical).lineLimit(2...3) }
-                LabeledContent("DNS 覆盖") { TextField("留空：自动读取公司 VPN 下发的 DNS", text: $dns, axis: .vertical).lineLimit(1...2) }
+                LabeledContent("公司网段") { TextField("", text: $networks, prompt: Text("10.20.0.0/16，每行一个"), axis: .vertical).labelsHidden().accessibilityLabel("公司网段").textFieldStyle(.roundedBorder).multilineTextAlignment(.leading).lineLimit(3...5).frame(maxWidth: .infinity) }
+                LabeledContent("公司域名") { TextField("", text: $domains, prompt: Text("corp.example.com，可留空"), axis: .vertical).labelsHidden().accessibilityLabel("公司域名").textFieldStyle(.roundedBorder).multilineTextAlignment(.leading).lineLimit(2...3).frame(maxWidth: .infinity) }
+                LabeledContent("DNS 覆盖") { TextField("", text: $dns, prompt: Text("留空自动获取"), axis: .vertical).labelsHidden().accessibilityLabel("公司 DNS 覆盖").textFieldStyle(.roundedBorder).multilineTextAlignment(.leading).lineLimit(1...2).frame(maxWidth: .infinity) }
             }.formStyle(.grouped)
             Text("首版支持明确的 IPv4 私网与 TCP 业务。不添加默认路由、全局搜索域或自动重连；局域网、Tailscale 与已有规则冲突时拒绝启用。").font(.caption).foregroundStyle(.secondary)
             if let error { Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled) }
