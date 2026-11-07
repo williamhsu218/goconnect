@@ -4,6 +4,7 @@
 
 - [双 VPN 测试构建与验收边界](DUAL_CONNECTION_TEST_2026-11-07.md)；[方案](DUAL_CONNECTION_PLAN_2026-11-07.md)；[分块审查](DUAL_CONNECTION_REVIEW_2026-11-07.md)。
 
+- [1.0.9 发布说明（公司副连接试用）](RELEASE_1.0.9.md) — 默认关闭，真实场景验收待用户更新后完成；[发布与 OTA 记录](PUBLISH_1.0.9_2026-11-07.md)。
 - [1.0.8 发布说明](RELEASE_1.0.8.md) — 系统 DNS 接管、国内直连和私有域名保护；[实现与验收边界](SYSTEM_DNS_2026-11-07.md)；[发布验收记录](PUBLISH_1.0.8_2026-11-07.md)。
 - [1.0.7 发布说明](RELEASE_1.0.7.md) — HY2 公网 DNS 可靠解析；[实现与验收边界](RELIABLE_DNS_2026-11-06.md)。
 
@@ -44,4 +45,3 @@
 
 - [双 VPN 功能测试版与单独窗口验收](DUAL_CONNECTION_INTEGRATED_TEST_2026-11-07.md)
 
-- [1.0.9 发布说明（公司副连接试用）](RELEASE_1.0.9.md)
