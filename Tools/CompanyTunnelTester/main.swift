@@ -19,8 +19,8 @@ private struct TesterConfiguration: Decodable {
         guard arguments.count == 3, arguments[1] == "--config", arguments[2].hasPrefix("/") else {
             throw TesterError("启动参数无效。请通过项目测试脚本启动。")
         }
-        let supplied = arguments[2], url = URL(fileURLWithPath: arguments[2])
-        guard url.standardizedFileURL.path == supplied, url.resolvingSymlinksInPath().path == supplied else {
+        let supplied = arguments[2]
+        guard Self.canonicalPOSIXPath(supplied) == supplied else {
             throw TesterError("测试配置必须使用无符号链接的规范绝对路径。")
         }
         let descriptor = open(supplied, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
@@ -41,16 +41,22 @@ private struct TesterConfiguration: Decodable {
         return value
     }
 
+    // Foundation rewrites existing /private/var paths into /var aliases on
+    // macOS. POSIX realpath preserves the canonical spelling used by the Go
+    // backend and launcher while still rejecting real symlink traversal.
+    private static func canonicalPOSIXPath(_ path: String) -> String? {
+        guard path.hasPrefix("/"), let buffer = realpath(path, nil) else { return nil }
+        defer { free(buffer) }
+        return String(cString: buffer)
+    }
+
     private func validatePackagedExecutable() throws {
         guard let resources = Bundle.main.resourceURL else { throw TesterError("测试应用缺少资源目录。") }
-        let supplied = URL(fileURLWithPath: transportPath)
-        let expected = resources.resolvingSymlinksInPath().appendingPathComponent("Runtime/bin/GoConnectTransport")
-        let canonical = supplied.resolvingSymlinksInPath().standardizedFileURL
-        guard supplied.standardizedFileURL.path == transportPath, canonical.path == transportPath,
-              expected.standardizedFileURL.path == expected.resolvingSymlinksInPath().standardizedFileURL.path,
-              canonical.path == expected.standardizedFileURL.path,
-              canonical.lastPathComponent == "GoConnectTransport",
-              FileManager.default.isExecutableFile(atPath: canonical.path) else {
+        let expected = resources.appendingPathComponent("Runtime/bin/GoConnectTransport")
+        guard Self.canonicalPOSIXPath(transportPath) == transportPath,
+              transportPath == Self.canonicalPOSIXPath(expected.path),
+              (transportPath as NSString).lastPathComponent == "GoConnectTransport",
+              FileManager.default.isExecutableFile(atPath: transportPath) else {
             throw TesterError("仅允许启动此测试应用内的 GoConnectTransport。")
         }
         var information = stat()
