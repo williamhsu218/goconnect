@@ -6,16 +6,16 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/williamhsu218/goconnect/releases</link>
     <description>GoConnect signed updates</description>
     <item>
-      <title>GoConnect 1.0.9</title>
-      <pubDate>Sat, 07 Nov 2026 06:58:50 +0000</pubDate>
-      <sparkle:version>69</sparkle:version>
-      <sparkle:shortVersionString>1.0.9</sparkle:shortVersionString>
+      <title>GoConnect 1.0.10</title>
+      <pubDate>Sat, 07 Nov 2026 08:50:29 +0000</pubDate>
+      <sparkle:version>70</sparkle:version>
+      <sparkle:shortVersionString>1.0.10</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
-      <description>公司副连接试用，默认关闭，支持 HY2 + AnyConnect IPv4/TCP 与独立公司 DNS；真实场景待用户更新后验收。可保持 VPN 下载，确认安装重启后才正常断开；新网络组件需在诊断页升级。</description>
-      <enclosure url="https://github.com/williamhsu218/goconnect/releases/download/v1.0.9/GoConnect-1.0.9-macos-arm64.zip" length="32112773" type="application/octet-stream" sparkle:edSignature="XQjtHLT3+ou1EDv+iyxAyU79ukANjCAEQ+OoQYBOFSU0GOfA5LVeXfcFtMIxczYqPTwB4wvEu1e27M0USxb1Dg=="></enclosure>
+      <description>公司副连接默认隐藏，可在设置的高级功能中配置启用；已启用用户保留入口，关闭保留配置。可保持 VPN 下载，确认安装重启后才断开；请先保存草稿。</description>
+      <enclosure url="https://github.com/williamhsu218/goconnect/releases/download/v1.0.10/GoConnect-1.0.10-macos-arm64.zip" length="32122841" type="application/octet-stream" sparkle:edSignature="4bLzsemkrgjfG+kRtBRw5hxtYKCqsjRm1EzRrz/NFJk4+KYSWto9u9eMKIC4Glbe60LL+63hmLJt0SGpf7yNBA=="></enclosure>
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: 5/ipNzFOMer50d689hLMdyNf4TVo1B/J5f6P5fvNO4NJeWKEoASdeH1NQfa+v2W+6iFjqm5QOp5UZp4t/jGeDg==
-length: 1439
+edSignature: T4v7VntXCcFL5OK0f0vPKMPOm5Cxi8UrVTciXKPnI/9Fh3U/eysWzlFQQd/kreVu/AClROk1br+sV+5ka2TDAw==
+length: 1412
 -->
