@@ -43,3 +43,5 @@
 历史发布、故障和验收记录保留原路径及其当时的证据范围；不能据此推断当前运行状态。源码候选版本见根目录 VERSION.json，保留包版本见本机 dist/releases.json。
 
 - [双 VPN 功能测试版与单独窗口验收](DUAL_CONNECTION_INTEGRATED_TEST_2026-11-07.md)
+
+- [1.0.9 发布说明（公司副连接试用）](RELEASE_1.0.9.md)

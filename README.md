@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/williamhsu218/goconnect/v1.0.8/Packaging/GoConnect.png" alt="GoConnect Logo" width="96" height="96" />
+  <img src="https://raw.githubusercontent.com/williamhsu218/goconnect/v1.0.9/Packaging/GoConnect.png" alt="GoConnect Logo" width="96" height="96" />
 </p>
 
 <h1 align="center">GoConnect</h1>
 
 <p align="center">
   面向 Apple Silicon Mac 的原生网络代理与 AnyConnect 客户端<br />
-  <strong>当前版本：v1.0.8 (Build 68)</strong>
+  <strong>当前版本：v1.0.9 (Build 69)</strong>
 </p>
 
 ---
@@ -26,6 +26,7 @@ GoConnect 是一款使用原生 SwiftUI 构建的 macOS 网络连接与分流工
   - 支持全局模式与直连名单，提供域名与 IP 例外配置，以及明确的企业内网网段分流。
 - **HY2 可靠 DNS**：经过 HY2 代理的公网 UDP DNS 查询由节点内核转为经所选线路发送的 DoH，减少 UDP 回程丢包导致的解析超时。节点内部可靠解析继续保留，其他 UDP 保持原有路径。
 - **系统 DNS 分流保护**：连接期间，未设为直连的公网域名经代理 DoH 解析；已有国内直连域名和内网保留原解析。临时 DNS 记录在断开或 worker 异常退出后撤销，不改写网络偏好。
+- **公司副连接（试用，默认关闭）**：支持 HY2 主线路之上连接独立 AnyConnect 公司线路，配置明确 IPv4 私网和公司域名，DNS 可在认证后从服务器获取。当前公司业务限 TCP；系统双 VPN、原生公司 DNS、SMB 与睡眠/退出清理的真实场景验收尚未完成，请在专用窗口主动测试。
 - **本机流量观测**：
   - 连接页显示当前上下行速率；按线路记录上传、下载及合计用量。
   - 支持按分时、日、月、年等多维度浏览历史趋势；切换统计查看线路不会变更当前活跃的网络连接。
@@ -43,7 +44,7 @@ GoConnect 是一款使用原生 SwiftUI 构建的 macOS 网络连接与分流工
 
 ### 获取应用
 
-- **最新发布包**：[GoConnect-1.0.8-macos-arm64.zip](https://github.com/williamhsu218/goconnect/releases/download/v1.0.8/GoConnect-1.0.8-macos-arm64.zip)
+- **最新发布包**：[GoConnect-1.0.9-macos-arm64.zip](https://github.com/williamhsu218/goconnect/releases/download/v1.0.9/GoConnect-1.0.9-macos-arm64.zip)
 - **完整发布页**：[GitHub Releases / Latest](https://github.com/williamhsu218/goconnect/releases/latest)
 
 ### 首次安装与权限
@@ -77,9 +78,9 @@ GoConnect 是一款使用原生 SwiftUI 构建的 macOS 网络连接与分流工
 在日常使用前，请留意以下边界：
 
 - **AnyConnect UDP 稳定性**：AnyConnect 真实 UDP 链路上存在历史随机超时现象，当前版本尚未修复且未重新验收。HY2 或 HTTPS 连通成功不代表 AnyConnect UDP 稳定性通过。
-- **企业内部 DNS**：企业内部域名的专用 DNS 解析尚未实现。
+- **公司副连接验收边界**：本版提供默认关闭的试用入口；已通过配置、隔离转发、生命周期和更新保护检查，真实系统双 VPN / 公司 DNS / SMB / 睡眠恢复与退出清理留待用户在线更新后的场景验收。不要把隔离测试当作真实企业网络验收。
 - **分流识别**：部分请求由 macOS 共享进程代发，无法准确归属到某个应用；域名规则也无法覆盖所有加密或纯 IP 请求。识别不到进程时，按名单代理模式保持直连，全局模式走所选线路。
-- **网络与认证**：保留已识别的局域网与 Tailscale 路径，同时运行多个 VPN 仍可能冲突。不保证断线后阻断所有联网，也未覆盖全部企业认证流程；订阅节点不能代替公司 VPN 访问内网。
+- **网络与认证**：保留已识别的局域网与 Tailscale 路径，在本应用之外同时运行其他 VPN 仍可能冲突。不保证断线后阻断所有联网，也未覆盖全部企业认证流程；订阅节点不能代替公司 VPN 访问内网。
 
 ## 隐私与数据安全
 
@@ -90,9 +91,9 @@ GoConnect 是一款使用原生 SwiftUI 构建的 macOS 网络连接与分流工
 
 ## 源码构建与许可协议
 
-- **源码构建**：当前正式版对应 [v1.0.8 源码](https://github.com/williamhsu218/goconnect/tree/v1.0.8)。请先检出该 tag，再按 [构建说明](docs/BUILD.md)操作；普通源码构建默认采用 ad-hoc 签名，应用内更新禁用。
+- **源码构建**：当前正式版对应 [v1.0.9 源码](https://github.com/williamhsu218/goconnect/tree/v1.0.9)。请先检出该 tag，再按 [构建说明](docs/BUILD.md)操作；普通源码构建默认采用 ad-hoc 签名，应用内更新禁用。
 - **版本与发布规范**：版本更新机制详见 [docs/UPDATES.md](docs/UPDATES.md)，发布规范详见 [docs/RELEASING.md](docs/RELEASING.md)。
-- **第三方许可**：OpenConnect、Mihomo 与 Sparkle 等组件分别适用各自许可，来源及说明见 [THIRD_PARTY.md](https://github.com/williamhsu218/goconnect/blob/v1.0.8/THIRD_PARTY.md)。GoConnect 自有代码尚未指定独立开源许可证。
+- **第三方许可**：OpenConnect、Mihomo 与 Sparkle 等组件分别适用各自许可，来源及说明见 [THIRD_PARTY.md](https://github.com/williamhsu218/goconnect/blob/v1.0.9/THIRD_PARTY.md)。GoConnect 自有代码尚未指定独立开源许可证。
 
 ## 问题与反馈
 

@@ -36,6 +36,7 @@ struct CompanyConnectionCard: View {
                             .disabled(Product.isIsolatedTestApp || store.phase != "connected" || !store.companyConfiguration.enabled || store.companyConfigurationIssue != nil || store.updateOperationBlocked)
                     }
                 }
+                Text("试用功能 · 默认关闭 · 真实双 VPN 场景待验收").font(.caption).foregroundStyle(.secondary)
                 if store.companyConfiguration.enabled {
                     HStack(spacing: 18) {
                         Label("\(store.companyConfiguration.networks.count) 个公司网段", systemImage: "point.3.connected.trianglepath.dotted")
@@ -88,7 +89,7 @@ private struct CompanyConnectionSettings: View {
     private func lines(_ text: String) -> [String] { text.split(whereSeparator: { $0.isWhitespace || $0 == "," || $0 == ";" }).map(String.init) }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("公司副连接").font(.title2.weight(.semibold))
+            Text("公司副连接（试用）").font(.title2.weight(.semibold))
             Text("在连接主线路前完成配置。公司副线路断开后，这些公司地址保持阻断。").font(.callout).foregroundStyle(.secondary)
             Form {
                 LabeledContent("HY2 主线路", value: store.configuration.activeConnection.displayName)
