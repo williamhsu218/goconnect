@@ -25,6 +25,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// Only half-closed company streams receive an idle drain bound. Keep this
+// policy separate from the outer transport recovery budget.
+const companyTCPDrainIdleTimeout = 75 * time.Second
+
 // The company stack never resolves names or carries UDP. The controller resolves
 // company names over its verified backend and sends only a checked literal IP.
 type companyLiteralDialer struct{ bridge.Dialer }

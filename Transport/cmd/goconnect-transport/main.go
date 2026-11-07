@@ -459,11 +459,13 @@ func packetPipe(parent context.Context) error {
 	})
 	stack.Observe = packetDiagnostics.Observe
 	var socksDialer bridge.Dialer = stack
+	var tcpDrainIdleTimeout time.Duration
 	if companySocket != "" {
 		socksDialer = companyLiteralDialer{stack}
+		tcpDrainIdleTimeout = companyTCPDrainIdleTimeout
 	}
 	go func() {
-		_ = (&bridge.SOCKSServer{Dialer: socksDialer, Token: token, Observe: packetDiagnostics.Observe}).Serve(ctx, listener)
+		_ = (&bridge.SOCKSServer{Dialer: socksDialer, Token: token, Observe: packetDiagnostics.Observe, TCPDrainIdleTimeout: tcpDrainIdleTimeout}).Serve(ctx, listener)
 		cancel()
 	}()
 	gateway := os.Getenv("VPNGATEWAY")

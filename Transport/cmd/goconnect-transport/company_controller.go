@@ -216,7 +216,7 @@ func newCompanyGate(parent context.Context, c *controlFiles, original originalNe
 	}
 	g.state = companyRouteState{State: "blocked", ProxyPort: g.outer.Port, ProxyToken: g.token}
 	go func() {
-		_ = (&bridge.SOCKSServer{Token: g.token, Dialer: g}).Serve(ctx, companySOCKSListener{g.listener})
+		_ = (&bridge.SOCKSServer{Token: g.token, Dialer: g, TCPDrainIdleTimeout: companyTCPDrainIdleTimeout}).Serve(ctx, companySOCKSListener{g.listener})
 	}()
 	go g.serveDNSUDP()
 	go g.serveDNSTCP()

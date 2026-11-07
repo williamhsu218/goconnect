@@ -19,7 +19,10 @@ type SOCKSServer struct {
 	Dialer  Dialer
 	Token   string
 	Observe Observer
-	flows   atomic.Uint64
+	// Zero preserves the legacy relay. Company connections opt into bounded
+	// idle draining after either direction ends, without limiting active flows.
+	TCPDrainIdleTimeout time.Duration
+	flows               atomic.Uint64
 }
 
 func (s *SOCKSServer) Serve(ctx context.Context, listener net.Listener) error {
@@ -116,6 +119,10 @@ func (s *SOCKSServer) handle(ctx context.Context, conn net.Conn) {
 			return
 		}
 		_ = conn.SetDeadline(time.Time{})
+		if s.TCPDrainIdleTimeout > 0 {
+			relayTCPWithIdleDrain(ctx, conn, remote, s.TCPDrainIdleTimeout)
+			return
+		}
 		closed := make(chan struct{}, 2)
 		go func() {
 			_, _ = io.Copy(remote, conn)

@@ -30,8 +30,12 @@ func (d companyRelayFixtureDialer) DialContext(ctx context.Context, network, add
 	return (&net.Dialer{}).DialContext(ctx, "tcp4", d.address)
 }
 
-func fixtureCompanyRelay(t *testing.T, serve func(net.Conn)) (*companyGate, proxy.Dialer) {
+func fixtureCompanyRelay(t *testing.T, serve func(net.Conn), idleBudget ...time.Duration) (*companyGate, proxy.Dialer) {
 	t.Helper()
+	budget := companyTCPDrainIdleTimeout
+	if len(idleBudget) > 0 {
+		budget = idleBudget[0]
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	target, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -60,7 +64,7 @@ func fixtureCompanyRelay(t *testing.T, serve func(net.Conn)) (*companyGate, prox
 	t.Cleanup(func() { backend.Close() })
 	token := strings.Repeat("b", 64)
 	go func() {
-		_ = (&bridge.SOCKSServer{Token: token, Dialer: companyLiteralDialer{companyRelayFixtureDialer{target.Addr().String()}}}).Serve(ctx, backend)
+		_ = (&bridge.SOCKSServer{Token: token, Dialer: companyLiteralDialer{companyRelayFixtureDialer{target.Addr().String()}}, TCPDrainIdleTimeout: budget}).Serve(ctx, backend)
 	}()
 	policy, err := company.NewPolicy(company.Policy{Networks: []string{"10.201.0.0/24"}})
 	if err != nil {
@@ -82,7 +86,7 @@ func fixtureCompanyRelay(t *testing.T, serve func(net.Conn)) (*companyGate, prox
 	}
 	t.Cleanup(func() { g.Close() })
 	go func() {
-		_ = (&bridge.SOCKSServer{Token: g.token, Dialer: g}).Serve(ctx, companySOCKSListener{g.listener})
+		_ = (&bridge.SOCKSServer{Token: g.token, Dialer: g, TCPDrainIdleTimeout: budget}).Serve(ctx, companySOCKSListener{g.listener})
 	}()
 	dialer, err := proxy.SOCKS5("tcp", g.listener.Addr().String(), &proxy.Auth{User: "goconnect", Password: g.token}, &net.Dialer{Timeout: 2 * time.Second})
 	if err != nil {
