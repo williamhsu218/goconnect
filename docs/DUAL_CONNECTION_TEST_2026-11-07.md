@@ -37,7 +37,24 @@
 
 ## 验收口径
 
-已验证/待验证结果与包哈希在构建和实际界面检查结束后补齐。原始证据目录：`/Users/willhsu/.codex/visualizations/2026/11/07/goconnect-dual-vpn-build/`，不提交私有原始日志。
+代码构建提交：`b8e60f57fc9ae2185f65c22a01e2776f1a8277c4`。完整检查提交 `225f71e` 之后只修改了一个原生表单文件的标签、占位与输入框布局；最终包中的 transport 和 Mihomo CDHash 均与完整检查包一致。
+
+| 门禁 | 本轮结果 |
+| --- | --- |
+| Swift | 完整 169 项通过，含公司生命周期、独立速率、旧配置 sidecar 兼容及更新草稿保护 |
+| Go | 全套 `go test -race -timeout 60s ./...` 通过；公司策略、DNS 异常/CNAME、身份、陈旧 revision、拒绝态、定向 drain 与 split 限制测试通过 |
+| 真实 Mihomo 回环 | 3 次 attach/block/reconnect，持续主 TCP 保持；稳定数据/DNS listener 不换端口；公司文字 IP 携带域外 Host 仍经公司出口。没有创建系统 TUN 或 DNS lease |
+| 真实 OpenConnect 回环 | 受限 CONNECT 代理认证与证书验证通过；公司角色 CSTP TCP、Unix socket/PID/start-time ready、UDP ASSOCIATE 拒绝及 EOF 清理通过；原有协议回归通过 |
+| 原生界面 | 最终 ZIP 解压运行；公司线路/网段/域名/DNS 字段可编辑且具有 AX 标签；默认路由输入被拒绝；手动 DNS 保存回读、清空恢复自动模式、重启后配置保持通过；网络接管禁用提示通过 |
+| 签名及隔离 | 实际 Code Signature 的 TeamIdentifier=RX44JC39GB、Hardened Runtime、deep/strict 校验通过；独立 bundle ID，更新关闭；sidecar 0600 |
+| 正式环境保护 | 正式 App 二进制、configuration.json、subscriptions.json 的 SHA-256 前后一致；原正式 App/helper/Mihomo PID 保持；服务仍 ready+busy；没有安装或发布 |
+| 清理 | Swift scratch、临时 Runtime、两轮临时 UI App/数据、worker worktree 已移除；旧 UI 候选与已知生成缓存移入废纸篓。正式/回滚分发包未变 |
+
+最终交付：`/Users/willhsu/Downloads/GoConnect-DualVPN-Test-20261107/GoConnect-DualVPN-Test-1.0.8-macos-arm64.zip`，31,990,549 字节。SHA-256：`61f01a684247886e57c92558aaefdb3fda511b3115ec0624c7ebdb1588ca65a3`，同目录 SHA256SUMS 已逐字核对。ZIP 内只有独立命名的 `GoConnect Dual VPN Test.app`，没有保留解压副本到项目。
+
+完整 G0 仍未放行：已证明的是回环隔离子项，实际物理接口绑定、真实系统 TUN/DNS 和 Finder SMB 属于下方待验收范围。此包的系统连接入口在编译期停用，不应当作已可使用的真实双 VPN 版本。
+
+原始证据目录：`/Users/willhsu/.codex/visualizations/2026/11/07/goconnect-dual-vpn-build/`，不提交私有原始日志。
 
 以下均保持待验收：真实物理接口上的公司网关、公司认证/MFA兼容、真实 macOS supplemental resolver 选择及缓存、系统 TUN 入口、内网页面/SSH、Finder SMB 挂载和文件读取、真实双连接故障/睡眠/崩溃与 OTA。回环协议与注入边界测试不能替代上述实网门禁。既有 AnyConnect UDP 问题未修复、未重新验收。
 
