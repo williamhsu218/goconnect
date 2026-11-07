@@ -9,8 +9,9 @@ VERIFY=0
 LOGS=0
 DEBUG=0
 EXPORT_DIR=""
+ISOLATED_TEST=0
 usage() {
-  echo "Usage: $0 [--verify] [--build-only|--package] [--run] [--debug] [--team-sign] [--export DIRECTORY] [--logs|--telemetry]"
+  echo "Usage: $0 [--verify] [--build-only|--package] [--run] [--debug] [--team-sign] [--isolated-test] [--export DIRECTORY] [--logs|--telemetry]"
 }
 # Swift Build in Xcode 27 records the deployment target as the linked SDK for
 # this SwiftPM executable. The native backend records the actual SDK, which
@@ -21,6 +22,7 @@ while [[ $# -gt 0 ]]; do
     --build-only|--package) LAUNCH=0 ;;
     --run) LAUNCH=1 ;;
     --debug) CONFIG=debug; DEBUG=1 ;;
+    --isolated-test) ISOLATED_TEST=1; export GOCONNECT_ISOLATED_TEST=1 ;;
     --team-sign) export GOCONNECT_REQUIRE_TEAM_SIGN=1 ;;
     --export)
       [[ $# -ge 2 && -n "$2" ]] || { usage >&2; exit 2; }
@@ -78,6 +80,8 @@ export GOCONNECT_TRANSPORT_BIN_DIR="$WORK/transport-bin"
 export GOCONNECT_REGISTER_APP=0
 export PYTHONDONTWRITEBYTECODE=1
 SWIFT_BUILD_ARGS=(--build-system native --sdk "$(xcrun --sdk macosx --show-sdk-path)" --scratch-path "$WORK/swift")
+SWIFT_TEST_ARGS=("${SWIFT_BUILD_ARGS[@]}")
+if [[ "$ISOLATED_TEST" == 1 ]]; then SWIFT_BUILD_ARGS+=(-Xswiftc -DGOCONNECT_ISOLATED_TEST); fi
 echo "Temporary build directory: $WORK"
 if [[ "$VERIFY" == 1 ]]; then
   python3 script/test_release_artifacts.py
@@ -86,7 +90,7 @@ if [[ "$VERIFY" == 1 ]]; then
   python3 script/test_yunyoo_subscription_service.py
   python3 script/test_signing.py
   python3 script/test_prepare_update.py
-  swift test "${SWIFT_BUILD_ARGS[@]}"
+  swift test "${SWIFT_TEST_ARGS[@]}"
   (cd Transport && go test -race -timeout 60s ./...)
 fi
 swift build "${SWIFT_BUILD_ARGS[@]}" -c "$CONFIG"
@@ -98,6 +102,7 @@ export GOCONNECT_SPARKLE_SDK="$SPARKLE_SDK"
 export GOCONNECT_SPARKLE_FRAMEWORK="$SPARKLE_SDK/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
 python3 script/package_app.py "$SWIFT_BIN"
 APP="$GOCONNECT_OUTPUT_DIR/GoConnect.app"
+if [[ "$ISOLATED_TEST" == 1 ]]; then APP="$GOCONNECT_OUTPUT_DIR/GoConnect Dual VPN Test.app"; fi
 "$APP/Contents/Resources/Runtime/bin/openconnect" --version
 "$APP/Contents/Resources/Runtime/bin/mihomo" -v
 "$APP/Contents/Resources/Runtime/bin/GoConnectTransport" version

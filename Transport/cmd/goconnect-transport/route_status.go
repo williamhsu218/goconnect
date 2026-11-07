@@ -20,6 +20,7 @@ type appRouteStatus struct {
 	Unmanaged int    `json:"unmanaged"`
 }
 type routeSnapshot struct {
+	Company         *companyRouteState  `json:"company,omitempty"`
 	SystemDevice    string              `json:"systemDevice,omitempty"`
 	RemoteNetworks  []string            `json:"remoteNetworks,omitempty"`
 	State           string              `json:"state"`

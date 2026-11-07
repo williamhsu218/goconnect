@@ -15,6 +15,7 @@ public struct RouteCommandResult: Codable, Sendable {
 }
 
 public struct RouteSnapshot: Codable, Sendable {
+    public var company: CompanyRouteState?
     public var state: String
     public var message: String?
     public var device: String?

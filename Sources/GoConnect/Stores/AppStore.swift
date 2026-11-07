@@ -18,6 +18,15 @@ struct ActivityEntry: Identifiable {
 
 @MainActor @Observable
 final class AppStore {
+    var companyConfiguration = CompanyConnectionConfiguration()
+    var companyConfigurationReadable = true
+    var companyDraftOpen = false
+    var companyProtectedProfileID: UUID? { busy && companyConfiguration.enabled ? companyConfiguration.companyProfileID : company?.activeProfileID }
+    var company: CompanyConnectionStore!
+    private let companyTransport = TransportClient()
+    private var companyReservation: CompanyReservation?
+    private var companyTimer: Timer?
+    var companyFile: CompanyConnectionFile { CompanyConnectionFile(url: file.url.deletingLastPathComponent().appendingPathComponent("company-connection.json")) }
     var page: Page = .connection
     var configuration = Configuration()
     var subscriptions: [Subscription] = []
@@ -116,6 +125,7 @@ final class AppStore {
         route.onSnapshot = { [weak self] snapshot in
             guard let self else { return }
             self.routeSnapshot = snapshot
+            if let state = snapshot.company { self.company?.routeState(state) }
         }
         self.publicIPChecker.onResult = { [weak self] ip in
             guard let self, self.connectedAt != nil, ["connected", "authorizing", "testing"].contains(self.phase) else { return }
@@ -124,11 +134,53 @@ final class AppStore {
         }
         do { subscriptions = try subscriptionFile.load() }
         catch { subscriptionsReadable = false; show("订阅缓存无法读取，原文件已保留。", error: true) }
+        company = CompanyConnectionStore(actions: CompanyConnectionActions(start: { [weak self] profile, secret, token, generation in
+            guard let self, self.phase == "connected", !self.updateOperationBlocked,
+                  let socket = self.route.companySocketPath, let state = self.route.companyState,
+                  let port = state.proxyPort, let proxyToken = state.proxyToken else {
+                throw CompanyConnectionError.invalid("请先建立已预留公司出口的主连接。")
+            }
+            self.companyTransport.onEvent = { [weak self] event in
+                guard let self else { return }
+                // OpenConnect reports the loopback HTTP proxy as VPNGATEWAY.
+                // Actual outer destinations are authorized by the root CONNECT
+                // proxy on every dial, not by this informational ready field.
+                if event.event == "ready", event.gateway.map({ $0 == "127.0.0.1" || self.companyReservation?.gatewayIPs.contains($0) == true }) != true {
+                    self.company.handle(TransportEvent(event: "error", message: "公司网关与预先批准的地址不一致，已停止副连接。"), generation: generation)
+                } else { self.company.handle(event, generation: generation) }
+                self.finishStopping()
+            }
+            try self.companyTransport.startCompany(profile: profile, password: secret, token: token, socket: socket, proxyPort: port, proxyToken: proxyToken)
+        }, prepare: { [weak self] claim, generation in
+            guard let self else { throw CocoaError(.userCancelled) }
+            try self.route.prepareCompany(claim, generation: generation)
+        }, block: { [weak self] generation in
+            guard let self else { throw CocoaError(.userCancelled) }
+            try self.route.blockCompany(generation: generation)
+        }, stop: { [weak self] in self?.companyTransport.stop() }))
+        do { companyConfiguration = try companyFile.load() }
+        catch { companyConfigurationReadable = false; show("公司连接配置无法读取，原文件已保留。", error: true) }
+        if Product.isIsolatedTestApp, !FileManager.default.fileExists(atPath: file.url.path), companyConfigurationReadable {
+            var primary = SavedConnection(routingMode: .global)
+            primary.profile.name = "HY2 主线路 · 测试示例"
+            primary.subscription = SubscriptionSelection(subscriptionID: UUID(), nodeName: "隔离测试 HY2")
+            var secondary = SavedConnection()
+            secondary.profile.name = "公司 AnyConnect · 测试示例"; secondary.profile.server = "https://vpn.example.invalid"; secondary.profile.username = "test-user"
+            configuration.connections = [primary, secondary]; configuration.activeProfileID = primary.id
+            companyConfiguration.primaryProfileID = primary.id; companyConfiguration.companyProfileID = secondary.id
+            companyConfiguration.networks = ["10.201.0.0/16"]; companyConfiguration.domains = ["corp.example.invalid"]
+            do { try file.save(configuration); try companyFile.save(companyConfiguration) }
+            catch { show(error.localizedDescription, error: true) }
+        }
+        companyTimer = Timer(timeInterval: 1, repeats: true) { [weak self] timer in
+            Task { @MainActor [weak self] in guard let self else { timer.invalidate(); return }; self.company.tickTimeout() }
+        }
+        RunLoop.main.add(companyTimer!, forMode: .common)
         if refreshRuntime { refreshEnvironment() }
     }
     var updateSafetyState: UpdateSafetyState {
-        UpdateSafetyState(connectionOrServiceActive: busy || transport.isRunning || route.isRunning || networkService.status.busy || recoveryRequired,
-                          hasUnsavedDraft: profileDraft != nil, isTestingNodes: nodeLatency.isRunning,
+        UpdateSafetyState(connectionOrServiceActive: busy || transport.isRunning || route.isRunning || company.isRunning || company.busy || companyTransport.isRunning || networkService.status.busy || recoveryRequired,
+                          hasUnsavedDraft: profileDraft != nil || companyDraftOpen, isTestingNodes: nodeLatency.isRunning,
                           isUpdatingSubscriptions: subscriptionWorking,
                           isMaintainingService: networkService.working || phase == "serviceMaintenance")
     }
@@ -208,14 +260,14 @@ final class AppStore {
         } catch { show(error.localizedDescription, error: true); return false }
     }
     func selectProfile(_ id: UUID) {
-        guard !busy, id != configuration.activeProfileID, save() else { return }
+        guard !company.isRunning, !company.busy, !busy, id != configuration.activeProfileID, save() else { return }
         let previous = configuration
         do { try configuration.select(id); try file.save(configuration); password = ""; phase = "idle"; search = ""; show("已切换连接配置。") }
         catch { configuration = previous; show(error.localizedDescription, error: true) }
     }
     func quickConnect(_ id: UUID) {
         guard allowsOperationDuringUpdate() else { return }
-        guard !busy, profileDraft == nil else { return }
+        guard !busy, !company.isRunning, !company.busy, !companyDraftOpen, profileDraft == nil else { return }
         guard !recoveryRequired else { show("上次网络进程未能退出，已暂停重连。请导出诊断并重启 macOS 后再连接。", error: true); return }
         guard !nodeLatency.isRunning else { show("请先停止节点测试，再连接 VPN。", error: true); return }
         selectProfile(id)
@@ -354,8 +406,9 @@ final class AppStore {
         hasOtherRouter = false
     }
     func connect(test: Bool = false) {
+        guard !Product.isIsolatedTestApp else { show("此隔离测试包仅验收界面与配置，不接管系统网络。", error: true); return }
         guard allowsOperationDuringUpdate() else { return }
-        guard !busy, profileDraft == nil else { return }
+        guard !busy, !company.isRunning, !company.busy, !companyDraftOpen, profileDraft == nil else { return }
         guard !recoveryRequired else { show("上次网络进程未能退出，已暂停重连。请导出诊断并重启 macOS 后再连接。", error: true); return }
         guard !nodeLatency.isRunning else { show("请先停止节点测试，再连接 VPN。", error: true); return }
         do {
@@ -386,7 +439,15 @@ final class AppStore {
             Task {
                 guard connectionGeneration == attempt else { return }
                 do {
-                    if !test { try await networkService.ensureReady() }
+                    if !test {
+                        if companyConfiguration.enabled {
+                            guard companyConfigurationReadable else { throw CompanyConnectionError.invalid("请先处理公司连接配置读取错误。") }
+                            guard selectedSubscriptionNode?.type == "hysteria2" else { throw CompanyConnectionError.invalid("双连接测试当前只支持 HY2 主线路。") }
+                            companyReservation = try await CompanyGatewayResolver.reservation(companyConfiguration, configuration: configuration)
+                        } else { companyReservation = nil }
+                        guard connectionGeneration == attempt, phase == "preparingService" else { return }
+                        try await networkService.ensureReady()
+                    }
                     guard connectionGeneration == attempt else { return }
                     guard phase == "preparingService" || phase == "connecting" else { finishStopping(); return }
                     phase = "connecting"
@@ -400,6 +461,7 @@ final class AppStore {
         } catch { phase = "failed"; show(error.localizedDescription, error: true) }
     }
     func disconnect() {
+        company?.primaryStopped()
         guard busy else { return }
         if passwordRequested { passwordRequested = false; return }
         diagnostics.record(.disconnectRequested)
@@ -407,6 +469,7 @@ final class AppStore {
         stopAll()
     }
     private func stopAll() {
+        company?.primaryStopped()
         trafficHistory.endSession()
         publicIPChecker.stop(); publicIPChecking = false; publicIP = nil; publicIPCheckedAt = nil
         trafficAvailable = false
@@ -416,7 +479,7 @@ final class AppStore {
         finishStopping()
     }
     private func finishStopping() {
-        if phase == "stopping", !route.isRunning, !transport.isRunning {
+        if phase == "stopping", !route.isRunning, !transport.isRunning, !company.isRunning, !companyTransport.isRunning {
             phase = stopFailed ? "failed" : "idle"
             if !stopFailed { show("已断开。") }
         }
@@ -452,7 +515,7 @@ final class AppStore {
                     try route.start(port: port, token: token, apps: configuration.routingApplications,
                                     gateway: gateway, runtime: transport.runtimeURL, mode: configuration.routingMode,
                                     directDomains: configuration.effectiveDirectDomains,
-                                    remoteNetworks: usesCompanyRoutes ? configuration.activeConnection.remoteNetworks : [])
+                                    remoteNetworks: usesCompanyRoutes ? configuration.activeConnection.remoteNetworks : [], company: companyReservation)
                 }
                 catch { show(error.localizedDescription, error: true); stopFailed = true; stopAll() }
             }

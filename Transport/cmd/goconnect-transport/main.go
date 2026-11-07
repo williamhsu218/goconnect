@@ -120,13 +120,16 @@ func main() {
 }
 
 type request struct {
-	Server          string `json:"server"`
-	Username        string `json:"username"`
-	Password        string `json:"password"`
-	Group           string `json:"group"`
-	Token           string `json:"token"`
-	OpenConnectPath string `json:"openconnectPath"`
-	CAFile          string `json:"caFile,omitempty"`
+	Server            string `json:"server"`
+	Username          string `json:"username"`
+	Password          string `json:"password"`
+	Group             string `json:"group"`
+	Token             string `json:"token"`
+	OpenConnectPath   string `json:"openconnectPath"`
+	CAFile            string `json:"caFile,omitempty"`
+	CompanySocket     string `json:"companySocket,omitempty"`
+	CompanyProxyPort  uint16 `json:"companyProxyPort,omitempty"`
+	CompanyProxyToken string `json:"companyProxyToken,omitempty"`
 }
 
 func (r request) validate() error {
@@ -145,7 +148,7 @@ func (r request) validate() error {
 	if !filepath.IsAbs(r.OpenConnectPath) {
 		return errors.New("invalid executable")
 	}
-	return nil
+	return validateCompanyTransportRequest(r)
 }
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
@@ -175,6 +178,9 @@ func session(parent context.Context) error {
 	// Keeping stdin open is the lifetime lease from the GUI. EOF means stop.
 	go func() { _, _ = io.Copy(io.Discard, reader); cancel() }()
 	args := []string{"--protocol=anyconnect", "--verbose", "--non-inter", "--passwd-on-stdin", "--reconnect-timeout=" + strconv.Itoa(reconnectTimeoutSeconds), "--script-tun", "--script", "exec " + shellQuote(self) + " pipe", "--user", r.Username}
+	if r.CompanySocket != "" {
+		args = append(args, "--no-dtls", "--proxy-auth=basic", "--proxy", companyProxyURL(r.CompanyProxyPort, r.CompanyProxyToken))
+	}
 	if r.Group != "" {
 		args = append(args, "--authgroup", r.Group)
 	}
@@ -192,6 +198,9 @@ func session(parent context.Context) error {
 	cmd := exec.Command(r.OpenConnectPath, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LANG=C", "GOCONNECT_TOKEN=" + r.Token, "GOCONNECT_OWNER_PID=" + strconv.Itoa(os.Getpid())}
+	if r.CompanySocket != "" {
+		cmd.Env = append(cmd.Env, "GOCONNECT_COMPANY_SOCKET="+r.CompanySocket)
+	}
 	cmd.Stdin = strings.NewReader(r.Password + "\n")
 	stdout, stdoutWrite, err := os.Pipe()
 	if err != nil {
@@ -394,6 +403,17 @@ func packetPipe(parent context.Context) error {
 			}
 		}
 	}
+	if os.Getenv("GOCONNECT_COMPANY_SOCKET") != "" {
+		hasIPv4 := false
+		for _, address := range addresses {
+			if address.Is4() {
+				hasIPv4 = true
+			}
+		}
+		if !hasIPv4 {
+			return errors.New("company connection requires assigned IPv4 address")
+		}
+	}
 	mtu, _ := strconv.Atoi(os.Getenv("INTERNAL_IP4_MTU"))
 	if mtu == 0 {
 		mtu = 1400
@@ -407,19 +427,27 @@ func packetPipe(parent context.Context) error {
 	if len(token) < 32 {
 		return errors.New("missing token")
 	}
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	companySocket := os.Getenv("GOCONNECT_COMPANY_SOCKET")
+	listener, err := companyTransportListener(companySocket)
 	if err != nil {
 		return err
 	}
 	defer listener.Close()
+	if companySocket != "" {
+		defer os.Remove(companySocket)
+	}
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	packetDiagnostics := bridge.NewDiagnostics(ctx, func(observation bridge.Observation) {
 		emit(map[string]any{"event": "bridge_diagnostic", "bridge": observation})
 	})
 	stack.Observe = packetDiagnostics.Observe
+	var socksDialer bridge.Dialer = stack
+	if companySocket != "" {
+		socksDialer = companyLiteralDialer{stack}
+	}
 	go func() {
-		_ = (&bridge.SOCKSServer{Dialer: stack, Token: token, Observe: packetDiagnostics.Observe}).Serve(ctx, listener)
+		_ = (&bridge.SOCKSServer{Dialer: socksDialer, Token: token, Observe: packetDiagnostics.Observe}).Serve(ctx, listener)
 		cancel()
 	}()
 	gateway := os.Getenv("VPNGATEWAY")
@@ -427,7 +455,19 @@ func packetPipe(parent context.Context) error {
 	if err != nil {
 		return err
 	}
-	emit(map[string]any{"event": "ready", "port": listener.Addr().(*net.TCPAddr).Port, "addresses": addresses, "dns": dns, "gateway": gateway, "remoteNetworks": remoteNetworks, "remoteExcluded": remoteExcluded})
+	readyEvent := map[string]any{"event": "ready", "addresses": addresses, "dns": dns, "gateway": gateway, "remoteNetworks": remoteNetworks, "remoteExcluded": remoteExcluded}
+	if companySocket == "" {
+		readyEvent["port"] = listener.Addr().(*net.TCPAddr).Port
+	} else {
+		started, e := companyProcessStartTime(os.Getpid())
+		if e != nil {
+			return e
+		}
+		readyEvent["companySocket"] = companySocket
+		readyEvent["companyPID"] = os.Getpid()
+		readyEvent["companyStartTime"] = started
+	}
+	emit(readyEvent)
 	owner, _ := strconv.Atoi(os.Getenv("GOCONNECT_OWNER_PID"))
 	go func() {
 		tick := time.NewTicker(time.Second)

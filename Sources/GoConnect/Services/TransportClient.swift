@@ -24,6 +24,17 @@ final class TransportClient {
                                        openconnectPath: runtimeURL.appendingPathComponent("bin/openconnect").path)
         try start(command: "session", message: JSONEncoder().encode(request) + Data([10]))
     }
+    func startCompany(profile: VPNProfile, password: String, token: String, socket: String, proxyPort: UInt16, proxyToken: String) throws {
+        struct Request: Encodable {
+            let server, username, group, password, token, openconnectPath, companySocket: String
+            let companyProxyPort: UInt16
+            let companyProxyToken: String
+        }
+        let request = Request(server: try profile.validatedServer(), username: profile.username, group: profile.group,
+                              password: password, token: token, openconnectPath: runtimeURL.appendingPathComponent("bin/openconnect").path,
+                              companySocket: socket, companyProxyPort: proxyPort, companyProxyToken: proxyToken)
+        try start(command: "session", message: JSONEncoder().encode(request) + Data([10]))
+    }
     func start(node: SubscriptionNode, token: String) throws {
         struct Request: Encodable { let node: SubscriptionNode; let token: String }
         try start(command: "subscription-session", message: JSONEncoder().encode(Request(node: node, token: token)) + Data([10]))

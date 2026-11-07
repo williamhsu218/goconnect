@@ -10,6 +10,7 @@ struct ConnectionView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: groupSpacing) {
                 VPNConnectionCard(store: store)
+                CompanyConnectionCard(store: store)
 
                 if store.recoveryRequired {
                     HStack(alignment: .top, spacing: 10) {

@@ -25,8 +25,9 @@ if WORK == ROOT or ROOT in WORK.parents or not WORK.name.startswith("goconnect-b
     raise SystemExit("Build directory must be a dedicated temporary directory outside the project.")
 if any(WORK not in path.parents for path in (DIST, TRANSPORT_BIN)):
     raise SystemExit("Package and transport output must stay inside the temporary build directory.")
-STAGE = DIST / ".GoConnect.stage.app"
-APP = DIST / "GoConnect.app"
+APP_NAME = "GoConnect Dual VPN Test" if os.environ.get("GOCONNECT_ISOLATED_TEST") == "1" else "GoConnect"
+STAGE = DIST / ("." + APP_NAME + ".stage.app")
+APP = DIST / (APP_NAME + ".app")
 OTOOL = shutil.which("otool") or "/usr/bin/otool"
 INSTALL_NAME_TOOL = shutil.which("install_name_tool") or "/usr/bin/install_name_tool"
 
@@ -174,6 +175,9 @@ info.update({"GoConnectSigningMode": SIGNING.mode,
              "SUEnableAutomaticChecks": False, "SUAutomaticallyUpdate": False,
              "SUAllowsAutomaticUpdates": False, "SUVerifyUpdateBeforeExtraction": True,
              "SURequireSignedFeed": True})
+if os.environ.get("GOCONNECT_ISOLATED_TEST") == "1":
+    info.update({"CFBundleIdentifier": "com.willhsu.GoConnect.DualVPNTest", "CFBundleName": "GoConnect Dual VPN Test",
+                 "CFBundleDisplayName": "GoConnect 双连接测试", "GoConnectUpdatesEnabled": False})
 info["CFBundleDevelopmentRegion"] = "zh-Hans"
 info["CFBundleLocalizations"] = ["zh-Hans"]
 with (STAGE / "Contents/Info.plist").open("wb") as stream:
@@ -209,7 +213,7 @@ STAGE.rename(APP)
 lsregister = Path("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister")
 if lsregister.exists() and os.environ.get("GOCONNECT_REGISTER_APP", "1") == "1":
     subprocess.run([str(lsregister), "-f", str(APP)], check=True)
-archive = DIST / f"GoConnect-{VERSION['version']}-macos-{os.uname().machine}.zip"
+archive = DIST / f"{'GoConnect-DualVPN-Test' if os.environ.get('GOCONNECT_ISOLATED_TEST') == '1' else 'GoConnect'}-{VERSION['version']}-macos-{os.uname().machine}.zip"
 if archive.exists(): archive.unlink()
 subprocess.run(["/usr/bin/ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", str(APP), str(archive)], check=True)
 (DIST / "SHA256SUMS").write_text(hashlib.sha256(archive.read_bytes()).hexdigest() + "  " + archive.name + "\n")

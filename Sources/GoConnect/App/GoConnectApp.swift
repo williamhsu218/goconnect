@@ -108,7 +108,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !Self.isUpdateQA { AppFaultMonitor.shared.start() }
         NSApp.setActivationPolicy(.regular)
         // App lifetime owns the status item; it must not depend on a window appearing.
-        if !Self.isUpdateQA {
+        if !Self.isUpdateQA && !Product.isIsolatedTestApp {
             menuBar = MenuBarController(store: store,
                 openSettings: { [weak self] in self?.showSettingsWindow() },
                 openMainWindow: { [weak self] in self?.showMainWindow() })

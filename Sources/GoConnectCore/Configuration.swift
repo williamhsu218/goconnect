@@ -1,7 +1,12 @@
 import Foundation
 
 public enum Product {
-    public static let bundleID = "com.willhsu.GoConnect"
+    #if GOCONNECT_ISOLATED_TEST
+    public static let isIsolatedTestApp = true
+    #else
+    public static let isIsolatedTestApp = false
+    #endif
+    public static let bundleID = isIsolatedTestApp ? "com.willhsu.GoConnect.DualVPNTest" : "com.willhsu.GoConnect"
 }
 
 public enum AccessMode: String, Codable, CaseIterable, Identifiable, Sendable {

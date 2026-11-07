@@ -5,7 +5,7 @@ extension AppStore {
     var profileDraftHasChanges: Bool { profileDraft?.hasChanges == true || !draftPassword.isEmpty }
     var canSaveProfileDraft: Bool {
         guard let profileDraft, configurationReadable else { return false }
-        return !busy || profileDraft.id != configuration.activeProfileID
+        return (!busy || profileDraft.id != configuration.activeProfileID) && profileDraft.id != companyProtectedProfileID
     }
 
     func beginEditingProfile(_ id: UUID) {
@@ -71,7 +71,7 @@ extension AppStore {
 
     func deleteProfile(_ id: UUID) {
         guard configurationReadable, profileDraft == nil,
-              !busy || id != configuration.activeProfileID else { return }
+              (!busy || id != configuration.activeProfileID), id != companyProtectedProfileID else { return }
         do {
             var updated = configuration
             try updated.remove(id)

@@ -1,6 +1,7 @@
 import Foundation
 
 public struct RouteSession: Codable {
+    public var company: CompanyReservation?
     public var transparentRouting = true
     public var remoteNetworks: [String] = []
     public var remoteExcluded: [String] = []

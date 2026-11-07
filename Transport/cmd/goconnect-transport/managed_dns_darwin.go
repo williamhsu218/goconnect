@@ -79,7 +79,7 @@ type nativeDNSLease struct {
 
 // The service owns a new temporary dynamic-store key, never the user's network
 // preferences. configd removes it even if the worker is killed. A domain scope
-// is used only by isolated native tests; production installs the default scope.
+// is also pre-armed for explicitly approved company domains by the unified controller.
 func acquireManagedDNS(port uint16, scope string) (managedDNSLease, error) {
 	if port == 0 || (scope != "" && !validDirectDomain(scope)) {
 		return nil, fmt.Errorf("invalid managed DNS scope")

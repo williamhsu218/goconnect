@@ -28,9 +28,10 @@ type domainRule struct {
 }
 
 type routeRequest struct {
-	TransparentRouting bool     `json:"transparentRouting,omitempty"`
-	CompanyShared      bool     `json:"companyShared,omitempty"`
-	VPNAddresses       []string `json:"vpnAddresses,omitempty"`
+	Company            *companyReservation `json:"company,omitempty"`
+	TransparentRouting bool                `json:"transparentRouting,omitempty"`
+	CompanyShared      bool                `json:"companyShared,omitempty"`
+	VPNAddresses       []string            `json:"vpnAddresses,omitempty"`
 	// Root-discovered resolver addresses; never accepted from session JSON.
 	systemDevice     string
 	coreGID          uint32
@@ -52,6 +53,14 @@ type routeRequest struct {
 }
 
 func (r routeRequest) validate() error {
+	if r.Company != nil {
+		if !r.TransparentRouting || r.ProbeOnly || r.CompanyShared || len(r.RemoteNetworks) > 0 {
+			return errors.New("invalid company reservation mode")
+		}
+		if err := r.Company.validate(); err != nil {
+			return err
+		}
+	}
 	if r.TransparentRouting && (r.CompanyShared || !r.LiveRouting) {
 		return errors.New("invalid transparent session")
 	}

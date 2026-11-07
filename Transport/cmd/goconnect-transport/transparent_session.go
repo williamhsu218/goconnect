@@ -106,6 +106,7 @@ func (connection *transparentConnection) run(ctx context.Context) (result error)
 	var child *exec.Cmd
 	var done chan error
 	var dnsLease managedDNSLease
+	var companyGate *companyGate
 	defer exitLog.unwind(&result, func() {
 		if errors.Is(result, errSessionEnded) {
 			result = nil
@@ -115,9 +116,20 @@ func (connection *transparentConnection) run(ctx context.Context) (result error)
 		}
 		// Remove the temporary resolver while its listener still exists. Closing
 		// the dynamic-store session also restores DNS after abnormal worker exit.
+		if companyGate != nil {
+			companyGate.mu.Lock()
+			companyGate.blockLocked()
+			companyGate.mu.Unlock()
+		}
 		var dnsRestoreErr error
+		if companyGate != nil {
+			dnsRestoreErr = companyGate.releaseDNS()
+		}
 		if dnsLease != nil {
-			dnsRestoreErr = dnsLease.close()
+			dnsRestoreErr = errors.Join(dnsRestoreErr, dnsLease.close())
+		}
+		if companyGate != nil {
+			companyGate.Close()
 		}
 		// Restore the network before waiting for a potentially blocked core. Retain
 		// a quarantine record if either cleanup or child termination fails.
@@ -160,7 +172,25 @@ func (connection *transparentConnection) run(ctx context.Context) (result error)
 		}
 	})
 	exitLog.stage = "config"
-	config, e := json.Marshal(makeTransparentConfig(r, device, port, original, local, ts))
+	if r.Company != nil {
+		if e = validateCompanyReservation(r, local, ts); e != nil {
+			return e
+		}
+		// Eight capture/default records plus primary and up to four company host pins
+		// stay within the strict 16-entry recovery journal.
+		if len(state.Routes)+8+len(r.Company.GatewayIPs) > 16 {
+			return errors.New("company gateway route budget exceeded")
+		}
+		companyGate, e = newCompanyGate(ctx, c, original)
+		if e != nil {
+			return e
+		}
+	}
+	configuration := makeTransparentConfig(r, device, port, original, local, ts)
+	if companyGate != nil {
+		companyGate.configure(configuration)
+	}
+	config, e := json.Marshal(configuration)
 	if e != nil {
 		return e
 	}
@@ -206,6 +236,9 @@ func (connection *transparentConnection) run(ctx context.Context) (result error)
 			trace("transparent.core_exited", int64(cmd.ProcessState.ExitCode()))
 			return errors.New("透明分流核心已退出")
 		case <-ticks:
+			if companyGate != nil {
+				companyGate.poll(c)
+			}
 			if checkLease() != nil {
 				return nil
 			}
@@ -228,6 +261,14 @@ func (connection *transparentConnection) run(ctx context.Context) (result error)
 					if current != original {
 						exitLog.capture("network_changed", nil, diagnosticDetails{ExpectedInterface: original.Interface, ActualInterface: current.Interface, GatewayChanged: current.Gateway != original.Gateway})
 						return errors.New("原网络已改变，请重新连接")
+					}
+					// Both outer handshakes are pinned before the TUN default routes.
+					if r.Company != nil {
+						for _, gateway := range r.Company.GatewayIPs {
+							if e = pinTransparentGatewayWith(statePath, state, gateway, original, routeCommand); e != nil {
+								return e
+							}
+						}
 					}
 					// Keep the tunnel's outer connection on its original physical path.
 					exitLog.stage = "health_gateway"
@@ -290,6 +331,11 @@ func (connection *transparentConnection) run(ctx context.Context) (result error)
 						return exitLog.fail("dns_install_failed", e)
 					}
 				}
+				if companyGate != nil {
+					if e = companyGate.installDNS(); e != nil {
+						return exitLog.fail("dns_install_failed", e)
+					}
+				}
 				active = true
 				state.State = "ready"
 				exitLog.stage = "journal"
@@ -307,7 +353,7 @@ func (connection *transparentConnection) run(ctx context.Context) (result error)
 				c.write("ready")
 			} else if ops.now().Sub(lastHealth) > 5*time.Second {
 				lastHealth = ops.now()
-				if dnsLease != nil && (!dnsLease.intact() || ops.checkDNS(r.managedDNS.port) != nil) {
+				if (dnsLease != nil && (!dnsLease.intact() || ops.checkDNS(r.managedDNS.port) != nil)) || (companyGate != nil && !companyGate.dnsIntact()) {
 					exitLog.stage = "health_dns"
 					return exitLog.fail("dns_unavailable", errors.New("系统 DNS 保护失效，已停止本次连接并恢复原解析"))
 				}

@@ -86,7 +86,7 @@ type helper struct {
 	ended  chan error
 }
 
-func startHelper(t *testing.T, server, ca string) *helper {
+func startHelper(t *testing.T, server, ca string, options ...map[string]any) *helper {
 	t.Helper()
 	runtime := os.Getenv("GOCONNECT_TEST_RUNTIME")
 	if runtime == "" {
@@ -112,6 +112,11 @@ func startHelper(t *testing.T, server, ca string) *helper {
 	}
 	stdoutWrite.Close()
 	r := map[string]any{"server": server, "username": "fixture-user", "password": "synthetic-secret-never-log", "group": "", "token": strings.Repeat("local-fixture-token-", 3), "openconnectPath": filepath.Join(runtime, "bin/openconnect"), "caFile": ca}
+	for _, option := range options {
+		for key, value := range option {
+			r[key] = value
+		}
+	}
 	if err = json.NewEncoder(h.input).Encode(r); err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +145,9 @@ func startHelper(t *testing.T, server, ca string) *helper {
 	return h
 }
 
-func TestBundledOpenConnectCSTPTCPUDPAndDisconnect(t *testing.T) {
+func TestBundledOpenConnectCSTPTCPUDPAndDisconnect(t *testing.T) { runBundledCSTP(t, false) }
+func TestBundledCompanyCSTPTCPAndUnixReady(t *testing.T)         { runBundledCSTP(t, true) }
+func runBundledCSTP(t *testing.T, company bool) {
 	if os.Getenv("GOCONNECT_TEST_RUNTIME") == "" {
 		t.Skip("requires packaged runtime")
 	}
@@ -207,7 +214,20 @@ func TestBundledOpenConnectCSTPTCPUDPAndDisconnect(t *testing.T) {
 	defer fixture.Close()
 	ca := filepath.Join(t.TempDir(), "fixture-ca.pem")
 	_ = os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: fixture.Certificate().Raw}), 0o600)
-	h := startHelper(t, fixture.URL, ca)
+	var options map[string]any
+	var socket string
+	if company {
+		directory, e := os.MkdirTemp("/private/tmp", "gcc-cstp-")
+		if e != nil {
+			t.Fatal(e)
+		}
+		defer os.RemoveAll(directory)
+		socket = filepath.Join(directory, "company.sock")
+		proxyToken := strings.Repeat("p", 64)
+		proxyPort := companyFixtureProxy(t, fixture.URL, proxyToken)
+		options = map[string]any{"companySocket": socket, "companyProxyPort": proxyPort, "companyProxyToken": proxyToken}
+	}
+	h := startHelper(t, fixture.URL, ca, options)
 	port := 0
 	deadline := time.After(15 * time.Second)
 	for port == 0 {
@@ -220,7 +240,14 @@ func TestBundledOpenConnectCSTPTCPUDPAndDisconnect(t *testing.T) {
 				t.Fatalf("connection failed: %v", event["message"])
 			}
 			if event["event"] == "ready" {
-				port = int(event["port"].(float64))
+				if company {
+					if event["companySocket"] != socket || event["companyPID"].(float64) <= 1 || event["companyStartTime"].(float64) <= 0 {
+						t.Fatal("missing company backend identity")
+					}
+					port = 1
+				} else {
+					port = int(event["port"].(float64))
+				}
 				if event["gateway"] != "127.0.0.1" {
 					t.Fatal("missing gateway exclusion")
 				}
@@ -230,8 +257,13 @@ func TestBundledOpenConnectCSTPTCPUDPAndDisconnect(t *testing.T) {
 		}
 	}
 	address := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+	network := "tcp"
+	if company {
+		network = "unix"
+		address = socket
+	}
 	token := strings.Repeat("local-fixture-token-", 3)
-	dialer, _ := proxy.SOCKS5("tcp", address, &proxy.Auth{User: "goconnect", Password: token}, proxy.Direct)
+	dialer, _ := proxy.SOCKS5(network, address, &proxy.Auth{User: "goconnect", Password: token}, proxy.Direct)
 	conn, err := dialer.Dial("tcp", "192.0.2.2:8080")
 	if err != nil {
 		t.Fatal(err)
@@ -248,7 +280,7 @@ func TestBundledOpenConnectCSTPTCPUDPAndDisconnect(t *testing.T) {
 		t.Fatal("CSTP TCP payload changed")
 	}
 	// UDP ASSOCIATE goes through the same authenticated SOCKS endpoint.
-	control, err := net.DialTimeout("tcp", address, time.Second)
+	control, err := net.DialTimeout(network, address, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +296,22 @@ func TestBundledOpenConnectCSTPTCPUDPAndDisconnect(t *testing.T) {
 	_, _ = io.ReadFull(control, reply)
 	_, _ = control.Write([]byte{5, 3, 0, 1, 0, 0, 0, 0, 0, 0})
 	bind := make([]byte, 10)
-	if _, err = io.ReadFull(control, bind); err != nil || bind[1] != 0 {
+	_, err = io.ReadFull(control, bind)
+	if company {
+		if err != nil || bind[1] != 7 {
+			t.Fatal("company UDP ASSOCIATE was not explicitly rejected", err)
+		}
+		control.Close()
+		h.input.Close()
+		select {
+		case <-closed:
+		case <-time.After(5 * time.Second):
+			t.Fatal("company EOF did not stop CSTP")
+		}
+		t.Log("Bundled company role: restricted proxy, certificate authentication, CSTP TCP, Unix identity, UDP rejection, EOF cleanup passed")
+		return
+	}
+	if err != nil || bind[1] != 0 {
 		t.Fatal("UDP association failed", err)
 	}
 	udpConn, err := net.Dial("udp", net.JoinHostPort(net.IP(bind[4:8]).String(), strconv.Itoa(int(binary.BigEndian.Uint16(bind[8:])))))

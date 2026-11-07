@@ -1,6 +1,9 @@
 import Foundation
 
 public struct TransportEvent: Decodable, Sendable {
+    public var companySocket: String?
+    public var companyPID: Int32?
+    public var companyStartTime: UInt64?
     public var event: String
     public var message: String?
     public var port: UInt16?

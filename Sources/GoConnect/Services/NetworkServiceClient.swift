@@ -28,6 +28,7 @@ final class NetworkServiceClient {
     private var executable: URL { Bundle.main.resourceURL!.appendingPathComponent("Runtime/bin/GoConnectTransport") }
 
     func diagnosticLogs() async -> String {
+        guard !Product.isIsolatedTestApp else { return "隔离测试包不读取正式服务日志。" }
         let executable = executable
         return await Task.detached {
             guard let result = try? Self.run(executable, arguments: ["service-diagnostics"]), result.code == 0 else {
@@ -38,6 +39,7 @@ final class NetworkServiceClient {
     }
 
     func refresh() {
+        guard !Product.isIsolatedTestApp else { status = NetworkServiceStatus(state: "notInstalled", message: "隔离测试包不访问正式服务。"); return }
         guard !working else { return }
         generation += 1
         let current = generation, executable = executable
@@ -48,6 +50,7 @@ final class NetworkServiceClient {
     }
 
     func ensureReady(forceInstall: Bool = false) async throws {
+        guard !Product.isIsolatedTestApp else { throw ServiceError("隔离测试包不使用正式网络服务。") }
         guard !working else { throw ServiceError("本机服务正在处理操作，请稍候。") }
         working = true; generation += 1
         defer { working = false }
@@ -69,6 +72,7 @@ final class NetworkServiceClient {
     }
 
     private func authorize(arguments: [String]) async throws {
+        guard !Product.isIsolatedTestApp else { throw ServiceError("隔离测试包不安装、替换或移除正式网络服务。") }
         let command = "exec " + ([executable.path] + arguments).map(ShellQuote.argument).joined(separator: " ")
         let script = "do shell script " + ShellQuote.appleScriptString(command) + " with administrator privileges"
         let result = try await Task.detached {
