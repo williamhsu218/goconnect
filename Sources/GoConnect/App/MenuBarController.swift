@@ -199,7 +199,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
         if store.companyConfiguration.enabled {
             menu.addItem(.separator())
-            add("公司副连接 · " + store.company.phase, symbol: "building.2", enabled: false)
+            add("公司副连接 · " + store.company.statusTitle, symbol: "building.2", enabled: false)
             if store.company.isRunning || store.company.busy {
                 add("断开公司连接", enabled: !["stopping", "quarantined"].contains(store.company.phase)) { [weak self] in self?.store.company.disconnect() }
             } else {

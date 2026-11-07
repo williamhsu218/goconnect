@@ -53,6 +53,18 @@ final class CompanyConnectionStore {
         self.actions = actions; self.ackTimeoutTicks = ackTimeoutTicks; self.now = now
     }
 
+    var statusTitle: String {
+        switch phase {
+        case "authenticating": "正在认证"
+        case "preparing": "正在验证路由与 DNS"
+        case "connected": "已连接"
+        case "reconnecting": "正在恢复"
+        case "stopping": "正在断开"
+        case "quarantined": "已隔离，需检查清理状态"
+        case "failed": "连接未完成"
+        default: "未连接"
+        }
+    }
     var busy: Bool { passwordRequested || tearingDown }
     var isRunning: Bool { transportGeneration != nil || ["authenticating", "preparing", "connected", "reconnecting", "stopping", "quarantined"].contains(phase) }
     /// Resolvers the root reports for the active route; empty whenever that route is not in service.

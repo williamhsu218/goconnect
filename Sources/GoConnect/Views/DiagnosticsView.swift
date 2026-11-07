@@ -5,6 +5,15 @@ struct DiagnosticsView: View {
     let store: AppStore
     @State private var clearingLogs = false
     @State private var showingServiceDetails = false
+    private var companyRouteTitle: String {
+        switch store.routeSnapshot?.company?.state {
+        case "active": "公司路由已启用"
+        case "prepared": "等待启用确认"
+        case "blocked": "公司范围已阻断"
+        case "failed": "验证未通过，保持阻断"
+        default: "未预留"
+        }
+    }
 
     var body: some View {
         ScrollView {
@@ -29,7 +38,7 @@ struct DiagnosticsView: View {
                 if store.companyConfiguration.enabled {
                     GroupBox("公司副连接") {
                         VStack(alignment: .leading, spacing: 6) {
-                            Text("连接：" + store.company.phase + " · 控制器：" + (store.routeSnapshot?.company?.state ?? "未预留"))
+                            Text("连接：" + store.company.statusTitle + " · 路由：" + companyRouteTitle)
                             Text("范围：\(store.companyConfiguration.networks.count) 个私网 · \(store.companyConfiguration.domains.count) 个域名 · IPv4 / TCP")
                             Text("DNS：" + (store.routeSnapshot?.company?.dnsServers?.joined(separator: "、") ?? "验证副线路后自动获取，或使用配置覆盖"))
                             if let issue = store.companyConfigurationIssue ?? store.company.message { Text(issue).foregroundStyle(.orange) }
