@@ -85,6 +85,10 @@ func main() {
 		err = subscriptionFileCommand(ctx)
 	case "proxy-front":
 		err = proxyFrontSession(ctx)
+	case "company-test":
+		err = companyTestCommand(ctx, false)
+	case "company-test-preflight":
+		err = companyTestCommand(ctx, true)
 	case "company-hook":
 		err = errors.New("separate company VPN sessions are disabled")
 	case "subscription-session":
