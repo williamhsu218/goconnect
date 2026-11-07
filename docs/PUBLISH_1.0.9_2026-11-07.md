@@ -49,7 +49,7 @@ Go 工具链未在此工作目录为 helper 输出 VCS 字段；构建前后 cle
 - 匿名 API 确认 `draft=false`、`prerelease=false`、latest 为 v1.0.9，tag commit 与四附件元数据匹配。
 - 匿名完整下载应用 ZIP、appcast.xml、SHA256SUMS，长度和完整 SHA-256 与冻结字节相同；官方 SDK 分别验证完整 XML 及 ZIP 的 Ed25519 签名。第三方源码包采用 GitHub 全包 digest 加匿名 128 KiB Range 与本地同段比较，**未重新完整下载全包**。
 - 在资产公开回验之后，才把已签名 XML 原样 fast-forward 推送到 updates；未 force push。固定 URL 的匿名 curl 回验及原生 URLSession 回验均得到与冻结 XML 相同的 `75f6c052281067b42d68bfba78a9c4fdf692f086b71f3bb7cc728f6e8a3aa1e2`，build 69 / enclosure 元数据和签名正确。
-- 原生请求首次拿到旧 build 68，即使匿名 curl 已返回 69；未更改固定 URL、缓存策略或签名要求。继续回验后原生请求读回正确 69，当前运行的正式 1.0.8 才显示 1.0.9 更新提示。不能用最初的 HTTP 200 代替客户端通过。
+- 原生请求首次拿到旧 build 68，即使匿名 curl 已返回 69；未更改正式 App 的固定 URL、缓存策略或签名要求。继续回验后原生请求读回正确 69，当前运行的正式 1.0.8 才显示 1.0.9 更新提示。不能用最初的 HTTP 200 代替客户端通过。
 - 保留包已滚动为 current 1.0.9 / 69、rollback 1.0.8 / 68；各目录仅应用 ZIP 与 SHA256SUMS。安装包回滚与用户数据回滚独立；不回滚或覆盖用户数据。
 
 ## 真实副 VPN 仍待验收
