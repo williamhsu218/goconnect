@@ -13,6 +13,7 @@ import (
 
 	"golang.org/x/net/dns/dnsmessage"
 	"golang.org/x/net/proxy"
+	"golang.org/x/sys/unix"
 )
 
 func TestCompanyCanonicalGenerationRejectsLengthOnlyTokens(t *testing.T) {
@@ -103,6 +104,21 @@ func TestCompanyBackendLivenessUsesUIDPIDAndBirth(t *testing.T) {
 	}
 	claim.StartTime = birth
 	child.Process.Kill()
+	zombie := false
+	for i := 0; i < 100; i++ {
+		proc, e := unix.SysctlKinfoProc("kern.proc.pid", claim.PID)
+		if e == nil && proc.Proc.P_stat == companyProcessZombieState {
+			zombie = true
+			break
+		}
+		time.Sleep(time.Millisecond * 5)
+	}
+	if !zombie {
+		t.Fatal("owned child did not reach unreaped zombie fixture state")
+	}
+	if companyBackendAlive(claim, uid) {
+		t.Fatal("unreaped zombie accepted as live backend")
+	}
 	child.Wait()
 	if companyBackendAlive(claim, uid) {
 		t.Fatal("exited and reaped backend alive")
@@ -184,5 +200,26 @@ func TestCompanyBackendLossBlocksOwnedFlowsWithoutClosingGate(t *testing.T) {
 		if fixture.dns.Load() != beforeDNS {
 			t.Fatal("blocked DNS reached company resolver")
 		}
+	}
+}
+
+func TestCompanyCommitRejectsDeadPreparedBackendImmediately(t *testing.T) {
+	g, claim, _ := fixtureCompanyGate(t)
+	if err := g.command(context.Background(), companyCommand{Generation: companyTestGeneration, Action: "prepare", Backend: &claim}); err != nil {
+		t.Fatal(err)
+	}
+	before := g.snapshot()
+	g.mu.Lock()
+	g.prepared.claim.StartTime++
+	g.mu.Unlock()
+	if err := g.command(context.Background(), companyCommand{ExpectedRevision: before.Revision, Generation: companyTestGeneration, Action: "commit"}); err == nil {
+		t.Fatal("dead backend committed before next tick")
+	}
+	state := g.snapshot()
+	if state.State != "blocked" || state.Revision != before.Revision+1 {
+		t.Fatalf("commit did not fail closed: %+v", state)
+	}
+	if g.ctx.Err() != nil {
+		t.Fatal("commit failure stopped stable controller")
 	}
 }

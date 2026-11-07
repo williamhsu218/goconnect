@@ -405,6 +405,12 @@ func (g *companyGate) command(ctx context.Context, cmd companyCommand) error {
 	if cmd.Action == "commit" && (g.prepared == nil || g.prepared.generation != cmd.Generation) {
 		return errors.New("company backend not prepared")
 	}
+	if cmd.Action == "commit" && !companyBackendAlive(g.prepared.claim, g.uid) {
+		g.blockLocked()
+		g.state.Revision++
+		g.state.Message = "公司后端已退出，拒绝激活并保持阻断。"
+		return errors.New("company backend no longer alive")
+	}
 	if cmd.Action == "prepare" && (g.active != nil || g.prepared != nil) {
 		return errors.New("block old company generation first")
 	}
@@ -511,10 +517,17 @@ func (g *companyGate) command(ctx context.Context, cmd companyCommand) error {
 			return fail(err)
 		}
 	}
+	if !companyBackendAlive(claim, g.uid) {
+		cancel()
+		return fail(errors.New("company backend exited during prepare"))
+	}
 	g.prepared = b
 	g.state.State = "prepared"
 	return nil
 }
+
+// Both hexadecimal cases are valid. Generations are opaque strings: commands
+// must repeat the exact original spelling emitted by the Swift owner.
 func canonicalCompanyGeneration(value string) bool {
 	if len(value) != 36 {
 		return false
@@ -534,12 +547,15 @@ func canonicalCompanyGeneration(value string) bool {
 }
 
 // Kernel metadata only: do not launch a process or probe a connection on every tick.
+// Darwin sys/proc.h: SZOMB means exited, awaiting collection by parent.
+const companyProcessZombieState = 5
+
 func companyBackendAlive(claim companyBackendClaim, uid uint32) bool {
 	if claim.PID <= 1 || claim.StartTime == 0 {
 		return false
 	}
 	proc, err := unix.SysctlKinfoProc("kern.proc.pid", claim.PID)
-	if err != nil {
+	if err != nil || proc.Proc.P_stat == companyProcessZombieState {
 		return false
 	}
 	birth := uint64(proc.Proc.P_starttime.Sec)*1_000_000 + uint64(proc.Proc.P_starttime.Usec)
@@ -569,6 +585,8 @@ func (g *companyGate) poll(c *controlFiles) {
 			_ = g.command(g.ctx, cmd)
 		}
 	}
+	// A prepare/commit can outlive the first check; never publish a dead backend.
+	g.checkBackendLiveness()
 	state := g.snapshot()
 	c.snapshot.Company = &state
 }
