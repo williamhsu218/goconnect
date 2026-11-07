@@ -1,5 +1,7 @@
 # 技术记录索引
 
+- [无需更新正式 App 的临时公司通道测试器](COMPANY_TUNNEL_TESTER.md) — 用户态副隧道、物理出口校验与只读 DNS/内网探测；[两轮实链路验收](COMPANY_TUNNEL_LIVE_2026-11-07.md)。
+
 - [双 VPN 测试构建与验收边界](DUAL_CONNECTION_TEST_2026-11-07.md)；[方案](DUAL_CONNECTION_PLAN_2026-11-07.md)；[分块审查](DUAL_CONNECTION_REVIEW_2026-11-07.md)。
 
 - [1.0.8 发布说明](RELEASE_1.0.8.md) — 系统 DNS 接管、国内直连和私有域名保护；[实现与验收边界](SYSTEM_DNS_2026-11-07.md)；[发布验收记录](PUBLISH_1.0.8_2026-11-07.md)。
