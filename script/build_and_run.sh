@@ -85,7 +85,7 @@ export GOCONNECT_REGISTER_APP=0
 export PYTHONDONTWRITEBYTECODE=1
 SWIFT_BUILD_ARGS=(--build-system native --sdk "$(xcrun --sdk macosx --show-sdk-path)" --scratch-path "$WORK/swift")
 SWIFT_TEST_ARGS=("${SWIFT_BUILD_ARGS[@]}")
-GO_BUILD_ARGS=()
+GO_BUILD_ARGS=(-trimpath)
 if [[ "$NETWORK_TEST" == 1 ]]; then SWIFT_BUILD_ARGS+=(-Xswiftc -DGOCONNECT_NETWORK_TEST); fi
 if [[ "$ISOLATED_TEST" == 1 || "$NETWORK_TEST" == 1 ]]; then GO_BUILD_ARGS+=(-ldflags "-X main.serviceBuildFlavor=test"); fi
 if [[ "$ISOLATED_TEST" == 1 ]]; then SWIFT_BUILD_ARGS+=(-Xswiftc -DGOCONNECT_ISOLATED_TEST); fi
@@ -103,7 +103,7 @@ fi
 swift build "${SWIFT_BUILD_ARGS[@]}" -c "$CONFIG"
 SWIFT_BIN="$(swift build "${SWIFT_BUILD_ARGS[@]}" -c "$CONFIG" --show-bin-path)/GoConnect"
 mkdir -p "$GOCONNECT_TRANSPORT_BIN_DIR"
-(cd Transport && CGO_ENABLED=1 go build -trimpath "${GO_BUILD_ARGS[@]}" -o "$GOCONNECT_TRANSPORT_BIN_DIR/GoConnectTransport" ./cmd/goconnect-transport)
+(cd Transport && CGO_ENABLED=1 go build "${GO_BUILD_ARGS[@]}" -o "$GOCONNECT_TRANSPORT_BIN_DIR/GoConnectTransport" ./cmd/goconnect-transport)
 SPARKLE_SDK="$WORK/swift/artifacts/sparkle/Sparkle"
 export GOCONNECT_SPARKLE_SDK="$SPARKLE_SDK"
 export GOCONNECT_SPARKLE_FRAMEWORK="$SPARKLE_SDK/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
