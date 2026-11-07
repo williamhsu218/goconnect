@@ -7,7 +7,12 @@ import GoConnectCore
 /// Own only the native status item. AppStore remains the source of connection state.
 @MainActor
 final class MenuBarController: NSObject, NSMenuDelegate {
-    private static let itemName = "GoConnectStatusItem"
+    private static let itemName = Product.isNetworkTestApp ? "GoConnectDualVPNTestStatusItem" : "GoConnectStatusItem"
+    private func icon(for state: VPNControlState) -> NSImage {
+        guard Product.isNetworkTestApp, let image = NSImage(systemSymbolName: "testtube.2", accessibilityDescription: "GoConnect 双 VPN 测试版") else { return MenuBarStatusIcon.image(for: state) }
+        image.isTemplate = true
+        return image
+    }
     private let store: AppStore
     private let openMainWindow: () -> Void
     private let openSettings: () -> Void
@@ -49,10 +54,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         item.autosaveName = Self.itemName
         item.behavior = []
         item.menu = menu
-        item.button?.image = MenuBarStatusIcon.image(for: store.connectionControlState)
+        item.button?.image = icon(for: store.connectionControlState)
         item.button?.imageScaling = .scaleProportionallyDown
-        item.button?.setAccessibilityIdentifier("GoConnectMenuBar")
-        item.button?.setAccessibilityLabel("GoConnect 菜单栏快捷操作")
+        item.button?.setAccessibilityIdentifier(Product.isNetworkTestApp ? "GoConnectDualVPNTestMenuBar" : "GoConnectMenuBar")
+        item.button?.setAccessibilityLabel(Product.isNetworkTestApp ? "GoConnect 双 VPN 测试版快捷操作" : "GoConnect 菜单栏快捷操作")
         item.isVisible = true
         statusItem = item
         logger.info("Status item installed; visible=\(item.isVisible, privacy: .public)")
@@ -123,15 +128,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         if enabled {
             let key = state.rawValue + "|" + presentation.title
             if key != renderedRateKey {
-                button.image = MenuBarRateImage.image(icon: MenuBarStatusIcon.image(for: state), lines: presentation.lines)
+                button.image = MenuBarRateImage.image(icon: icon(for: state), lines: presentation.lines)
                 renderedRateKey = key
             }
         } else {
             renderedRateKey = nil
-            button.image = MenuBarStatusIcon.image(for: state)
+            button.image = icon(for: state)
         }
         let rates = presentation.accessibilityDescription.map { "\n当前线路 · " + $0 } ?? ""
-        button.toolTip = "GoConnect · \(state.title)\n\(line) · \(store.accessTitle)" + rates
+        button.toolTip = (Product.isNetworkTestApp ? "GoConnect 双 VPN 测试版 ·" : "GoConnect ·") + " \(state.title)\n\(line) · \(store.accessTitle)" + rates
         button.setAccessibilityValue(state.title + (presentation.accessibilityDescription.map { "，" + $0 } ?? ""))
         expiryTimer?.invalidate()
         expiryTimer = nil
@@ -151,6 +156,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let connection = store.configuration.activeConnection
         let state = store.connectionControlState
         let policy = store.menuBarControlPolicy
+        if Product.isNetworkTestApp { add("GoConnect 双 VPN 测试版", symbol: "testtube.2", enabled: false) }
         add(state.title, symbol: state.symbol, enabled: false)
         add(connection.displayName, symbol: "server.rack", enabled: false)
         add(connection.connectionSummary, enabled: false)
@@ -190,6 +196,18 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 : store.profileDraft != nil ? "结束线路编辑后可快速连接"
                 : "断开当前连接后可切换线路"
             add(reason, enabled: false)
+        }
+        if store.companyConfiguration.enabled {
+            menu.addItem(.separator())
+            add("公司副连接 · " + store.company.phase, symbol: "building.2", enabled: false)
+            if store.company.isRunning || store.company.busy {
+                add("断开公司连接", enabled: !["stopping", "quarantined"].contains(store.company.phase)) { [weak self] in self?.store.company.disconnect() }
+            } else {
+                add("连接公司内网…", enabled: store.phase == "connected" && store.companyConfigurationIssue == nil && !store.updateOperationBlocked) { [weak self] in
+                    guard let self else { return }
+                    self.openMainWindow(); self.store.navigate(to: .connection); self.store.connectCompany()
+                }
+            }
         }
         menu.addItem(.separator())
         add("打开 GoConnect", symbol: "macwindow", key: "o") { [weak self] in self?.openMainWindow() }

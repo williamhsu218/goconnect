@@ -29,10 +29,34 @@ public struct CompanyConnectionConfiguration: Codable, Equatable, Sendable {
         guard checked.allSatisfy({ !$0.contains(":") }), checked.count == networks.count else {
             throw CompanyConnectionError.invalid("首版只支持不重复的公司 IPv4 私网。")
         }
+        let prefixes: [(UInt32, Int)] = checked.map { value in
+            let parts = value.split(separator: "/")
+            let ip = parts[0].split(separator: ".").reduce(UInt32(0)) { ($0 << 8) | UInt32($1)! }
+            return (ip, parts.count == 2 ? Int(parts[1])! : 32)
+        }
+        for i in prefixes.indices {
+            for j in prefixes.indices where j < i {
+                let bits = min(prefixes[i].1, prefixes[j].1)
+                let mask = UInt32.max << (32 - bits)
+                guard prefixes[i].0 & mask != prefixes[j].0 & mask else {
+                    throw CompanyConnectionError.invalid("公司网段不能重复或相互覆盖。")
+                }
+            }
+        }
         for domain in domains {
             let rule = try DomainRule(domain)
-            guard !rule.isAddress, rule.domain == domain, domain.contains("."), !domain.hasSuffix(".local"), domain != "local", !domain.contains(":") else {
+            guard !rule.isAddress, rule.domain == domain, domain.contains("."), !domain.contains(":"),
+                  let tld = domain.split(separator: ".").last,
+                  !["local", "localhost", "localdomain", "arpa"].contains(String(tld)),
+                  !tld.allSatisfy(\.isNumber) else {
                 throw CompanyConnectionError.invalid("公司域名须为完整域名，不能使用 .local。")
+            }
+        }
+        for i in domains.indices {
+            for j in domains.indices where j < i {
+                guard domains[i] != domains[j], !domains[i].hasSuffix("." + domains[j]), !domains[j].hasSuffix("." + domains[i]) else {
+                    throw CompanyConnectionError.invalid("公司域名不能重复或相互覆盖。")
+                }
             }
         }
         for dns in dnsServers {

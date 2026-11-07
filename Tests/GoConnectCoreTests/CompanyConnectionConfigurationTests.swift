@@ -26,9 +26,18 @@ final class CompanyConnectionConfigurationTests: XCTestCase {
         for dns in ["127.0.0.1", "::1", "1.1.1.1:53", "169.254.1.1", "resolver.example.com"] {
             var bad = value; bad.dnsServers = [dns]; XCTAssertThrowsError(try bad.validated(in: config))
         }
-        for domain in ["local", "corp.local", "*.example.com", "10.20.0.1", "CORP.EXAMPLE.COM"] {
+        for domain in ["local", "corp.local", "*.example.com", "10.20.0.1", "CORP.EXAMPLE.COM", "corp.localhost", "corp.localdomain", "x.arpa", "company.123"] {
             var bad = value; bad.domains = [domain]; XCTAssertThrowsError(try bad.validated(in: config))
         }
+    }
+    func testOverlappingReservationsAreRejectedBeforeStartingPrimary() throws {
+        let (config, value) = fixture()
+        var bad = value; bad.networks = ["10.201.0.0/16", "10.201.1.1/32"]
+        XCTAssertThrowsError(try bad.validated(in: config))
+        bad = value; bad.domains = ["corp.example.invalid", "app.corp.example.invalid"]
+        XCTAssertThrowsError(try bad.validated(in: config))
+        var host = value; host.networks = ["10.201.1.1"]
+        XCTAssertEqual(try host.validated(in: config).networks, ["10.201.1.1/32"])
     }
     func testSeparateSidecarSurvivesLegacyMainSaveAndIsPrivate() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

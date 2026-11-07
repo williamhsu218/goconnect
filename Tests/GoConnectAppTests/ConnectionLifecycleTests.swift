@@ -96,4 +96,43 @@ final class ConnectionLifecycleTests: XCTestCase {
         XCTAssertEqual(store.phase, "idle")
         XCTAssertEqual(store.message, "已断开。")
     }
+    func testCompanyStopRequiresConfirmedControllerTeardown() throws {
+        for outcome in ["stopped", "failed"] {
+            let root = try directory()
+            let runtime = try runtime(in: root, script: "exec /bin/sleep 60\n")
+            let controls = root.appendingPathComponent("controls")
+            try FileManager.default.createDirectory(at: controls, withIntermediateDirectories: true)
+            let route = RouteClient(temporaryDirectory: controls)
+            let store = AppStore(dataDirectory: root.appendingPathComponent("data"), diagnostics: FaultDiagnostics(directory: root.appendingPathComponent("logs")), refreshRuntime: false, routeClient: route)
+            var actions: [String] = []
+            let company = CompanyConnectionStore(actions: .init(start: { _, _, _, _ in actions.append("start") }, prepare: { _, _ in actions.append("prepare") }, block: { _ in actions.append("block") }, stop: { actions.append("stop") }), ackTimeoutTicks: 2)
+            store.company = company
+            company.connect(profile: VPNProfile(), primaryReady: true, controllerReserved: true, updateBlocked: false, secret: "fixture")
+            let generation = company.generation
+            var ready = TransportEvent(event: "ready")
+            ready.companySocket = "/private/tmp/fixture.sock"; ready.companyPID = 42; ready.companyStartTime = 1
+            company.handle(ready, generation: generation)
+            company.routeState(.init(revision: 1, generation: generation.uuidString, state: "active"))
+            try route.start(port: 12345, token: String(repeating: "x", count: 40), apps: [], gateway: "192.0.2.1", runtime: runtime, mode: .whitelist)
+            let session = try XCTUnwrap(FileManager.default.contentsOfDirectory(at: controls, includingPropertiesForKeys: nil).first)
+            try "{\"state\":\"\(outcome)\",\"updatedAt\":1,\"vpn\":0,\"direct\":0,\"unknown\":0,\"vpnObserved\":false}".write(to: session.appendingPathComponent("status"), atomically: true, encoding: .utf8)
+            store.phase = "connected"
+            store.disconnect()
+            XCTAssertEqual(company.phase, "stopping")
+            if outcome == "stopped" {
+                XCTAssertEqual(actions, ["start", "prepare", "block", "stop"])
+                company.handle(TransportEvent(event: "stopped"), generation: generation)
+                XCTAssertFalse(company.isRunning)
+            } else {
+                XCTAssertEqual(actions, ["start", "prepare", "block"], "Failure is not proof that company routing has been removed")
+                company.handle(TransportEvent(event: "stopped"), generation: generation)
+                company.tickTimeout(); company.tickTimeout()
+                XCTAssertEqual(company.phase, "quarantined")
+                XCTAssertNotNil(store.updateSafetyState.blockingReason)
+                company.primaryStopped() // Explicit fixture cleanup after assertions.
+            }
+            route.stop()
+        }
+    }
+
 }

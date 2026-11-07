@@ -390,7 +390,7 @@ func (g *companyGate) snapshot() companyRouteState { g.mu.Lock(); defer g.mu.Unl
 func (g *companyGate) command(ctx context.Context, cmd companyCommand) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if cmd.ExpectedRevision != g.state.Revision || len(cmd.Generation) != 36 {
+	if cmd.ExpectedRevision != g.state.Revision || !canonicalCompanyGeneration(cmd.Generation) {
 		return errors.New("stale company transaction")
 	}
 	if cmd.Action != "prepare" && cmd.Action != "commit" && cmd.Action != "block" {
@@ -515,7 +515,51 @@ func (g *companyGate) command(ctx context.Context, cmd companyCommand) error {
 	g.state.State = "prepared"
 	return nil
 }
+func canonicalCompanyGeneration(value string) bool {
+	if len(value) != 36 {
+		return false
+	}
+	for i, c := range []byte(value) {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if c != '-' {
+				return false
+			}
+			continue
+		}
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
+			return false
+		}
+	}
+	return true
+}
+
+// Kernel metadata only: do not launch a process or probe a connection on every tick.
+func companyBackendAlive(claim companyBackendClaim, uid uint32) bool {
+	if claim.PID <= 1 || claim.StartTime == 0 {
+		return false
+	}
+	proc, err := unix.SysctlKinfoProc("kern.proc.pid", claim.PID)
+	if err != nil {
+		return false
+	}
+	birth := uint64(proc.Proc.P_starttime.Sec)*1_000_000 + uint64(proc.Proc.P_starttime.Usec)
+	return int(proc.Proc.P_pid) == claim.PID && proc.Eproc.Ucred.Uid == uid && birth == claim.StartTime
+}
+
+func (g *companyGate) checkBackendLiveness() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, b := range []*companyBackend{g.active, g.prepared} {
+		if b != nil && !companyBackendAlive(b.claim, g.uid) {
+			g.blockLocked()
+			g.state.Revision++
+			g.state.Message = "公司后端已退出或身份变化，保持公司范围阻断。"
+			return
+		}
+	}
+}
 func (g *companyGate) poll(c *controlFiles) {
+	g.checkBackendLiveness()
 	data, _, err := readOwned(c.directory, "company-command.json", c.uid)
 	if err == nil {
 		var cmd companyCommand
@@ -532,22 +576,34 @@ func (g *companyGate) dnsAnswer(wire []byte) []byte {
 	g.mu.Lock()
 	b := g.active
 	g.mu.Unlock()
-	if b == nil { // A synthetic SERVFAIL preserves the question but never resolves elsewhere.
-		if len(wire) < 12 {
-			return nil
-		}
-		out := append([]byte{}, wire...)
-		out[2] = 0x81
-		out[3] = 0x82
-		for i := 6; i < 12; i++ {
-			out[i] = 0
-		}
-		return out
+	if b == nil {
+		return blockedCompanyDNSAnswer(wire)
 	}
 	ctx, cancel := context.WithTimeout(b.ctx, 8*time.Second)
 	defer cancel()
 	return b.policy.Answer(ctx, companyDNSDialer{g, b}, wire)
 }
+
+// Rebuild rather than copy request bytes: EDNS/additional records must not survive
+// after their counts have been cleared. Malformed queries cannot trigger fallback.
+func blockedCompanyDNSAnswer(wire []byte) []byte {
+	if len(wire) < 12 || len(wire) > 4096 {
+		return nil
+	}
+	var request dnsmessage.Message
+	if request.Unpack(wire) != nil || request.Header.Response || len(request.Questions) != 1 {
+		return nil
+	}
+	reply := dnsmessage.Message{Header: dnsmessage.Header{ID: request.Header.ID, Response: true,
+		OpCode: request.Header.OpCode, RecursionDesired: request.Header.RecursionDesired,
+		RecursionAvailable: true, RCode: dnsmessage.RCodeServerFailure}, Questions: request.Questions}
+	result, err := reply.Pack()
+	if err != nil {
+		return nil
+	}
+	return result
+}
+
 func (g *companyGate) serveDNSUDP() {
 	limit := make(chan struct{}, 64)
 	for {

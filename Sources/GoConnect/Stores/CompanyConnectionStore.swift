@@ -26,6 +26,7 @@ final class CompanyConnectionStore {
     private(set) var generation = UUID()
     /// Outlives `generation` invalidation so that the owning transport's stopped event can still finish cleanup.
     private var transportGeneration: UUID?
+    private var routeDNSServers: [String] = []
 
     private let actions: CompanyConnectionActions
     private let ackTimeoutTicks: Int
@@ -33,6 +34,9 @@ final class CompanyConnectionStore {
     @ObservationIgnored private var meter = SessionTrafficMeter()
     @ObservationIgnored private var pendingProfile: VPNProfile?
     @ObservationIgnored private var companyToken: String?
+    /// Identity from the accepted ready event, kept without the token so later ready events can only match it.
+    @ObservationIgnored private var ownedBackend: CompanyBackendClaim?
+    @ObservationIgnored private var transportRecovering = false
     @ObservationIgnored private var prepareDispatched = false
     @ObservationIgnored private var blockRequested = false
     @ObservationIgnored private var routeBlocked = false
@@ -42,6 +46,7 @@ final class CompanyConnectionStore {
     @ObservationIgnored private var closingMessage: String? = "已断开。"
     @ObservationIgnored private var ackTicks = 0
     @ObservationIgnored private var lastRevision: UInt64 = 0
+    @ObservationIgnored private var lastRouteState: String?
 
     /// `tickTimeout()` is expected once per second, so the default bound is 15 seconds.
     init(actions: CompanyConnectionActions, ackTimeoutTicks: Int = 15, now: @escaping @MainActor () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
@@ -49,7 +54,9 @@ final class CompanyConnectionStore {
     }
 
     var busy: Bool { passwordRequested || tearingDown }
-    var isRunning: Bool { transportGeneration != nil || ["authenticating", "preparing", "connected", "stopping", "quarantined"].contains(phase) }
+    var isRunning: Bool { transportGeneration != nil || ["authenticating", "preparing", "connected", "reconnecting", "stopping", "quarantined"].contains(phase) }
+    /// Resolvers the root reports for the active route; empty whenever that route is not in service.
+    var activeDNSServers: [String] { phase == "connected" || phase == "reconnecting" ? routeDNSServers : [] }
     private var tearingDown: Bool { phase == "stopping" || phase == "quarantined" }
     private var routeAckPending: Bool { prepareDispatched && !routeBlocked && !controllerGone }
 
@@ -93,7 +100,19 @@ final class CompanyConnectionStore {
         beginTeardown(failure: nil)
     }
 
-    /// The primary connection owns the root controller, so its exit removes the need for a blocked acknowledgement.
+    /// The root controller outlives this call, so the route must still be blocked and acknowledged before the transport stops.
+    func primaryStopping() {
+        guard isRunning else { return }
+        closingMessage = "主线路正在停止，公司连接已结束。"
+        if passwordRequested {
+            passwordRequested = false
+            finish()
+        } else if transportGeneration != nil, !tearingDown {
+            beginTeardown(failure: nil, progress: "主线路正在停止，正在结束公司连接…")
+        }
+    }
+
+    /// Call only once root-controller teardown is confirmed: its exit removes the need for a blocked acknowledgement.
     func primaryStopped() {
         guard isRunning else { return }
         controllerGone = true; closingMessage = "主线路已停止，公司连接已结束。"
@@ -113,12 +132,21 @@ final class CompanyConnectionStore {
         switch event.event {
         case "ready": ready(event)
         case "stats":
-            guard phase == "preparing" || phase == "connected", let received = event.received, let sent = event.sent else { return }
+            guard phase == "preparing" || phase == "connected" || phase == "reconnecting", let received = event.received, let sent = event.sent else { return }
             let rates = meter.sample(received: received, sent: sent, time: now())
             self.received = received; self.sent = sent
             downloadRate = rates.download; uploadRate = rates.upload
         case "stats_unavailable":
             meter.reset(); downloadRate = 0; uploadRate = 0
+        case "reconnecting":
+            // Recovery stays inside the owning process, so the generation and backend claim are unchanged.
+            guard !tearingDown, !transportRecovering else { return }
+            transportRecovering = true
+            if phase == "connected" { showReconnecting() }
+        case "reconnected":
+            guard !tearingDown, transportRecovering else { return }
+            transportRecovering = false
+            if phase == "reconnecting" { phase = "connected"; message = nil }
         case "quarantined":
             quarantine("公司传输未正常退出，已隔离公司连接。")
         case "error":
@@ -129,14 +157,20 @@ final class CompanyConnectionStore {
     }
 
     func routeState(_ state: CompanyRouteState) {
-        guard prepareDispatched, UUID(uuidString: state.generation) == generation, state.revision >= lastRevision else { return }
-        lastRevision = state.revision
+        guard prepareDispatched, UUID(uuidString: state.generation) == generation, advancesRoute(state) else { return }
+        lastRevision = state.revision; lastRouteState = state.state
         switch state.state {
         case "active":
+            if tearingDown {
+                guard routeBlocked else { return }
+                routeBlocked = false; blockRequested = false
+                quarantine("公司路由在阻断后重新激活，已隔离公司连接。")
+                return
+            }
+            routeDNSServers = state.dnsServers ?? []
             if phase == "preparing" {
-                phase = "connected"; message = nil; ackTicks = 0
-            } else if tearingDown {
-                routeBlocked = false
+                ackTicks = 0
+                if transportRecovering { showReconnecting() } else { phase = "connected"; message = nil }
             }
         case "failed":
             if !tearingDown { beginTeardown(failure: state.message ?? "公司路由验证失败。") }
@@ -145,7 +179,8 @@ final class CompanyConnectionStore {
                 routeBlocked = true; ackTicks = 0
                 requestStop()
                 finishIfSafe()
-            } else if phase == "connected" {
+            } else if !tearingDown {
+                // The reservation's own blocked state carries another generation, so this one is unrequested.
                 routeBlocked = true
                 beginTeardown(failure: state.message ?? "公司路由已被阻断。")
             }
@@ -173,14 +208,18 @@ final class CompanyConnectionStore {
     }
 
     private func ready(_ event: TransportEvent) {
-        guard phase == "authenticating", let token = companyToken else { return }
-        guard let socket = event.companySocket, !socket.isEmpty, let pid = event.companyPID, pid > 0, let startTime = event.companyStartTime else {
+        guard !tearingDown else { return }
+        guard let token = companyToken else {
+            // The token is single use, so a backend the root has not verified can never be adopted here.
+            if backendClaim(event, token: "") != ownedBackend { beginTeardown(failure: "公司后端身份发生变化，已停止连接。") }
+            return
+        }
+        guard let claim = backendClaim(event, token: token) else {
             beginTeardown(failure: "公司后端身份信息不完整，已停止连接。")
             return
         }
-        companyToken = nil; prepareDispatched = true
+        companyToken = nil; ownedBackend = backendClaim(event, token: ""); prepareDispatched = true
         phase = "preparing"; message = nil; ackTicks = 0
-        let claim = CompanyBackendClaim(socketPath: socket, pid: pid, startTime: startTime, token: token, dnsServers: event.dns ?? [], remoteNetworks: event.remoteNetworks ?? [], remoteExcluded: event.remoteExcluded ?? [])
         do {
             try actions.prepare(claim, generation)
         } catch {
@@ -188,9 +227,26 @@ final class CompanyConnectionStore {
         }
     }
 
-    private func beginTeardown(failure: String?) {
+    private func backendClaim(_ event: TransportEvent, token: String) -> CompanyBackendClaim? {
+        guard let socket = event.companySocket, !socket.isEmpty, let pid = event.companyPID, pid > 0, let startTime = event.companyStartTime else { return nil }
+        return CompanyBackendClaim(socketPath: socket, pid: pid, startTime: startTime, token: token, dnsServers: event.dns ?? [], remoteNetworks: event.remoteNetworks ?? [], remoteExcluded: event.remoteExcluded ?? [])
+    }
+
+    /// Every root transaction bumps the revision. Within one revision the root may still fail closed
+    /// (closing the gate blocks without a bump), but it never reactivates, and repeated snapshots are no-ops.
+    private func advancesRoute(_ state: CompanyRouteState) -> Bool {
+        guard state.revision >= lastRevision else { return false }
+        guard state.revision == lastRevision, lastRouteState != nil else { return true }
+        return state.state != lastRouteState && (state.state == "blocked" || state.state == "failed")
+    }
+
+    private func showReconnecting() {
+        phase = "reconnecting"; message = "公司隧道暂时不可用，正在自动恢复…"
+    }
+
+    private func beginTeardown(failure: String?, progress: String = "正在断开公司连接…") {
         failureMessage = failure
-        phase = "stopping"; message = failure ?? "正在断开公司连接…"; ackTicks = 0
+        phase = "stopping"; message = failure ?? progress; ackTicks = 0
         if routeAckPending { requestBlock() } else { requestStop() }
     }
 
@@ -245,8 +301,9 @@ final class CompanyConnectionStore {
 
     private func clearAttempt() {
         meter.reset(); pendingProfile = nil; companyToken = nil; password = ""
+        ownedBackend = nil; transportRecovering = false; routeDNSServers = []
         prepareDispatched = false; blockRequested = false; routeBlocked = false
         stopRequested = false; controllerGone = false
-        failureMessage = nil; closingMessage = "已断开。"; ackTicks = 0; lastRevision = 0
+        failureMessage = nil; closingMessage = "已断开。"; ackTicks = 0; lastRevision = 0; lastRouteState = nil
     }
 }

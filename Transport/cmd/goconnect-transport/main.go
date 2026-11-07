@@ -49,6 +49,18 @@ func main() {
 	switch os.Args[1] {
 	case "version":
 		fmt.Println("GoConnectTransport " + transportVersion)
+	case "service-identity":
+		if len(os.Args) != 2 {
+			err = errors.New("unexpected service identity argument")
+		} else {
+			emit(selectedServiceNamespace)
+		}
+	case "test-host-status":
+		if len(os.Args) != 2 {
+			err = errors.New("unexpected test host status argument")
+		} else {
+			emit(testHostStatus(ctx))
+		}
 	case "service-diagnostics":
 		err = serviceDiagnostics()
 	case "service-status":

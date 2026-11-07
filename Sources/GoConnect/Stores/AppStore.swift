@@ -267,6 +267,7 @@ final class AppStore {
     }
     func quickConnect(_ id: UUID) {
         guard allowsOperationDuringUpdate() else { return }
+        if Product.isNetworkTestApp, let reason = networkService.testHostMessage { show(reason, error: true); networkService.refresh(); return }
         guard !busy, !company.isRunning, !company.busy, !companyDraftOpen, profileDraft == nil else { return }
         guard !recoveryRequired else { show("上次网络进程未能退出，已暂停重连。请导出诊断并重启 macOS 后再连接。", error: true); return }
         guard !nodeLatency.isRunning else { show("请先停止节点测试，再连接 VPN。", error: true); return }
@@ -408,6 +409,7 @@ final class AppStore {
     func connect(test: Bool = false) {
         guard !Product.isIsolatedTestApp else { show("此隔离测试包仅验收界面与配置，不接管系统网络。", error: true); return }
         guard allowsOperationDuringUpdate() else { return }
+        if Product.isNetworkTestApp, let reason = networkService.testHostMessage { show(reason, error: true); networkService.refresh(); return }
         guard !busy, !company.isRunning, !company.busy, !companyDraftOpen, profileDraft == nil else { return }
         guard !recoveryRequired else { show("上次网络进程未能退出，已暂停重连。请导出诊断并重启 macOS 后再连接。", error: true); return }
         guard !nodeLatency.isRunning else { show("请先停止节点测试，再连接 VPN。", error: true); return }
@@ -439,6 +441,7 @@ final class AppStore {
             Task {
                 guard connectionGeneration == attempt else { return }
                 do {
+                    try await networkService.assertTestHostAvailable()
                     if !test {
                         if companyConfiguration.enabled {
                             guard companyConfigurationReadable else { throw CompanyConnectionError.invalid("请先处理公司连接配置读取错误。") }
@@ -461,7 +464,7 @@ final class AppStore {
         } catch { phase = "failed"; show(error.localizedDescription, error: true) }
     }
     func disconnect() {
-        company?.primaryStopped()
+        company?.primaryStopping()
         guard busy else { return }
         if passwordRequested { passwordRequested = false; return }
         diagnostics.record(.disconnectRequested)
@@ -469,7 +472,7 @@ final class AppStore {
         stopAll()
     }
     private func stopAll() {
-        company?.primaryStopped()
+        company?.primaryStopping()
         trafficHistory.endSession()
         publicIPChecker.stop(); publicIPChecking = false; publicIP = nil; publicIPCheckedAt = nil
         trafficAvailable = false
@@ -594,6 +597,7 @@ final class AppStore {
             else { show(routeSnapshot?.message ?? "本机分流服务未能启动，请在诊断中重新检测服务和网络环境。", error: true) }
             stopFailed = true; stopAll()
         } else if state == "stopped" {
+            company?.primaryStopped()
             if phase == "stopping" { finishStopping() }
             else {
                 if ["connected", "reconnecting", "protected"].contains(phase) { reportUnexpectedDisconnect(source: 2) }

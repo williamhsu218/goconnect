@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-const diagnosticDirectory = serviceBase + "/diagnostics"
+var diagnosticDirectory = serviceBase + "/diagnostics"
 const diagnosticLimit = 1 << 20
 
 var diagnosticCode = regexp.MustCompile(`^[a-z][a-z0-9_.]{0,63}$`)

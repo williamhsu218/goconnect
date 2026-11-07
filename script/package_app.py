@@ -25,7 +25,8 @@ if WORK == ROOT or ROOT in WORK.parents or not WORK.name.startswith("goconnect-b
     raise SystemExit("Build directory must be a dedicated temporary directory outside the project.")
 if any(WORK not in path.parents for path in (DIST, TRANSPORT_BIN)):
     raise SystemExit("Package and transport output must stay inside the temporary build directory.")
-APP_NAME = "GoConnect Dual VPN Test" if os.environ.get("GOCONNECT_ISOLATED_TEST") == "1" else "GoConnect"
+TEST_BUILD = os.environ.get("GOCONNECT_ISOLATED_TEST") == "1" or os.environ.get("GOCONNECT_NETWORK_TEST") == "1"
+APP_NAME = "GoConnect Dual VPN Test" if TEST_BUILD else "GoConnect"
 STAGE = DIST / ("." + APP_NAME + ".stage.app")
 APP = DIST / (APP_NAME + ".app")
 OTOOL = shutil.which("otool") or "/usr/bin/otool"
@@ -45,6 +46,10 @@ for directory in (bin_dir, lib_dir, share_dir, licenses, STAGE / "Contents/MacOS
     directory.mkdir(parents=True, exist_ok=True)
 shutil.copy2(sys.argv[1], STAGE / "Contents/MacOS/GoConnect")
 shutil.copy2(TRANSPORT_BIN / "GoConnectTransport", bin_dir / "GoConnectTransport")
+identity = json.loads(run(bin_dir / "GoConnectTransport", "service-identity"))
+expected_flavor = "test" if TEST_BUILD else "production"
+if identity.get("flavor") != expected_flavor:
+    raise RuntimeError("App and network-service build flavors do not match")
 # SwiftPM links @rpath/Sparkle.framework. Preserve its versioned symlinks.
 framework = Path(os.environ["GOCONNECT_SPARKLE_FRAMEWORK"]).resolve()
 if framework.name != "Sparkle.framework" or not (framework / "Sparkle").is_file():
@@ -175,9 +180,10 @@ info.update({"GoConnectSigningMode": SIGNING.mode,
              "SUEnableAutomaticChecks": False, "SUAutomaticallyUpdate": False,
              "SUAllowsAutomaticUpdates": False, "SUVerifyUpdateBeforeExtraction": True,
              "SURequireSignedFeed": True})
-if os.environ.get("GOCONNECT_ISOLATED_TEST") == "1":
+if TEST_BUILD:
     info.update({"CFBundleIdentifier": "com.willhsu.GoConnect.DualVPNTest", "CFBundleName": "GoConnect Dual VPN Test",
-                 "CFBundleDisplayName": "GoConnect 双连接测试", "GoConnectUpdatesEnabled": False})
+                 "CFBundleDisplayName": "GoConnect 双连接测试", "GoConnectUpdatesEnabled": False,
+                 "GoConnectTestFlavor": "network" if os.environ.get("GOCONNECT_NETWORK_TEST") == "1" else "ui"})
 info["CFBundleDevelopmentRegion"] = "zh-Hans"
 info["CFBundleLocalizations"] = ["zh-Hans"]
 with (STAGE / "Contents/Info.plist").open("wb") as stream:
@@ -213,7 +219,7 @@ STAGE.rename(APP)
 lsregister = Path("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister")
 if lsregister.exists() and os.environ.get("GOCONNECT_REGISTER_APP", "1") == "1":
     subprocess.run([str(lsregister), "-f", str(APP)], check=True)
-archive = DIST / f"{'GoConnect-DualVPN-Test' if os.environ.get('GOCONNECT_ISOLATED_TEST') == '1' else 'GoConnect'}-{VERSION['version']}-macos-{os.uname().machine}.zip"
+archive = DIST / f"{'GoConnect-DualVPN-Test' if TEST_BUILD else 'GoConnect'}-{VERSION['version']}-macos-{os.uname().machine}.zip"
 if archive.exists(): archive.unlink()
 subprocess.run(["/usr/bin/ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", str(APP), str(archive)], check=True)
 (DIST / "SHA256SUMS").write_text(hashlib.sha256(archive.read_bytes()).hexdigest() + "  " + archive.name + "\n")

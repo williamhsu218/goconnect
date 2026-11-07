@@ -9,6 +9,7 @@ struct ConnectionView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: groupSpacing) {
+                if Product.isNetworkTestApp { TestWorkspaceCard(store: store) }
                 VPNConnectionCard(store: store)
                 CompanyConnectionCard(store: store)
 
@@ -101,6 +102,29 @@ private struct SummaryColumns: Layout {
             item.place(at: CGPoint(x: bounds.minX, y: y), anchor: .topLeading,
                        proposal: ProposedViewSize(width: bounds.width, height: height))
             y += height + spacing
+        }
+    }
+}
+
+private struct TestWorkspaceCard: View {
+    let store: AppStore
+    var body: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Label("双 VPN 功能测试版", systemImage: "testtube.2").font(.headline)
+                    Spacer()
+                    Button("复制正式版线路…") { store.copyProductionProfilesForTesting() }
+                        .disabled(store.busy || store.company.busy || store.company.isRunning || store.companyDraftOpen || store.profileDraft != nil)
+                }
+                Text("独立配置、钥匙串和测试网络服务。复制线路会包含订阅节点凭据；VPN 密码需重新输入。").font(.callout).foregroundStyle(.secondary)
+                if let reason = store.networkService.testHostMessage {
+                    Label(reason, systemImage: "pause.circle").font(.callout).foregroundStyle(.orange)
+                } else {
+                    Text("请在单独验收窗口连接；测试服务需单独授权。完成后先断开测试版，再恢复正式版连接。").font(.caption).foregroundStyle(.secondary)
+                }
+                Button("重新检测正式版状态") { store.networkService.refresh() }.font(.caption)
+            }.padding(8).frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }

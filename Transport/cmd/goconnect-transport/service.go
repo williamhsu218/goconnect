@@ -20,12 +20,13 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const serviceLabel = "com.willhsu.GoConnect.network"
-const serviceBase = "/Library/PrivilegedHelperTools/com.willhsu.GoConnect"
-const serviceRunDirectory = serviceBase + "/run"
-const serviceSocket = serviceRunDirectory + "/network.sock"
-const servicePlist = "/Library/LaunchDaemons/" + serviceLabel + ".plist"
-const servicePolicyPath = serviceBase + "/service.json"
+var serviceLabel = selectedServiceNamespace.Label
+var serviceBase = selectedServiceNamespace.Base
+var serviceRunDirectory = selectedServiceNamespace.RunDirectory
+var serviceSocket = selectedServiceNamespace.Socket
+var servicePlist = selectedServiceNamespace.Plist
+var servicePolicyPath = selectedServiceNamespace.PolicyPath
+
 const serviceVersion = "1"
 
 type serviceRequest struct {

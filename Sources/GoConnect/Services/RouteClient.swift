@@ -65,8 +65,11 @@ final class RouteClient {
                 else { try? sendCompany(action: "block", generation: block) }
             }
             if pendingCompanyBlock == nil, let company = companyState, company.state == "prepared", company.generation == pendingCompanyCommit {
-                pendingCompanyCommit = nil
+                // Retry with the current revision until the controller acknowledges active.
                 try? sendCompany(action: "commit", generation: company.generation)
+            }
+            if let company = companyState, company.state == "active", company.generation == pendingCompanyCommit {
+                pendingCompanyCommit = nil
             }
             onSnapshot?(snapshot)
         }

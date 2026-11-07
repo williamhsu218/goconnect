@@ -14,7 +14,7 @@ struct VPNConnectionCard: View {
     }
 
     private var canStart: Bool {
-        store.localReady && store.configurationReadable && !store.recoveryRequired
+        store.localReady && store.configurationReadable && !store.recoveryRequired && (!Product.isNetworkTestApp || store.networkService.testHostAvailable)
     }
 
     private var metricsActive: Bool { state == .connected || (state == .diagnostic && store.phase == "testing") }

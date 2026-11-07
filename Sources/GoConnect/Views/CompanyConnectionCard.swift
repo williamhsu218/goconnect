@@ -10,6 +10,7 @@ struct CompanyConnectionCard: View {
         case "authenticating": "正在验证公司身份"
         case "preparing": "正在验证公司路由与 DNS"
         case "connected": "公司内网已连接"
+        case "reconnecting": "公司线路恢复中"
         case "stopping": "正在结束公司连接"
         case "quarantined": "公司连接已隔离"
         case "failed": "公司连接未完成"
@@ -32,7 +33,7 @@ struct CompanyConnectionCard: View {
                         Button("断开公司连接") { company.disconnect() }.disabled(company.phase == "quarantined" || company.phase == "stopping")
                     } else {
                         Button("连接公司内网") { store.connectCompany() }
-                            .disabled(Product.isIsolatedTestApp || store.phase != "connected" || !store.companyConfiguration.enabled || store.updateOperationBlocked)
+                            .disabled(Product.isIsolatedTestApp || store.phase != "connected" || !store.companyConfiguration.enabled || store.companyConfigurationIssue != nil || store.updateOperationBlocked)
                     }
                 }
                 if store.companyConfiguration.enabled {
@@ -42,7 +43,11 @@ struct CompanyConnectionCard: View {
                         Text("IPv4 · TCP").monospacedDigit()
                     }.font(.caption).foregroundStyle(.secondary)
                 }
-                if company.phase == "connected" {
+                if let issue = store.companyConfigurationIssue { Text(issue).font(.callout).foregroundStyle(.orange) }
+                if !company.activeDNSServers.isEmpty {
+                    Text("本次公司 DNS：" + company.activeDNSServers.joined(separator: "、")).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                }
+                if company.phase == "connected" || company.phase == "reconnecting" {
                     Text("公司会话  ↓ \(ByteCountFormatter.string(fromByteCount: Int64(clamping: company.received), countStyle: .binary))    ↑ \(ByteCountFormatter.string(fromByteCount: Int64(clamping: company.sent), countStyle: .binary))")
                         .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 }
@@ -86,6 +91,7 @@ private struct CompanyConnectionSettings: View {
             Text("公司副连接").font(.title2.weight(.semibold))
             Text("在连接主线路前完成配置。公司副线路断开后，这些公司地址保持阻断。").font(.callout).foregroundStyle(.secondary)
             Form {
+                LabeledContent("HY2 主线路", value: store.configuration.activeConnection.displayName)
                 Toggle("启用公司副连接", isOn: $draft.enabled)
                 Picker("AnyConnect 公司线路", selection: $draft.companyProfileID) {
                     Text("请选择").tag(nil as UUID?)
@@ -95,7 +101,7 @@ private struct CompanyConnectionSettings: View {
                 LabeledContent("公司域名") { TextField("", text: $domains, prompt: Text("corp.example.com，可留空"), axis: .vertical).labelsHidden().accessibilityLabel("公司域名").textFieldStyle(.roundedBorder).multilineTextAlignment(.leading).lineLimit(2...3).frame(maxWidth: .infinity) }
                 LabeledContent("DNS 覆盖") { TextField("", text: $dns, prompt: Text("留空自动获取"), axis: .vertical).labelsHidden().accessibilityLabel("公司 DNS 覆盖").textFieldStyle(.roundedBorder).multilineTextAlignment(.leading).lineLimit(1...2).frame(maxWidth: .infinity) }
             }.formStyle(.grouped)
-            Text("首版支持明确的 IPv4 私网与 TCP 业务。不添加默认路由、全局搜索域或自动重连；局域网、Tailscale 与已有规则冲突时拒绝启用。").font(.caption).foregroundStyle(.secondary)
+            Text("首版支持明确的 IPv4 私网与 TCP 业务。不添加公司默认路由或全局搜索域，连接结束后须手动重连；与局域网、Tailscale 或已有规则冲突时拒绝启用。").font(.caption).foregroundStyle(.secondary)
             if let error { Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled) }
             HStack {
                 Button("取消", role: .cancel) { dismiss() }

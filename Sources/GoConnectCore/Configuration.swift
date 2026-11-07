@@ -6,7 +6,13 @@ public enum Product {
     #else
     public static let isIsolatedTestApp = false
     #endif
-    public static let bundleID = isIsolatedTestApp ? "com.willhsu.GoConnect.DualVPNTest" : "com.willhsu.GoConnect"
+    #if GOCONNECT_NETWORK_TEST
+    public static let isNetworkTestApp = true
+    #else
+    public static let isNetworkTestApp = false
+    #endif
+    public static let isTestBuild = isIsolatedTestApp || isNetworkTestApp
+    public static let bundleID = isTestBuild ? "com.willhsu.GoConnect.DualVPNTest" : "com.willhsu.GoConnect"
 }
 
 public enum AccessMode: String, Codable, CaseIterable, Identifiable, Sendable {

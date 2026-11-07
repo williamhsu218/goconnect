@@ -25,6 +25,30 @@ final class NetworkServiceClient {
     private(set) var status = NetworkServiceStatus(state: "checking")
     private(set) var working = false
     private var generation = 0
+    private(set) var testHostMessage: String?
+    private(set) var testHostAvailable = !Product.isNetworkTestApp
+    private struct Identity: Decodable { let flavor, label: String }
+    private struct HostStatus: Decodable { let available: Bool; let reason: String? }
+
+    /// Rechecked immediately before every test-only privileged operation.
+    func assertTestHostAvailable() async throws {
+        guard Product.isNetworkTestApp else { return }
+        let executable = executable
+        let result = await Task.detached { () -> (Bool, String?) in
+            guard let identity = try? Self.run(executable, arguments: ["service-identity"]), identity.code == 0,
+                  let value = try? JSONDecoder().decode(Identity.self, from: identity.output),
+                  value.flavor == "test", value.label == "com.willhsu.GoConnect.DualVPNTest.network" else {
+                return (false, "测试版网络组件身份不匹配，已阻止系统操作。")
+            }
+            guard let response = try? Self.run(executable, arguments: ["test-host-status"]), response.code == 0,
+                  let host = try? JSONDecoder().decode(HostStatus.self, from: response.output) else {
+                return (false, "无法确认正式版网络状态，已暂停测试接管。")
+            }
+            return (host.available, host.available ? nil : "正式版 VPN 正在运行或状态未确认；请在单独验收窗口断开后重试。")
+        }.value
+        testHostAvailable = result.0; testHostMessage = result.1
+        guard result.0 else { throw ServiceError(result.1 ?? "当前不能接管测试网络。") }
+    }
     private var executable: URL { Bundle.main.resourceURL!.appendingPathComponent("Runtime/bin/GoConnectTransport") }
 
     func diagnosticLogs() async -> String {
@@ -44,6 +68,7 @@ final class NetworkServiceClient {
         generation += 1
         let current = generation, executable = executable
         Task {
+            if Product.isNetworkTestApp { try? await self.assertTestHostAvailable() }
             let result = await Self.readStatus(executable)
             if current == generation && !working { status = result }
         }
@@ -54,6 +79,7 @@ final class NetworkServiceClient {
         guard !working else { throw ServiceError("本机服务正在处理操作，请稍候。") }
         working = true; generation += 1
         defer { working = false }
+        try await assertTestHostAvailable()
         status = await Self.readStatus(executable)
         if status.ready && !forceInstall { return }
         guard !status.busy else { throw ServiceError("请先断开 VPN 或停止分流自检，再更新服务。") }
@@ -66,6 +92,9 @@ final class NetworkServiceClient {
         guard !working else { throw ServiceError("本机服务正在处理操作，请稍候。") }
         working = true; generation += 1
         defer { working = false }
+        try await assertTestHostAvailable()
+        status = await Self.readStatus(executable)
+        guard !status.busy else { throw ServiceError("请先结束测试版连接，再移除测试服务。") }
         try await authorize(arguments: ["service-uninstall"])
         status = await Self.readStatus(executable)
         guard status.state == "notInstalled" else { throw ServiceError("服务移除后仍能读取到安装信息，请重新检测。") }
@@ -73,6 +102,7 @@ final class NetworkServiceClient {
 
     private func authorize(arguments: [String]) async throws {
         guard !Product.isIsolatedTestApp else { throw ServiceError("隔离测试包不安装、替换或移除正式网络服务。") }
+        try await assertTestHostAvailable()
         let command = "exec " + ([executable.path] + arguments).map(ShellQuote.argument).joined(separator: " ")
         let script = "do shell script " + ShellQuote.appleScriptString(command) + " with administrator privileges"
         let result = try await Task.detached {

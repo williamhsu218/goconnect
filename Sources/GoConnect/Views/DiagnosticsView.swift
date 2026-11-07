@@ -26,6 +26,16 @@ struct DiagnosticsView: View {
                     }
                     .padding(.vertical, 6)
 
+                if store.companyConfiguration.enabled {
+                    GroupBox("公司副连接") {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("连接：" + store.company.phase + " · 控制器：" + (store.routeSnapshot?.company?.state ?? "未预留"))
+                            Text("范围：\(store.companyConfiguration.networks.count) 个私网 · \(store.companyConfiguration.domains.count) 个域名 · IPv4 / TCP")
+                            Text("DNS：" + (store.routeSnapshot?.company?.dnsServers?.joined(separator: "、") ?? "验证副线路后自动获取，或使用配置覆盖"))
+                            if let issue = store.companyConfigurationIssue ?? store.company.message { Text(issue).foregroundStyle(.orange) }
+                        }.font(.callout).frame(maxWidth: .infinity, alignment: .leading).padding(8).textSelection(.enabled)
+                    }
+                }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 280), spacing: AppTheme.sectionSpacing, alignment: .topLeading)], alignment: .leading, spacing: AppTheme.sectionSpacing) {
                     Surface {
                         HStack {
@@ -243,7 +253,7 @@ struct NetworkServiceCard: View {
 
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 8) {
-                            Text("本机特权网络服务").font(.headline)
+                            Text(Product.isNetworkTestApp ? "测试版独立网络服务" : "本机特权网络服务").font(.headline)
                             if let version = service.status.version, !version.isEmpty {
                                 Text("v\(version)")
                                     .font(.caption2.monospaced())
@@ -370,7 +380,7 @@ struct PreferencesView: View {
                 LabeledContent("运行方式", value: "透明 App 分流")
             }
             Section("隐私与存储") {
-                Text("AnyConnect 密码保存在内存或钥匙串；订阅地址及节点凭据保存在仅当前用户可读的本机缓存。订阅更新会访问服务商地址，不记录访问网址。系统 DNS 沿用当前网络。")
+                Text("AnyConnect 密码保存在内存或钥匙串；订阅地址及节点凭据保存在仅当前用户可读的本机缓存。订阅更新会访问服务商地址，不记录访问网址。连接期间公网 DNS 由主线路接管；启用公司副连接时，仅配置的公司域名交由公司 DNS 处理。")
                     .font(.callout).foregroundStyle(.secondary)
             }
         }.formStyle(.grouped)

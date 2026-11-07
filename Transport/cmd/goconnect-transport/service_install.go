@@ -324,6 +324,16 @@ func installNetworkService(rawUID string) (result error) {
 	if _, err = user.LookupId(rawUID); err != nil {
 		return err
 	}
+	// The test service must prove global capture is idle before creating even
+	// its own directories. Never create, replace or remove the production lock.
+	var testCapture *os.File
+	if serviceBuildFlavor == "test" {
+		testCapture, err = acquireExistingServiceCaptureLock()
+		if err != nil {
+			return err
+		}
+		defer testCapture.Close()
+	}
 	if err = ensureRootDirectory(serviceRunDirectory); err != nil {
 		return err
 	}
@@ -332,11 +342,13 @@ func installNetworkService(rawUID string) (result error) {
 		return err
 	}
 	defer lock.Close()
-	capture, err := captureLock()
-	if err != nil {
-		return errors.New("请先断开 VPN 或停止分流自检，再安装服务。")
+	if serviceBuildFlavor != "test" {
+		capture, err := captureLock()
+		if err != nil {
+			return errors.New("请先断开 VPN 或停止分流自检，再安装服务。")
+		}
+		defer capture.Close()
 	}
-	defer capture.Close()
 	if err = ensureRootDirectory(serviceBase + "/versions"); err != nil {
 		return err
 	}
@@ -459,6 +471,13 @@ func uninstallNetworkService() error {
 	if os.Geteuid() != 0 {
 		return errors.New("移除本机服务需要管理员授权。")
 	}
+	if serviceBuildFlavor == "test" {
+		capture, err := acquireExistingServiceCaptureLock()
+		if err != nil {
+			return err
+		}
+		defer capture.Close()
+	}
 	if err := ensureRootDirectory(serviceRunDirectory); err != nil {
 		return err
 	}
@@ -467,16 +486,20 @@ func uninstallNetworkService() error {
 		return err
 	}
 	defer lock.Close()
-	capture, err := captureLock()
-	if err != nil {
-		return errors.New("请先断开 VPN 或停止分流自检。")
+	if serviceBuildFlavor != "test" {
+		capture, err := captureLock()
+		if err != nil {
+			return errors.New("请先断开 VPN 或停止分流自检。")
+		}
+		defer capture.Close()
 	}
-	defer capture.Close()
 	policy, policyErr := readServicePolicy()
 	if err = stopInstalledService(); err != nil {
 		return err
 	}
-	if policyErr == nil {
+	// Local Directory Service app-group labels are shared with the production
+	// application. Removing only the test service must not collect those labels.
+	if policyErr == nil && serviceBuildFlavor != "test" {
 		if e := collectAppGroups(policy.UID, nil, true); e != nil {
 			fmt.Fprintln(os.Stderr, "routing label maintenance deferred")
 		}
