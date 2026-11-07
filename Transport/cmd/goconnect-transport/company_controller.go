@@ -272,11 +272,29 @@ func (g *companyGate) backendDial(ctx context.Context, b *companyBackend, networ
 	if a, e := netip.ParseAddr(host); e != nil || !a.Is4() {
 		return nil, errors.New("company backend requires literal IPv4")
 	}
-	d, err := proxy.SOCKS5("unix", b.claim.SocketPath, &proxy.Auth{User: "goconnect", Password: b.claim.Token}, companyUnixDialer{g, b})
+	d, err := proxy.SOCKS5("unix", b.claim.SocketPath, &proxy.Auth{User: "goconnect", Password: b.claim.Token}, nil)
 	if err != nil {
 		return nil, err
 	}
-	return d.(proxy.ContextDialer).DialContext(ctx, "tcp", address)
+	// DialContext returns x/net's proxy wrapper, which hides CloseWrite. Perform
+	// the same context-aware handshake on the verified UNIX socket and retain
+	// that raw transport so EOF can cross both company relay layers. There is
+	// no host-network dial or fallback in this path.
+	handshake, ok := d.(interface {
+		DialWithConn(context.Context, net.Conn, string, string) (net.Addr, error)
+	})
+	if !ok {
+		return nil, errors.New("company SOCKS handshake unavailable")
+	}
+	raw, err := (companyUnixDialer{g, b}).DialContext(ctx, "unix", b.claim.SocketPath)
+	if err != nil {
+		return nil, err
+	}
+	if _, err = handshake.DialWithConn(ctx, raw, "tcp", address); err != nil {
+		raw.Close()
+		return nil, err
+	}
+	return raw, nil
 }
 
 type companyDNSDialer struct {
@@ -298,6 +316,8 @@ type companyFlow struct {
 	backend *companyBackend
 	once    sync.Once
 }
+
+func (c *companyFlow) CloseWrite() error { return companyCloseWrite(c.Conn) }
 
 func (c *companyFlow) Close() error {
 	err := c.Conn.Close()

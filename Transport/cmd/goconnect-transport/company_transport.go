@@ -130,6 +130,18 @@ type companySOCKSConn struct {
 	denied    bool
 }
 
+// Keep the write half-close visible through the protocol-filtering wrapper.
+// Closing the whole socket here would discard the response to a half-closed
+// request; swallowing EOF instead retains a SOCKS handler and its flow slot.
+func (c *companySOCKSConn) CloseWrite() error { return companyCloseWrite(c.Conn) }
+
+func companyCloseWrite(conn net.Conn) error {
+	if c, ok := conn.(interface{ CloseWrite() error }); ok {
+		return c.CloseWrite()
+	}
+	return errors.ErrUnsupported
+}
+
 func (c *companySOCKSConn) Read(p []byte) (int, error) {
 	// SOCKSServer uses fixed-size reads; classify only protocol header transitions.
 	n, err := c.Conn.Read(p)
