@@ -63,7 +63,20 @@ func validCompanyProxyToken(token string) bool {
 	}
 	return true
 }
+
+var errCompanySocketOccupied = errors.New("company socket already exists")
+
 func validateCompanySocketPath(path string) error {
+	if err := validateCompanySocketParent(path); err != nil {
+		return err
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		return errCompanySocketOccupied
+	}
+	return nil
+}
+
+func validateCompanySocketParent(path string) error {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path || len(path) > 102 {
 		return errors.New("invalid company socket path")
 	}
@@ -79,9 +92,6 @@ func validateCompanySocketPath(path string) error {
 	uid, ok := st.Sys().(*syscall.Stat_t)
 	if !ok || int(uid.Uid) != os.Geteuid() {
 		return errors.New("company socket parent owner mismatch")
-	}
-	if _, err = os.Lstat(path); !os.IsNotExist(err) {
-		return errors.New("company socket already exists")
 	}
 	return nil
 }

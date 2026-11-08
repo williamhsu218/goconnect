@@ -182,7 +182,11 @@ func session(parent context.Context) error {
 		return err
 	}
 	if err = r.validate(); err != nil {
-		fail("请检查服务器地址和账号信息。")
+		if errors.Is(err, errCompanySocketOccupied) {
+			fail("公司连接的本地通道尚未清理，已阻止重连。请导出诊断后处理。")
+		} else {
+			fail("请检查服务器地址和账号信息。")
+		}
 		return err
 	}
 	self, err := os.Executable()
@@ -361,8 +365,8 @@ func session(parent context.Context) error {
 			}
 		case err = <-ended:
 			ended <- err
-			if cleanupErr := stopChild(cmd, ended); cleanupErr != nil {
-				fail("VPN 子进程尚未退出，请导出诊断。")
+			if cleanupErr := stopSessionChild(cmd, ended, r.CompanySocket); cleanupErr != nil {
+				fail("VPN 子进程或本地通道尚未完成清理，请导出诊断。")
 				return cleanupErr
 			}
 			if ctx.Err() == nil {
@@ -378,8 +382,8 @@ func session(parent context.Context) error {
 			fail("连接超时，请检查服务器和网络。")
 			cancel()
 		case <-ctx.Done():
-			if err := stopChild(cmd, ended); err != nil {
-				fail("VPN 进程无法退出，请导出诊断后处理；未自动重启。")
+			if err := stopSessionChild(cmd, ended, r.CompanySocket); err != nil {
+				fail("VPN 进程或本地通道未完成清理，请导出诊断后处理；未自动重启。")
 				return err
 			}
 
