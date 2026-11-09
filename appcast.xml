@@ -6,16 +6,16 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/williamhsu218/goconnect/releases</link>
     <description>GoConnect signed updates</description>
     <item>
-      <title>GoConnect 1.0.11</title>
-      <pubDate>Sat, 07 Nov 2026 12:08:25 +0000</pubDate>
-      <sparkle:version>71</sparkle:version>
-      <sparkle:shortVersionString>1.0.11</sparkle:shortVersionString>
+      <title>GoConnect 1.0.12</title>
+      <pubDate>Mon, 09 Nov 2026 01:35:27 +0000</pubDate>
+      <sparkle:version>72</sparkle:version>
+      <sparkle:shortVersionString>1.0.12</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
-      <description>修复公司副连接旧连接、取消请求残留及浏览器复用失效连接导致的超时；保留活跃慢响应，公司副连接改为可选正式功能。本版须在可短暂断网窗口更新网络服务并重建主、副连接；可保持VPN下载，最终安装由用户确认。</description>
-      <enclosure url="https://github.com/williamhsu218/goconnect/releases/download/v1.0.11/GoConnect-1.0.11-macos-arm64.zip" length="32127412" type="application/octet-stream" sparkle:edSignature="1lE6UfXUUlK994GPMlrAA65u8BlJ+OBVdOb9acMVe9GbN7XyqCu2WeTBL8ID4PIRt0WoQU5p9s0jZPh8CChADw=="></enclosure>
+      <description>同时修复副 VPN socket 残留阻止重连和白名单 DNS 分流。可保持 VPN 下载，安装后按诊断页升级网络服务并重连。</description>
+      <enclosure url="https://github.com/williamhsu218/goconnect/releases/download/v1.0.12/GoConnect-1.0.12-macos-arm64.zip" length="32137508" type="application/octet-stream" sparkle:edSignature="wiM2HL8QhWOXQNCILeb2qQHUXt9/CMb2/gAktxcsr2nIOCxm3FrIMfLidFu7t2S9bhc+4NQKV/4ILHRzb2G5AA=="></enclosure>
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: l6VRIBu8vBEGci2s81QFt7MlFIzPo1c5HykdhTaRuYkw+KkMtJ+k1wYt+Nu/vU1FO+IuCJ1gtfvm6K07UEEQCg==
-length: 1503
+edSignature: mIjKSWmCDmtYOcv4ILMfz5C1kzGS4ieYYTBsWqagv3ofRn7gs88SVGmoXigURaFylDa3Ksf7ziQiZpiwLA4YCg==
+length: 1354
 -->
