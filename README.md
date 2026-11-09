@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/williamhsu218/goconnect/v1.0.12/Packaging/GoConnect.png" alt="GoConnect Logo" width="96" height="96" />
+  <img src="https://raw.githubusercontent.com/williamhsu218/goconnect/v1.0.13/Packaging/GoConnect.png" alt="GoConnect Logo" width="96" height="96" />
 </p>
 
 <h1 align="center">GoConnect</h1>
 
 <p align="center">
   面向 Apple Silicon Mac 的原生网络代理与 AnyConnect 客户端<br />
-  <strong>当前版本：v1.0.12 (Build 72)</strong>
+  <strong>当前版本：v1.0.13 (Build 73)</strong>
 </p>
 
 ---
@@ -44,7 +44,7 @@ GoConnect 是一款使用原生 SwiftUI 构建的 macOS 网络连接与分流工
 
 ### 获取应用
 
-- **最新发布包**：[GoConnect-1.0.12-macos-arm64.zip](https://github.com/williamhsu218/goconnect/releases/download/v1.0.12/GoConnect-1.0.12-macos-arm64.zip)
+- **最新发布包**：[GoConnect-1.0.13-macos-arm64.zip](https://github.com/williamhsu218/goconnect/releases/download/v1.0.13/GoConnect-1.0.13-macos-arm64.zip)
 - **完整发布页**：[GitHub Releases / Latest](https://github.com/williamhsu218/goconnect/releases/latest)
 
 ### 首次安装与权限
@@ -91,9 +91,9 @@ GoConnect 是一款使用原生 SwiftUI 构建的 macOS 网络连接与分流工
 
 ## 源码构建与许可协议
 
-- **源码构建**：当前正式版对应 [v1.0.12 源码](https://github.com/williamhsu218/goconnect/tree/v1.0.12)。请先检出该 tag，再按 [构建说明](docs/BUILD.md)操作；普通源码构建默认采用 ad-hoc 签名，应用内更新禁用。
+- **源码构建**：当前正式版对应 [v1.0.13 源码](https://github.com/williamhsu218/goconnect/tree/v1.0.13)。请先检出该 tag，再按 [构建说明](docs/BUILD.md)操作；普通源码构建默认采用 ad-hoc 签名，应用内更新禁用。
 - **版本与发布规范**：版本更新机制详见 [docs/UPDATES.md](docs/UPDATES.md)，发布规范详见 [docs/RELEASING.md](docs/RELEASING.md)。
-- **第三方许可**：OpenConnect、Mihomo 与 Sparkle 等组件分别适用各自许可，来源及说明见 [THIRD_PARTY.md](https://github.com/williamhsu218/goconnect/blob/v1.0.12/THIRD_PARTY.md)。GoConnect 自有代码尚未指定独立开源许可证。
+- **第三方许可**：OpenConnect、Mihomo 与 Sparkle 等组件分别适用各自许可，来源及说明见 [THIRD_PARTY.md](https://github.com/williamhsu218/goconnect/blob/v1.0.13/THIRD_PARTY.md)。GoConnect 自有代码尚未指定独立开源许可证。
 
 ## 问题与反馈
 

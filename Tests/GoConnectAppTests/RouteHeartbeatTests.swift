@@ -1,10 +1,43 @@
 import Foundation
+import AppKit
 import XCTest
 import GoConnectCore
 @testable import GoConnect
 
 @MainActor
 final class RouteHeartbeatTests: XCTestCase {
+    func testResponsiveModalRunLoopKeepsLeaseAlive() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("GoConnect-modal-heartbeat-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("runtime/bin"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let helper = root.appendingPathComponent("runtime/bin/GoConnectTransport")
+        try "#!/bin/sh\nexec /bin/sleep 60\n".write(to: helper, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: helper.path)
+        let controls = root.appendingPathComponent("controls")
+        try FileManager.default.createDirectory(at: controls, withIntermediateDirectories: true)
+        let route = RouteClient(temporaryDirectory: controls)
+        try route.start(port: 12345, token: String(repeating: "x", count: 40), apps: [], gateway: "192.0.2.1", runtime: root.appendingPathComponent("runtime"), mode: .whitelist)
+        defer { route.stop() }
+        let session = try XCTUnwrap(FileManager.default.contentsOfDirectory(at: controls, includingPropertiesForKeys: nil).first)
+        let lease = session.appendingPathComponent("lease")
+        // Sparkle's native result dialog pumps the modal panel mode while the
+        // UI remains responsive. Keep it open beyond the unchanged watchdog.
+        let pulse = Timer(timeInterval: 0.05, repeats: true) { _ in }
+        RunLoop.main.add(pulse, forMode: .modalPanel)
+        defer { pulse.invalidate() }
+        let deadline = Date().addingTimeInterval(32)
+        while Date() < deadline {
+            _ = RunLoop.main.run(mode: .modalPanel, before: min(deadline, Date().addingTimeInterval(0.1)))
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: lease.path), "A responsive native modal dialog must not revoke the VPN lease")
+        if FileManager.default.fileExists(atPath: lease.path) {
+            let stamp = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: lease.path)[.modificationDate] as? Date)
+            XCTAssertLessThan(Date().timeIntervalSince(stamp), 2.5)
+        }
+        route.stop()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: lease.path))
+    }
+
     func testQueuedOldOwnerConfirmationCannotExtendWatchdog() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("GoConnect-delayed-confirmation-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 import GoConnectCore
 
 @MainActor
@@ -48,9 +48,13 @@ final class RouteClient {
             p.terminationHandler = { [weak self] _ in Task { @MainActor in self?.tick() } }
             try p.run(); serviceProcess = p
             let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
-                Task { @MainActor in self?.tick() }
+                // This timer runs only on the main RunLoop. A native modal
+                // panel pumps that loop without draining queued main-actor
+                // tasks, so acknowledge its responsiveness synchronously.
+                MainActor.assumeIsolated { self?.tick() }
             }
             RunLoop.main.add(timer, forMode: .common)
+            RunLoop.main.add(timer, forMode: .modalPanel)
             heartbeat = timer
         } catch { cleanup(); throw error }
     }

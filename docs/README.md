@@ -1,6 +1,7 @@
 # 技术记录索引
 
-- [1.0.12 发布说明（副线重复重连与白名单 DNS）](RELEASE_1.0.12.md)；[socket 清理](COMPANY_RECONNECT_SOCKET_2026-11-09.md)；[DNS 模式边界](WHITELIST_DNS_BOUNDARY_2026-11-09.md)。
+- [1.0.13 发布说明（更新弹窗期间的连接心跳）](RELEASE_1.0.13.md)。
+- [1.0.12 发布说明（副线重复重连与白名单 DNS）](RELEASE_1.0.12.md)；[发布与验收记录](PUBLISH_1.0.12_2026-11-09.md)；[socket 清理](COMPANY_RECONNECT_SOCKET_2026-11-09.md)；[DNS 模式边界](WHITELIST_DNS_BOUNDARY_2026-11-09.md)。
 
 - [1.0.11 发布说明（公司副连接正式功能与连接回收修复）](RELEASE_1.0.11.md) — 默认隐藏，按需开启；[连接回收回归记录](COMPANY_FLOW_RELEASE_2026-11-07.md)；[正式发布与实机/OTA 记录](PUBLISH_1.0.11_2026-11-07.md)。
 - [1.0.10 发布说明（公司副连接按需开启）](RELEASE_1.0.10.md) — 默认隐藏入口，设置中手动配置启用，关闭保留配置；[界面与配置保护验收](COMPANY_FEATURE_VISIBILITY_2026-11-07.md)；[正式发布与 OTA 记录](PUBLISH_1.0.10_2026-11-07.md)。
