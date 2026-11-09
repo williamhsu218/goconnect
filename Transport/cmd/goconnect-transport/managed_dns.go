@@ -206,7 +206,13 @@ func configureManagedDNS(config map[string]any, r routeRequest, original origina
 		dns := config["dns"].(map[string]any)
 		dns["enhanced-mode"] = "fake-ip"
 		dns["fake-ip-range"] = "198.18.0.1/16"
-		dns["fake-ip-range6"] = "fdfc:dcba:9876::1/64"
+		// ULA fake AAAA records make public websites look like LAN devices to
+		// browsers' Local Network Access checks. Keep IPv6 enabled, but leave
+		// only the synthetic IPv6 pool empty: the core returns NODATA without
+		// querying upstream for deferred public AAAA requests. Filtered native
+		// zones still receive real AAAA answers, and the chosen outbound can
+		// resolve/dial IPv6 using the hostname recovered from the IPv4 mapping.
+		dns["fake-ip-range6"] = ""
 		dns["direct-nameserver"] = direct
 		// Local discovery, explicit exceptions and pre-existing supplemental
 		// zones still need real answers and their own original resolver.
