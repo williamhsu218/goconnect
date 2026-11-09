@@ -21,6 +21,7 @@ import (
 
 	"goconnect.local/transport/internal/bridge"
 	"golang.org/x/net/dns/dnsmessage"
+	"golang.org/x/net/proxy"
 )
 
 func TestManagedDNSOriginalResolvers(t *testing.T) {
@@ -222,7 +223,7 @@ func TestLiveManagedDNSSplitAndFailure(t *testing.T) {
 	port, _ := freePort()
 	apiPort, _ := freePort()
 	p := &managedDNSPlan{port: port, resolvers: []nativeResolver{{servers: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, port: direct.LocalAddr().(*net.UDPAddr).Port}}}
-	r := routeRequest{managedDNS: p, Token: "managed-dns-fixture", SOCKSPort: uint16(upstream.Addr().(*net.TCPAddr).Port), DirectDomains: []domainRule{{Domain: "taobao.com", IncludeSubdomains: true}, {Domain: "exact.example"}}}
+	r := routeRequest{RoutingMode: modeGlobal, managedDNS: p, Token: "managed-dns-fixture", SOCKSPort: uint16(upstream.Addr().(*net.TCPAddr).Port), DirectDomains: []domainRule{{Domain: "taobao.com", IncludeSubdomains: true}, {Domain: "exact.example"}}}
 	cfg := makeTransparentConfig(r, "utun99", apiPort, originalNetwork{Interface: "en0"}, nil, tailscaleBypass{})
 	dns := cfg["dns"].(map[string]any)
 	dns["nameserver"] = []string{resolver.URL + "/dns-query#GoConnect&skip-cert-verify=true"}
@@ -267,4 +268,132 @@ func TestLiveManagedDNSSplitAndFailure(t *testing.T) {
 		t.Fatal("domestic DNS depends on proxy health", e)
 	}
 	t.Logf("proxy DNS queries=%d, direct DNS queries=%d, proxy connections=%d; protected failure did not fall back", proxyQueries.Load(), directQueries.Load(), connects.Load())
+}
+
+func TestManagedDNSWhitelistAndGlobalPoliciesDiffer(t *testing.T) {
+	p := &managedDNSPlan{port: 15353, resolvers: []nativeResolver{
+		{servers: []netip.Addr{netip.MustParseAddr("192.0.2.53")}, port: 53},
+		{domain: "private.example", servers: []netip.Addr{netip.MustParseAddr("192.0.2.54")}, port: 53},
+	}}
+	for _, mode := range []string{modeWhitelist, modeGlobal} {
+		r := routeRequest{RoutingMode: mode, managedDNS: p}
+		cfg := makeTransparentConfig(r, "utun99", 19090, originalNetwork{Interface: "en0"}, nil, tailscaleBypass{})
+		dns := cfg["dns"].(map[string]any)
+		if mode == modeWhitelist {
+			if dns["enhanced-mode"] != "fake-ip" || dns["direct-nameserver"].([]string)[0] != "udp://192.0.2.53:53#en0" {
+				t.Fatal("whitelist shares global proxy resolution", dns)
+			}
+			pool := netip.MustParsePrefix(dns["fake-ip-range6"].(string))
+			if pool.Contains(netip.MustParseAddr(liveIPv6Address)) || pool.Contains(netip.MustParseAddr(systemCaptureIPv6)) {
+				t.Fatal("fake addresses overlap a control address")
+			}
+			filters := strings.Join(dns["fake-ip-filter"].([]string), ",")
+			if !strings.Contains(filters, "+.private.example") || !strings.Contains(filters, "+.local") {
+				t.Fatal("native zones lost real DNS answers", filters)
+			}
+		} else if dns["enhanced-mode"] != "normal" || dns["direct-nameserver"].([]string)[0] != "https://1.1.1.1/dns-query#GoConnect" {
+			t.Fatal("global protection changed", dns)
+		}
+	}
+}
+
+type whitelistDNSProxyFixture struct {
+	target string
+	seen   chan string
+}
+
+func (d *whitelistDNSProxyFixture) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	d.seen <- address
+	return (&net.Dialer{}).DialContext(ctx, network, d.target)
+}
+
+// Real core, no TUN: deterministic ingress roles stand for the outcome of the
+// existing process rules. This verifies DNS ordering and outbound behavior,
+// not macOS process attribution, which requires separate installed-TUN testing.
+func TestLiveManagedDNSWhitelistDefersUntilOutboundSelection(t *testing.T) {
+	if os.Getenv("GOCONNECT_TEST_RUNTIME") == "" {
+		t.Skip("packaged runtime required")
+	}
+	var nativeQueries atomic.Int32
+	native, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer native.Close()
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, peer, err := native.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			nativeQueries.Add(1)
+			native.WriteTo(dnsWireAnswer(buf[:n], [4]byte{127, 0, 0, 1}), peer)
+		}
+	}()
+	local := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "native") }))
+	defer local.Close()
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "proxy") }))
+	defer remote.Close()
+	upstream, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upstream.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	dialer := &whitelistDNSProxyFixture{target: remote.Listener.Addr().String(), seen: make(chan string, 8)}
+	go (&bridge.SOCKSServer{Token: "managed-dns-fixture", Dialer: dialer}).Serve(ctx, upstream)
+	port, _ := freePort()
+	listed, _ := freePort()
+	unlisted, _ := freePort()
+	api, _ := freePort()
+	p := &managedDNSPlan{port: port, resolvers: []nativeResolver{{servers: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, port: native.LocalAddr().(*net.UDPAddr).Port}}}
+	r := routeRequest{RoutingMode: modeWhitelist, managedDNS: p, Token: "managed-dns-fixture", SOCKSPort: uint16(upstream.Addr().(*net.TCPAddr).Port)}
+	cfg := makeTransparentConfig(r, "utun99", api, originalNetwork{Interface: "lo0"}, nil, tailscaleBypass{})
+	cfg["socks-port"], cfg["mixed-port"] = listed, unlisted
+	cfg["rules"] = []string{fmt.Sprintf("IN-PORT,%d,GoConnect", listed), "MATCH,OriginalNetwork"}
+	startManagedDNSCore(t, cfg, port)
+	answer, err := queryManagedDNS(port, "unconfigured.corp.example", "udp4")
+	if err != nil || len(answer.Answers) != 1 {
+		t.Fatal("local mapping failed", answer, err)
+	}
+	address := netip.AddrFrom4(answer.Answers[0].Body.(*dnsmessage.AResource).A)
+	if !netip.MustParsePrefix("198.18.0.0/16").Contains(address) || nativeQueries.Load() != 0 {
+		t.Fatal("shared lookup went upstream before application routing", address, nativeQueries.Load())
+	}
+	_, destinationPort, _ := net.SplitHostPort(local.Listener.Addr().String())
+	request := func(ingress uint16) (string, error) {
+		d, err := proxy.SOCKS5("tcp", fmt.Sprintf("127.0.0.1:%d", ingress), nil, &net.Dialer{Timeout: time.Second})
+		if err != nil {
+			return "", err
+		}
+		client := &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{DialContext: d.(proxy.ContextDialer).DialContext, DisableKeepAlives: true}}
+		response, err := client.Get("http://" + net.JoinHostPort(address.String(), destinationPort))
+		if err != nil {
+			return "", err
+		}
+		defer response.Body.Close()
+		body, err := io.ReadAll(response.Body)
+		return string(body), err
+	}
+	if body, err := request(listed); err != nil || body != "proxy" || nativeQueries.Load() != 0 {
+		t.Fatal("selected application used native DNS", body, err, nativeQueries.Load())
+	}
+	select {
+	case target := <-dialer.seen:
+		if target != "unconfigured.corp.example:"+destinationPort {
+			t.Fatal("proxy received a fake IP instead of the hostname", target)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("proxy did not receive the selected connection")
+	}
+	if body, err := request(unlisted); err != nil || body != "native" || nativeQueries.Load() == 0 {
+		t.Fatal("unlisted application did not use original DNS", body, err, nativeQueries.Load())
+	}
+	before := nativeQueries.Load()
+	upstream.Close()
+	if body, err := request(listed); err == nil || body == "native" || nativeQueries.Load() != before {
+		t.Fatal("failed selected path fell back to native resolution", body, err)
+	}
 }

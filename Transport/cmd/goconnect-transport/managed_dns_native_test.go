@@ -114,6 +114,9 @@ func TestNativeManagedDNSLive(t *testing.T) {
 	if r.SOCKSPort == 0 || len(r.Token) < 32 {
 		t.Fatal("invalid fixture")
 	}
+	// This test exercises device-wide protected resolution, not the whitelist
+	// mode's deferred application-connection resolution.
+	r.RoutingMode = modeGlobal
 	original, err := originalPhysicalNetwork(true)
 	if err != nil {
 		t.Fatal(err)

@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -195,6 +196,28 @@ func configureManagedDNS(config map[string]any, r routeRequest, original origina
 		// Excluded apps still use the domain policy. Never re-resolve protected
 		// public names with system DNS when their socket selects OriginalNetwork.
 		"direct-nameserver": proxied, "direct-nameserver-follow-policy": true,
+	}
+	if r.mode() == modeWhitelist {
+		// A system lookup comes from the shared OS resolver, before the core
+		// knows which application's connection will consume it. Return a local
+		// mapping; defer upstream resolution until process-based routing picks
+		// GoConnect or OriginalNetwork. Never resolve every app through DoH just
+		// because a few applications are on the proxy list.
+		dns := config["dns"].(map[string]any)
+		dns["enhanced-mode"] = "fake-ip"
+		dns["fake-ip-range"] = "198.18.0.1/16"
+		dns["fake-ip-range6"] = "fdfc:dcba:9876::1/64"
+		dns["direct-nameserver"] = direct
+		// Local discovery, explicit exceptions and pre-existing supplemental
+		// zones still need real answers and their own original resolver.
+		filters := []string{"*"}
+		for domain := range policy {
+			if domain != "*" {
+				filters = append(filters, domain)
+			}
+		}
+		sort.Strings(filters)
+		dns["fake-ip-filter"] = filters
 	}
 	config["hosts"] = map[string]any{"goconnect-dns-ready.invalid": "127.0.0.1"}
 	// System lookups reach the loopback listener directly. Do not hijack every
