@@ -44,7 +44,7 @@ GoConnect 是一款使用原生 SwiftUI 构建的 macOS 网络连接与分流工
 
 ### 获取应用
 
-- **最新发布包**：[GoConnect-1.0.15-macos-arm64.zip](https://github.com/williamhsu218/goconnect/releases/download/v1.0.16/GoConnect-1.0.15-macos-arm64.zip)
+- **最新发布包**：[GoConnect-1.0.16-macos-arm64.zip](https://github.com/williamhsu218/goconnect/releases/download/v1.0.16/GoConnect-1.0.16-macos-arm64.zip)
 - **完整发布页**：[GitHub Releases / Latest](https://github.com/williamhsu218/goconnect/releases/latest)
 
 ### 首次安装与权限
