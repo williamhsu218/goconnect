@@ -3,6 +3,7 @@ package main
 import (
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -31,6 +32,10 @@ func appBundleContentsPathPattern(path string) string {
 
 func processPathRule(path, target string) string {
 	return "PROCESS-PATH-REGEX," + processPathPattern(path) + "," + target
+}
+
+func appChildRule(path, target string, uid uint32) string {
+	return "GOCONNECT-APP-CHILD," + path + "," + target + "," + strconv.FormatUint(uint64(uid), 10)
 }
 
 func configuredPathMatches(path, processPath string) bool {

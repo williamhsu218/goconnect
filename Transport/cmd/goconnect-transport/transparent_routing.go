@@ -181,8 +181,29 @@ func makeTransparentConfig(r routeRequest, device string, port uint16, original 
 		subRules[udpDestinationRules] = []string{"MATCH,REJECT"} // Capability marker, never selected.
 		c["sub-rules"] = subRules
 	}
+	if r.mode() == modeWhitelist {
+		for _, path := range r.DirectAppPaths {
+			rules = append(rules, processPathRule(path, fallback))
+		}
+	}
 	for _, path := range r.AppPaths {
 		rules = append(rules, processPathRule(path, target))
+	}
+	// Exact configured executables and App paths win before derived child policy.
+	// The UID comes only from the authenticated service peer, not session JSON.
+	if r.processOwnerUID != 0 && !r.ProbeOnly {
+		if r.mode() == modeWhitelist {
+			for _, path := range r.DirectAppPaths {
+				if appBundleRoutingPath(path) {
+					rules = append(rules, appChildRule(path, fallback, r.processOwnerUID))
+				}
+			}
+		}
+		for _, path := range r.AppPaths {
+			if appBundleRoutingPath(path) {
+				rules = append(rules, appChildRule(path, target, r.processOwnerUID))
+			}
+		}
 	}
 	rules = append(rules, "MATCH,"+fallback)
 	c["rules"] = rules
@@ -739,6 +760,7 @@ func transparentSession(ctx context.Context, path string, uid uint32, pid int) (
 	if c.uid != uid || c.request.OwnerPID != pid || !c.request.TransparentRouting {
 		return errors.New("invalid transparent owner")
 	}
+	c.request.processOwnerUID = uid
 	c.snapshot.CaptureMode = "transparent-routes"
 	c.snapshot.RoutingMode = c.request.mode()
 	c.write("starting")

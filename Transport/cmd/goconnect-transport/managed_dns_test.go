@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -166,20 +168,65 @@ func startManagedDNSCore(t *testing.T, cfg map[string]any, port uint16) {
 		t.Fatal(err)
 	}
 	cmd := exec.Command(filepath.Join(runtime, "bin/mihomo"), "-d", dir, "-f", file)
+	rootLauncher := os.Getenv("GOCONNECT_APP_CHILD_ROOT_LAUNCHER")
+	lease := filepath.Join(dir, "native-test-lease")
+	if rootLauncher != "" {
+		binary := filepath.Join(runtime, "bin/mihomo")
+		payload, err := os.ReadFile(binary)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(lease, []byte(fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())), 0600); err != nil {
+			t.Fatal(err)
+		}
+		cmd = exec.Command("/usr/bin/osascript", strings.TrimSuffix(rootLauncher, ".py")+".applescript", rootLauncher,
+			binary, file, lease, strconv.Itoa(os.Getuid()), strconv.Itoa(os.Getpid()), fmt.Sprintf("%x", sha256.Sum256(payload)))
+	}
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	if err = cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
+	var rootDone chan struct{}
+	var rootError error
+	if rootLauncher != "" {
+		rootDone = make(chan struct{})
+		go func() { rootError = cmd.Wait(); close(rootDone) }()
+	}
 	t.Cleanup(func() {
-		cmd.Process.Kill()
-		cmd.Wait()
+		if rootLauncher != "" {
+			os.Remove(lease)
+			select {
+			case <-rootDone:
+				if rootError != nil {
+					t.Errorf("isolated root core cleanup failed: %v", rootError)
+				}
+			case <-time.After(5 * time.Second):
+				cmd.Process.Kill()
+				<-rootDone
+			}
+		} else {
+			cmd.Process.Kill()
+			cmd.Wait()
+		}
 		logFile.Close()
 		if t.Failed() {
 			log, _ := os.ReadFile(logFile.Name())
 			t.Log(string(log))
 		}
 	})
-	for i := 0; i < 80; i++ {
+	attempts := 80
+	if rootLauncher != "" {
+		attempts = 3600
+	}
+	for i := 0; i < attempts; i++ {
+		if rootLauncher != "" {
+			select {
+			case <-rootDone:
+				data, _ := os.ReadFile(logFile.Name())
+				t.Fatalf("isolated root core stopped before readiness: %v %s", rootError, data)
+			default:
+			}
+		}
 		if managedDNSReady(port) == nil {
 			return
 		}

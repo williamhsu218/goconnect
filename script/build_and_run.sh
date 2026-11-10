@@ -100,6 +100,7 @@ if [[ "$VERIFY" == 1 ]]; then
   python3 script/test_yunyoo_subscription_service.py
   python3 script/test_signing.py
   python3 script/test_prepare_update.py
+  python3 script/test_app_child_core_scope.py
   python3 script/test_build_mihomo.py
   python3 script/test_prepare_release_sources.py
   swift test "${SWIFT_TEST_ARGS[@]}"

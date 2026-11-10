@@ -10,7 +10,7 @@ from prepare_release_sources import collect_patched_mihomo
 class PatchedCoreSourceTests(unittest.TestCase):
     def fixture(self, directory):
         scripts = Path(__file__).parent
-        component = directory / "app" / "mihomo-v1.19.30-goconnect1"
+        component = directory / "app" / "mihomo-v1.19.30-goconnect2"
         component.mkdir(parents=True)
         shutil.copy2(scripts / "mihomo.lock.json", component / "mihomo.lock.json")
         shutil.copytree(scripts / "patches", component / "patches")

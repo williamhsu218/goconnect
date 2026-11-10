@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -17,7 +18,7 @@ def digest(path):
 
 def load_lock(path):
     lock = json.loads(path.read_text())
-    if (lock["version"] != "1.19.30" or lock["buildVersion"] != "v1.19.30-goconnect1"
+    if (lock["version"] != "1.19.30" or lock["buildVersion"] != "v1.19.30-goconnect2"
             or lock["url"] != "https://codeload.github.com/MetaCubeX/mihomo/tar.gz/refs/tags/v1.19.30"
             or lock["tags"] != ["with_gvisor"]):
         raise ValueError("Unexpected Mihomo source/build identity")
@@ -41,6 +42,7 @@ def main():
         parser.error("Mihomo build directory must be empty")
     work.mkdir(parents=True, exist_ok=True)
     lock, patch = load_lock(args.lock.resolve())
+    env = dict(os.environ, CGO_ENABLED="1")
     archive = work / "mihomo-source.tar.gz"
     with urlopen(lock["url"], timeout=60) as response, archive.open("wb") as stream:
         shutil.copyfileobj(response, stream)
@@ -49,15 +51,15 @@ def main():
     with tarfile.open(archive) as source:
         source.extractall(work, filter="data")
     source = work / ("mihomo-" + lock["version"])
-    subprocess.run(["/usr/bin/patch", "-s", "-N", "-p1", "-i", str(patch)], cwd=source, check=True)
-    subprocess.run(["go", "mod", "verify"], cwd=source, check=True)
+    subprocess.run(["/usr/bin/patch", "-s", "-N", "-p1", "-i", str(patch)], cwd=source, env=env, check=True)
+    subprocess.run(["go", "mod", "verify"], cwd=source, env=env, check=True)
     # These tests verify resolver selection and refusal of implicit OS fallback.
-    subprocess.run(["go", "test", "-tags", "with_gvisor", "./tunnel", "-run", "^TestGoConnect", "-count=1"],
-                   cwd=source, check=True)
+    subprocess.run(["go", "test", "-tags", "with_gvisor", "./tunnel", "./component/process", "./rules/common", "./rules", "-run", "^TestGoConnect", "-count=1"],
+                   cwd=source, env=env, check=True)
     output.parent.mkdir(parents=True, exist_ok=True)
     flags = "-s -w -X github.com/metacubex/mihomo/constant.Version=" + lock["buildVersion"]
     subprocess.run(["go", "build", "-trimpath", "-buildvcs=false", "-tags", "with_gvisor", "-ldflags", flags,
-                    "-o", str(output), "."], cwd=source, check=True)
+                    "-o", str(output), "."], cwd=source, env=env, check=True)
     version = subprocess.check_output([str(output), "-v"], text=True).splitlines()[0]
     if lock["buildVersion"] not in version:
         raise ValueError("Built Mihomo capability/version mismatch")

@@ -3,6 +3,28 @@ import XCTest
 @testable import GoConnectCore
 
 final class ExecutableRoutingPathTests: XCTestCase {
+    func testDirectExceptionsResolveAliasesAndKeepUnavailableTargets() throws {
+        let root = try root()
+        let target = root.appendingPathComponent("real/cli")
+        let entry = root.appendingPathComponent("bin/cli")
+        try executable(target); try link(entry, to: target)
+        let missing = root.appendingPathComponent("Removed.app").path
+        let apps = [AllowedApplication(name: "CLI", bundleID: "executable.cli", path: entry.path),
+                    AllowedApplication(name: "Alias", bundleID: "executable.alias", path: target.path),
+                    AllowedApplication(name: "Removed", bundleID: "test.removed", path: missing)]
+        XCTAssertEqual(try ApplicationRoutingSupport.directRoutingPaths(for: apps), [target.path, missing])
+        let injected = AllowedApplication(name: "Bad", bundleID: "executable.bad", path: root.path + "/bad,MATCH")
+        XCTAssertThrowsError(try ApplicationRoutingSupport.directRoutingPaths(for: [injected]))
+    }
+
+    func testRouteSessionCarriesDirectExceptionsSeparatelyFromProxyTargets() throws {
+        var session = RouteSession(ownerPID: 123, controlDirectory: "/private/tmp/test", token: "test", socksPort: 1234,
+                                   appPaths: ["/Applications/Chosen.app", "/opt/vendor/cli"], gateway: "127.0.0.1")
+        session.directAppPaths = ["/Applications/Direct.app"]
+        let decoded = try JSONDecoder().decode(RouteSession.self, from: JSONEncoder().encode(session))
+        XCTAssertEqual(decoded.appPaths, session.appPaths)
+        XCTAssertEqual(decoded.directAppPaths, session.directAppPaths)
+    }
     private func root() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).resolvingSymlinksInPath()
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

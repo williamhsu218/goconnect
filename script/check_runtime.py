@@ -10,7 +10,7 @@ from build_mihomo import load_lock
 
 app = Path(sys.argv[1]).resolve()
 runtime = app / "Contents/Resources/Runtime"
-lock, patch = load_lock(app / "Contents/Resources/ThirdParty/mihomo-v1.19.30-goconnect1/mihomo.lock.json")
+lock, patch = load_lock(app / "Contents/Resources/ThirdParty/mihomo-v1.19.30-goconnect2/mihomo.lock.json")
 version = subprocess.check_output([str(runtime / "bin/mihomo"), "-v"], text=True)
 if lock["buildVersion"] not in version:
     raise SystemExit("Runtime lacks GoConnect policy DNS capability")

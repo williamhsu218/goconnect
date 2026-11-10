@@ -21,8 +21,14 @@ final class RouteClient {
     var onSnapshot: ((RouteSnapshot) -> Void)?
     var isRunning: Bool { directory != nil }
 
-    func start(port: UInt16, token: String, apps: [AllowedApplication], gateway: String, runtime: URL, mode: RoutingMode, directDomains: [DomainRule] = [], remoteNetworks: [String] = [], remoteExcluded: [String] = [], company: CompanyReservation? = nil) throws {
+    func start(port: UInt16, token: String, apps: [AllowedApplication], gateway: String, runtime: URL, mode: RoutingMode, directDomains: [DomainRule] = [], remoteNetworks: [String] = [], remoteExcluded: [String] = [], company: CompanyReservation? = nil, directApps: [AllowedApplication] = []) throws {
         let paths = try ApplicationRoutingSupport.routingPaths(for: apps)
+        let directPaths: [String]
+        if mode == .whitelist {
+            directPaths = try ApplicationRoutingSupport.directRoutingPaths(for: directApps)
+        } else {
+            directPaths = []
+        }
         guard directory == nil else { throw CocoaError(.executableLoad) }
         let parent = company == nil ? temporaryDirectory : URL(fileURLWithPath: "/private/tmp")
         let dir = parent.appendingPathComponent("gcc-" + UUID().uuidString.prefix(8))
@@ -32,6 +38,7 @@ final class RouteClient {
             var session = RouteSession(ownerPID: ProcessInfo.processInfo.processIdentifier, controlDirectory: dir.path,
                                        token: token, socksPort: port, appPaths: paths, gateway: gateway, routingMode: mode, directDomains: directDomains)
             session.company = company
+            session.directAppPaths = directPaths
             session.remoteNetworks = try RemoteNetwork.validated(remoteNetworks)
             session.remoteExcluded = try RemoteNetwork.validated(remoteExcluded)
             let url = dir.appendingPathComponent("session.json")

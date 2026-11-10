@@ -1,76 +1,663 @@
---- a/tunnel/tunnel.go
-+++ b/tunnel/tunnel.go
-@@ -327,6 +327,7 @@
- 		resolved             bool
- 		attemptProcessLookup = metadata.Type != C.INNER
- 	)
-+	var policyResolveErr error
- 
- 	if node, ok := resolver.DefaultHosts.Search(metadata.Host, false); ok {
- 		metadata.DstIP, _ = node.RandIP()
-@@ -338,7 +339,15 @@
- 			if !resolved && metadata.Host != "" && !metadata.Resolved() {
- 				ctx, cancel := context.WithTimeout(context.Background(), resolver.DefaultDNSTimeout)
- 				defer cancel()
--				ip, err := resolver.ResolveIP(ctx, metadata.Host)
-+				var ip netip.Addr
-+				var err error
-+				policyResolver, policyDNS := goConnectRuleResolver(metadata.SpecialRules)
-+				if policyDNS {
-+					ip, err = resolveGoConnectRuleIP(ctx, metadata.Host, policyResolver)
-+					policyResolveErr = err
-+				} else {
-+					ip, err = resolver.ResolveIP(ctx, metadata.Host)
-+				}
- 				if err != nil {
- 					log.Debugln("[DNS] resolve %s error: %s", metadata.Host, err.Error())
- 				} else {
-@@ -407,6 +416,14 @@
- 	default:
- 		proxy, rule, err = match(metadata, helper)
- 	}
-+	if policyResolveErr != nil {
-+		return nil, nil, policyResolveErr
+--- /dev/null
++++ b/component/process/goconnect_app.go
+@@ -0,0 +1,149 @@
++package process
++
++import (
++	"errors"
++	"net/netip"
++	"os/user"
++	"path/filepath"
++	"strconv"
++	"strings"
++)
++
++// No global PID/path allowlist: every new flow verifies its own live launch chain.
++type goConnectProcess struct {
++	PID, Parent, UID uint32
++	Started          uint64
++	Executable       [16]byte
++	Path             string
++}
++
++type goConnectSignature struct{ Team, ID, Hash string }
++type goConnectProcessReader interface {
++	Snapshot(uint32) (goConnectProcess, bool)
++	Signature(uint32) (goConnectSignature, bool)
++}
++
++var goConnectNativeReader goConnectProcessReader
++var goConnectSocketLookup func(string, netip.Addr, int) (uint32, bool)
++
++func GoConnectSocketPID(network string, ip netip.Addr, port int) uint32 {
++	if goConnectSocketLookup != nil {
++		if pid, ok := goConnectSocketLookup(network, ip, port); ok {
++			return pid
++		}
 +	}
-+	if _, policyDNS := goConnectRuleResolver(metadata.SpecialRules); policyDNS && metadata.DstIP.IsValid() {
-+		// Pin the address used for policy matching; Pure keeps the original
-+		// hostname for statistics but dials the same literal IP on either exit.
-+		metadata.DNSMode = C.DNSMapping
++	return 0
++}
++
++type GoConnectAppPolicy struct {
++	app, home string
++	uid       uint32
++	reader    goConnectProcessReader
++}
++
++func NewGoConnectAppPolicy(app string, uid uint32) (*GoConnectAppPolicy, error) {
++	if uid == 0 || !filepath.IsAbs(app) || filepath.Clean(app) != app ||
++		!strings.EqualFold(filepath.Ext(app), ".app") || strings.ContainsAny(app, ",\x00\r\n") {
++		return nil, errors.New("invalid GoConnect application child policy")
 +	}
- 	return
- }
- 
-@@ -437,7 +454,7 @@
- 		return
- 	}
- 
--	key := packet.Key()
-+	key := goConnectUDPKey(packet.Key(), metadata)
- 	sender, loaded := natTable.GetOrCreate(key, func() C.PacketSender {
- 		sender := newPacketSender()
- 		if sniffingEnable && snifferDispatcher.Enable() {
-@@ -558,7 +575,10 @@
- 	}
- 
- 	dialMetadata := metadata
--	if len(metadata.Host) > 0 {
-+	if _, policyDNS := goConnectRuleResolver(metadata.SpecialRules); policyDNS {
-+		dialMetadata = metadata.Pure()
++	owner, err := user.LookupId(strconv.FormatUint(uint64(uid), 10))
++	if err != nil || !filepath.IsAbs(owner.HomeDir) {
++		return nil, errors.New("GoConnect owner unavailable")
 +	}
-+	if _, policyDNS := goConnectRuleResolver(metadata.SpecialRules); len(metadata.Host) > 0 && !policyDNS {
- 		if node, ok := resolver.DefaultHosts.Search(metadata.Host, false); ok {
- 			if dstIp, _ := node.RandIP(); !resolver.IsFakeIP(dstIp) {
- 				dialMetadata.DstIP = dstIp
-@@ -704,6 +724,9 @@
- 				return rematchProxy, rematchRule, nil
- 			}
- 			log.Debugln("[Rule] rematch proxy %s update metadata to rematch-name=%q sub-rule=%q", rematchProxy.Name(), metadata.InName, metadata.SpecialRules)
-+			if _, policyDNS := goConnectRuleResolver(metadata.SpecialRules); policyDNS && helper.ResolveIP != nil {
-+				helper.ResolveIP()
++	return &GoConnectAppPolicy{app: app, home: owner.HomeDir, uid: uid, reader: goConnectNativeReader}, nil
++}
++
++func within(path, root string) bool { return strings.HasPrefix(path, root+string(filepath.Separator)) }
++
++func (p *GoConnectAppPolicy) privatePath(path, bundleID string) bool {
++	name := strings.TrimSuffix(filepath.Base(p.app), filepath.Ext(p.app))
++	for _, folder := range []string{"Application Support", "Caches"} {
++		for _, component := range []string{name, bundleID} {
++			if component != "" && component != "." && component != ".." && !strings.ContainsAny(component, "/\\") &&
++				within(path, filepath.Join(p.home, "Library", folder, component)) {
++				return true
 +			}
- 			continue
- 		}
- 		return proxies["DIRECT"], nil, nil
++		}
++	}
++	return false
++}
++
++func (p *GoConnectAppPolicy) boundary(path string) bool {
++	// Never inherit through system tools, shared shells/runtimes or another App.
++	for _, prefix := range []string{"/System", "/bin", "/sbin", "/usr/bin", "/usr/sbin", "/usr/libexec"} {
++		if within(path, prefix) {
++			return true
++		}
++	}
++	base := strings.ToLower(filepath.Base(path))
++	for _, name := range []string{"sh", "bash", "zsh", "fish", "dash", "node", "nodejs", "ruby", "perl", "osascript", "open", "login", "env", "java", "dotnet", "deno", "bun"} {
++		if base == name {
++			return true
++		}
++	}
++	if strings.HasPrefix(base, "python") {
++		return true
++	}
++	if strings.Contains(strings.ToLower(path), ".app/contents/") && !p.privatePath(path, "") {
++		return true
++	}
++	return false
++}
++
++func (p *GoConnectAppPolicy) Match(pid uint32, expectedPath string) bool {
++	if p.reader == nil || pid <= 1 || expectedPath == "" {
++		return false
++	}
++	chain := make([]goConnectProcess, 0, 8)
++	seen := map[uint32]bool{}
++	for len(chain) < 12 && pid > 1 && !seen[pid] {
++		seen[pid] = true
++		node, ok := p.reader.Snapshot(pid)
++		if !ok || node.PID != pid || node.UID != p.uid || node.Started == 0 || !filepath.IsAbs(node.Path) || filepath.Clean(node.Path) != node.Path {
++			return false
++		}
++		if len(chain) == 0 && node.Path != expectedPath {
++			return false
++		}
++		if len(chain) > 0 && node.Started > chain[len(chain)-1].Started {
++			return false
++		}
++		chain = append(chain, node)
++		if within(node.Path, p.app) {
++			// An in-bundle process already matches the existing path rule.
++			if len(chain) == 1 {
++				return false
++			}
++			anchor, ok := p.reader.Signature(pid)
++			if !ok || anchor.Team == "" || anchor.Hash == "" {
++				return false
++			}
++			signatures := make([]goConnectSignature, len(chain))
++			signatures[len(chain)-1] = anchor
++			for i, child := range chain[:len(chain)-1] {
++				sig, valid := p.reader.Signature(child.PID)
++				if !valid || sig.Team == "" || sig.Hash == "" || (sig.Team != anchor.Team && !p.privatePath(child.Path, anchor.ID)) {
++					return false
++				}
++				signatures[i] = sig
++			}
++			// Reject exit, PID reuse, reparenting and exec/signature changes during verification.
++			for i, old := range chain {
++				fresh, valid := p.reader.Snapshot(old.PID)
++				if !valid || fresh != old {
++					return false
++				}
++				sig, valid := p.reader.Signature(old.PID)
++				if !valid || sig != signatures[i] {
++					return false
++				}
++			}
++			return true
++		}
++		if p.boundary(node.Path) {
++			return false
++		}
++		pid = node.Parent
++	}
++	return false
++}
+--- /dev/null
++++ b/component/process/goconnect_app_darwin.go
+@@ -0,0 +1,147 @@
++//go:build darwin && cgo
++
++package process
++
++/*
++#cgo LDFLAGS: -framework Security -framework CoreFoundation
++#include <libproc.h>
++#include <sys/proc_info.h>
++#include <sys/resource.h>
++#include <Security/Security.h>
++#include <CoreFoundation/CoreFoundation.h>
++#include <string.h>
++
++static int gc_snapshot(int pid, unsigned int *parent, unsigned int *uid,
++                       unsigned long long *started, unsigned char *uuid, char *path, int capacity) {
++    struct proc_bsdinfo a = {0}, b = {0};
++    struct rusage_info_v2 usage = {0};
++    if (proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &a, sizeof(a)) != sizeof(a) ||
++        proc_pidpath(pid, path, capacity) <= 0 ||
++        proc_pid_rusage(pid, RUSAGE_INFO_V2, (rusage_info_t *)&usage) != 0 ||
++        proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &b, sizeof(b)) != sizeof(b) ||
++        a.pbi_pid != pid || a.pbi_pid != b.pbi_pid || a.pbi_ppid != b.pbi_ppid ||
++        a.pbi_uid != b.pbi_uid || a.pbi_ruid != a.pbi_uid || a.pbi_svuid != a.pbi_uid ||
++        a.pbi_uid != b.pbi_ruid || a.pbi_uid != b.pbi_svuid ||
++        a.pbi_start_tvsec != b.pbi_start_tvsec || a.pbi_start_tvusec != b.pbi_start_tvusec ||
++        a.pbi_status == 5 || b.pbi_status == 5) return -1;
++    *parent = a.pbi_ppid; *uid = a.pbi_uid;
++    *started = a.pbi_start_tvsec * 1000000ULL + a.pbi_start_tvusec;
++    memcpy(uuid, usage.ri_uuid, 16);
++    return 0;
++}
++static int gc_string(CFDictionaryRef info, CFStringRef key, char *out, int size) {
++    CFTypeRef value = CFDictionaryGetValue(info, key);
++    return value && CFGetTypeID(value) == CFStringGetTypeID() &&
++        CFStringGetCString((CFStringRef)value, out, size, kCFStringEncodingUTF8) && out[0];
++}
++static int gc_signature(int pid, char *team, int teamSize, char *identifier, int identifierSize,
++                        unsigned char *hash, int *hashSize) {
++    SecCodeRef guest = NULL;
++    SecRequirementRef requirement = NULL;
++    CFDictionaryRef info = NULL;
++    CFNumberRef number = CFNumberCreate(NULL, kCFNumberIntType, &pid);
++    const void *keys[] = { kSecGuestAttributePid };
++    const void *values[] = { number };
++    CFDictionaryRef attrs = CFDictionaryCreate(NULL, keys, values, 1,
++        &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
++    OSStatus status = SecCodeCopyGuestWithAttributes(NULL, attrs, kSecCSDefaultFlags, &guest);
++    if (!status) status = SecRequirementCreateWithString(CFSTR("anchor apple generic"), kSecCSDefaultFlags, &requirement);
++    if (!status) status = SecCodeCheckValidity(guest, kSecCSStrictValidate, requirement);
++    if (!status) status = SecCodeCopySigningInformation(guest, kSecCSSigningInformation, &info);
++    if (!status && (!gc_string(info, kSecCodeInfoTeamIdentifier, team, teamSize) ||
++                    !gc_string(info, kSecCodeInfoIdentifier, identifier, identifierSize))) status = -1;
++    if (!status) {
++        CFDataRef digest = (CFDataRef)CFDictionaryGetValue(info, kSecCodeInfoUnique);
++        if (!digest || CFGetTypeID(digest) != CFDataGetTypeID() ||
++            CFDataGetLength(digest) < 16 || CFDataGetLength(digest) > *hashSize) status = -1;
++        else { *hashSize = (int)CFDataGetLength(digest); memcpy(hash, CFDataGetBytePtr(digest), *hashSize); }
++    }
++    if (info) CFRelease(info);
++    if (requirement) CFRelease(requirement);
++    if (guest) CFRelease(guest);
++    CFRelease(attrs); CFRelease(number);
++    return status;
++}
++*/
++import "C"
++
++import (
++	"encoding/binary"
++	"encoding/hex"
++	"golang.org/x/sys/unix"
++	"net/netip"
++	"unsafe"
++)
++
++type goConnectDarwinReader struct{}
++
++func init() {
++	goConnectNativeReader = goConnectDarwinReader{}
++	goConnectSocketLookup = goConnectDarwinSocketPID
++}
++func (goConnectDarwinReader) Snapshot(pid uint32) (goConnectProcess, bool) {
++	var parent, uid C.uint
++	var started C.ulonglong
++	var uuid [16]byte
++	var path [4096]C.char
++	if C.gc_snapshot(C.int(pid), &parent, &uid, &started, (*C.uchar)(unsafe.Pointer(&uuid[0])), &path[0], C.int(len(path))) != 0 {
++		return goConnectProcess{}, false
++	}
++	return goConnectProcess{PID: pid, Parent: uint32(parent), UID: uint32(uid), Started: uint64(started), Executable: uuid, Path: C.GoString(&path[0])}, true
++}
++func (goConnectDarwinReader) Signature(pid uint32) (goConnectSignature, bool) {
++	var team [128]C.char
++	var identifier [1024]C.char
++	var hash [64]byte
++	size := C.int(len(hash))
++	if C.gc_signature(C.int(pid), &team[0], C.int(len(team)), &identifier[0], C.int(len(identifier)), (*C.uchar)(unsafe.Pointer(&hash[0])), &size) != 0 {
++		return goConnectSignature{}, false
++	}
++	return goConnectSignature{Team: C.GoString(&team[0]), ID: C.GoString(&identifier[0]), Hash: hex.EncodeToString(hash[:int(size)])}, true
++}
++
++func goConnectDarwinSocketPID(network string, ip netip.Addr, port int) (uint32, bool) {
++	name := "net.inet.tcp.pcblist_n"
++	size := structSize + 208
++	if network == UDP {
++		name = "net.inet.udp.pcblist_n"
++		size = structSize
++	} else if network != TCP {
++		return 0, false
++	}
++	buf, err := unix.SysctlRaw(name)
++	if err != nil {
++		return 0, false
++	}
++	exact, wildcard := map[uint32]bool{}, map[uint32]bool{}
++	for i := 24; i+size <= len(buf); i += size {
++		if int(binary.BigEndian.Uint16(buf[i+18:i+20])) != port {
++			continue
++		}
++		flag := buf[i+44]
++		var source netip.Addr
++		if flag&1 != 0 && ip.Is4() {
++			source, _ = netip.AddrFromSlice(buf[i+76 : i+80])
++		} else if flag&2 != 0 && !ip.Is4() {
++			source, _ = netip.AddrFromSlice(buf[i+64 : i+80])
++		} else {
++			continue
++		}
++		pid := readNativeUint32(buf[i+104+68 : i+104+72])
++		if source.Unmap() == ip.Unmap() {
++			exact[pid] = true
++		} else if network == UDP && source.IsUnspecified() {
++			wildcard[pid] = true
++		}
++	}
++	candidates := exact
++	if len(candidates) == 0 {
++		candidates = wildcard
++	}
++	if len(candidates) == 1 {
++		for pid := range candidates {
++			return pid, pid > 1
++		}
++	}
++	return 0, false
++}
+--- /dev/null
++++ b/component/process/goconnect_app_darwin_test.go
+@@ -0,0 +1,67 @@
++//go:build darwin && cgo
++
++package process
++
++import (
++	"net"
++	"net/netip"
++	"os"
++	"strconv"
++	"testing"
++)
++
++func TestGoConnectNativeSocketOwnership(t *testing.T) {
++	listener, err := net.Listen("tcp4", "127.0.0.1:0")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer listener.Close()
++	client, err := net.Dial("tcp4", listener.Addr().String())
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer client.Close()
++	server, err := listener.Accept()
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer server.Close()
++	a := client.LocalAddr().(*net.TCPAddr)
++	pid := GoConnectSocketPID(TCP, netip.MustParseAddr(a.IP.String()), a.Port)
++	if pid != uint32(os.Getpid()) {
++		t.Fatalf("socket owner %d, want own PID %d", pid, os.Getpid())
++	}
++	if GoConnectSocketPID("invalid", netip.MustParseAddr("127.0.0.1"), a.Port) != 0 {
++		t.Fatal("unsupported protocol inherited")
++	}
++}
++
++func TestGoConnectNativeCurrentAppChild(t *testing.T) {
++	value := os.Getenv("GOCONNECT_NATIVE_CHILD_PID")
++	if value == "" {
++		t.Skip("explicit read-only live child check not requested")
++	}
++	pid, err := strconv.ParseUint(value, 10, 32)
++	if err != nil {
++		t.Fatal(err)
++	}
++	n, ok := goConnectNativeReader.Snapshot(uint32(pid))
++	if !ok {
++		t.Fatal("cannot read child identity")
++	}
++	p, err := NewGoConnectAppPolicy(os.Getenv("GOCONNECT_NATIVE_CHILD_APP"), uint32(os.Getuid()))
++	if err != nil {
++		t.Fatal(err)
++	}
++	if !p.Match(uint32(pid), n.Path) {
++		t.Fatal("current signed live App child did not match")
++	}
++	other, err := NewGoConnectAppPolicy("/Applications/Unrelated.app", uint32(os.Getuid()))
++	if err != nil {
++		t.Fatal(err)
++	}
++	if other.Match(uint32(pid), n.Path) {
++		t.Fatal("child matched unrelated App")
++	}
++	t.Log("live external child, UID, signatures and launch chain verified; unrelated App rejected")
++}
+--- /dev/null
++++ b/component/process/goconnect_app_test.go
+@@ -0,0 +1,151 @@
++package process
++
++import (
++	"testing"
++)
++
++type gcTestReader struct {
++	processes       map[uint32]goConnectProcess
++	signatures      map[uint32]goConnectSignature
++	reads, signs    map[uint32]int
++	change          func(*goConnectProcess, int)
++	changeSignature func(*goConnectSignature, int)
++}
++
++func (r *gcTestReader) Snapshot(pid uint32) (goConnectProcess, bool) {
++	n, ok := r.processes[pid]
++	r.reads[pid]++
++	if r.change != nil {
++		r.change(&n, r.reads[pid])
++	}
++	return n, ok
++}
++func (r *gcTestReader) Signature(pid uint32) (goConnectSignature, bool) {
++	s, ok := r.signatures[pid]
++	r.signs[pid]++
++	if r.changeSignature != nil {
++		r.changeSignature(&s, r.signs[pid])
++	}
++	return s, ok
++}
++func gcPolicyFixture() (*GoConnectAppPolicy, *gcTestReader) {
++	r := &gcTestReader{processes: map[uint32]goConnectProcess{
++		20: {PID: 20, Parent: 10, UID: 501, Started: 200, Path: "/opt/vendor/cli"},
++		10: {PID: 10, Parent: 1, UID: 501, Started: 100, Path: "/Applications/Allowed.app/Contents/MacOS/Allowed"},
++	}, signatures: map[uint32]goConnectSignature{20: {Team: "A", ID: "cli", Hash: "child-hash"}, 10: {Team: "A", ID: "com.example.allowed", Hash: "parent-hash"}}, reads: map[uint32]int{}, signs: map[uint32]int{}}
++	return &GoConnectAppPolicy{app: "/Applications/Allowed.app", home: "/Users/test", uid: 501, reader: r}, r
++}
++func TestGoConnectAppPolicySignedLiveChildAndPrivateVendorCLI(t *testing.T) {
++	p, r := gcPolicyFixture()
++	if !p.Match(20, r.processes[20].Path) {
++		t.Fatal("signed same-team live child rejected")
++	}
++	p, r = gcPolicyFixture()
++	n := r.processes[20]
++	n.Path = "/Users/test/Library/Application Support/Allowed/versions/2/cli.app/Contents/MacOS/cli"
++	r.processes[20] = n
++	s := r.signatures[20]
++	s.Team = "OTHER"
++	r.signatures[20] = s
++	if !p.Match(20, n.Path) {
++		t.Fatal("signed private installed CLI rejected")
++	}
++}
++func TestGoConnectAppPolicyBoundaries(t *testing.T) {
++	for _, name := range []string{"different-child-uid", "different-parent-uid", "not-descendant", "other-team", "unsigned", "other-app", "shell", "interpreter", "system-tool", "shared-intermediate", "parent-newer", "cycle", "root-prefix-spoof", "metadata-path-mismatch", "root-process"} {
++		t.Run(name, func(t *testing.T) {
++			p, r := gcPolicyFixture()
++			n := r.processes[20]
++			root := r.processes[10]
++			expected := n.Path
++			pid := uint32(20)
++			switch name {
++			case "different-child-uid":
++				n.UID = 502
++			case "different-parent-uid":
++				root.UID = 502
++			case "not-descendant":
++				n.Parent = 1
++			case "other-team":
++				s := r.signatures[20]
++				s.Team = "B"
++				r.signatures[20] = s
++			case "unsigned":
++				delete(r.signatures, 20)
++			case "other-app":
++				n.Path = "/Applications/Other.app/Contents/MacOS/Other"
++				expected = n.Path
++			case "shell":
++				n.Path = "/opt/homebrew/bin/zsh"
++				expected = n.Path
++			case "interpreter":
++				n.Path = "/opt/homebrew/bin/python3.14"
++				expected = n.Path
++			case "system-tool":
++				n.Path = "/usr/bin/curl"
++				expected = n.Path
++			case "shared-intermediate":
++				n.Parent = 15
++				r.processes[15] = goConnectProcess{PID: 15, Parent: 10, UID: 501, Started: 150, Path: "/opt/homebrew/bin/node"}
++			case "parent-newer":
++				root.Started = 300
++			case "cycle":
++				n.Parent = 20
++			case "root-prefix-spoof":
++				root.Path = "/Applications/Allowed.app.evil/Contents/MacOS/Allowed"
++			case "metadata-path-mismatch":
++				expected = "/opt/vendor/other-cli"
++			case "root-process":
++				pid = 10
++				expected = root.Path
++			}
++			r.processes[20] = n
++			r.processes[10] = root
++			if p.Match(pid, expected) {
++				t.Fatal("unrelated or unverifiable process inherited")
++			}
++		})
++	}
++}
++func TestGoConnectAppPolicyRechecksIdentityWithoutGlobalPIDGrant(t *testing.T) {
++	for _, name := range []string{"pid-reuse", "exec", "reparent", "uid-change", "code-change"} {
++		t.Run(name, func(t *testing.T) {
++			p, r := gcPolicyFixture()
++			r.change = func(n *goConnectProcess, reads int) {
++				if reads < 2 {
++					return
++				}
++				switch name {
++				case "pid-reuse":
++					n.Started++
++				case "exec":
++					n.Executable[0]++
++				case "reparent":
++					n.Parent = 1
++				case "uid-change":
++					n.UID = 502
++				}
++			}
++			if name == "code-change" {
++				r.changeSignature = func(s *goConnectSignature, reads int) {
++					if reads >= 2 {
++						s.Hash = "changed"
++					}
++				}
++			}
++			if p.Match(20, r.processes[20].Path) {
++				t.Fatal("identity race was accepted")
++			}
++		})
++	}
++	p, r := gcPolicyFixture()
++	if !p.Match(20, r.processes[20].Path) {
++		t.Fatal("initial child rejected")
++	}
++	n := r.processes[20]
++	n.Parent = 1
++	r.processes[20] = n
++	if p.Match(20, n.Path) {
++		t.Fatal("a prior match became a persistent PID/path grant")
++	}
++}
+--- a/constant/metadata.go
++++ b/constant/metadata.go
+@@ -188,30 +188,32 @@
+ 
+ // Metadata is used to store connection address
+ type Metadata struct {
+-	NetWork      NetWork    `json:"network"`
+-	Type         Type       `json:"type"`
+-	SrcIP        netip.Addr `json:"sourceIP"`
+-	DstIP        netip.Addr `json:"destinationIP"`
+-	SrcGeoIP     []string   `json:"sourceGeoIP"`      // can be nil if never queried, empty slice if got no result
+-	DstGeoIP     []string   `json:"destinationGeoIP"` // can be nil if never queried, empty slice if got no result
+-	SrcIPASN     string     `json:"sourceIPASN"`
+-	DstIPASN     string     `json:"destinationIPASN"`
+-	SrcPort      uint16     `json:"sourcePort,string"`      // `,string` is used to compatible with old version json output
+-	DstPort      uint16     `json:"destinationPort,string"` // `,string` is used to compatible with old version json output
+-	InIP         netip.Addr `json:"inboundIP"`
+-	InPort       uint16     `json:"inboundPort,string"` // `,string` is used to compatible with old version json output
+-	InName       string     `json:"inboundName"`
+-	InUser       string     `json:"inboundUser"`
+-	RematchName  string     `json:"rematchName"`
+-	Host         string     `json:"host"`
+-	DNSMode      DNSMode    `json:"dnsMode"`
+-	Uid          uint32     `json:"uid"`
+-	Process      string     `json:"process"`
+-	ProcessPath  string     `json:"processPath"`
+-	SpecialProxy string     `json:"specialProxy"`
+-	SpecialRules string     `json:"specialRules"`
+-	RemoteDst    string     `json:"remoteDestination"`
+-	DSCP         uint8      `json:"dscp"`
++	NetWork             NetWork    `json:"network"`
++	Type                Type       `json:"type"`
++	SrcIP               netip.Addr `json:"sourceIP"`
++	DstIP               netip.Addr `json:"destinationIP"`
++	SrcGeoIP            []string   `json:"sourceGeoIP"`      // can be nil if never queried, empty slice if got no result
++	DstGeoIP            []string   `json:"destinationGeoIP"` // can be nil if never queried, empty slice if got no result
++	SrcIPASN            string     `json:"sourceIPASN"`
++	DstIPASN            string     `json:"destinationIPASN"`
++	SrcPort             uint16     `json:"sourcePort,string"`      // `,string` is used to compatible with old version json output
++	DstPort             uint16     `json:"destinationPort,string"` // `,string` is used to compatible with old version json output
++	InIP                netip.Addr `json:"inboundIP"`
++	InPort              uint16     `json:"inboundPort,string"` // `,string` is used to compatible with old version json output
++	InName              string     `json:"inboundName"`
++	InUser              string     `json:"inboundUser"`
++	RematchName         string     `json:"rematchName"`
++	Host                string     `json:"host"`
++	DNSMode             DNSMode    `json:"dnsMode"`
++	Uid                 uint32     `json:"uid"`
++	Process             string     `json:"process"`
++	ProcessPath         string     `json:"processPath"`
++	GoConnectPID        uint32     `json:"-"`
++	GoConnectPIDChecked bool       `json:"-"`
++	SpecialProxy        string     `json:"specialProxy"`
++	SpecialRules        string     `json:"specialRules"`
++	RemoteDst           string     `json:"remoteDestination"`
++	DSCP                uint8      `json:"dscp"`
+ 
+ 	RawSrcAddr net.Addr `json:"-"`
+ 	RawDstAddr net.Addr `json:"-"`
+--- a/constant/rule.go
++++ b/constant/rule.go
+@@ -40,6 +40,7 @@
+ 	AND
+ 	OR
+ 	NOT
++	GoConnectAppChild
+ )
+ 
+ type RuleType int
+@@ -92,6 +93,8 @@
+ 		return "ProcessPath"
+ 	case ProcessNameRegex:
+ 		return "ProcessNameRegex"
++	case GoConnectAppChild:
++		return "GoConnectAppChild"
+ 	case ProcessPathRegex:
+ 		return "ProcessPathRegex"
+ 	case ProcessNameWildcard:
+--- /dev/null
++++ b/rules/common/goconnect_app.go
+@@ -0,0 +1,42 @@
++package common
++
++import (
++	"errors"
++	"github.com/metacubex/mihomo/component/process"
++	C "github.com/metacubex/mihomo/constant"
++	"strconv"
++)
++
++type GoConnectAppChild struct {
++	Base
++	app, adapter string
++	policy       *process.GoConnectAppPolicy
++}
++
++func (r *GoConnectAppChild) Payload() string      { return r.app }
++func (r *GoConnectAppChild) Adapter() string      { return r.adapter }
++func (r *GoConnectAppChild) RuleType() C.RuleType { return C.GoConnectAppChild }
++func (r *GoConnectAppChild) Match(m *C.Metadata, helper C.RuleMatchHelper) (bool, string) {
++	if helper.FindProcess != nil {
++		helper.FindProcess()
++	}
++	if !m.GoConnectPIDChecked {
++		m.GoConnectPIDChecked = true
++		m.GoConnectPID = process.GoConnectSocketPID(m.NetWork.String(), m.SrcIP, int(m.SrcPort))
++	}
++	return r.policy.Match(m.GoConnectPID, m.ProcessPath), r.adapter
++}
++func NewGoConnectAppChild(app, adapter string, params []string) (*GoConnectAppChild, error) {
++	if len(params) != 1 {
++		return nil, errors.New("GoConnect App child rule requires session owner UID")
++	}
++	uid, err := strconv.ParseUint(params[0], 10, 32)
++	if err != nil {
++		return nil, err
++	}
++	policy, err := process.NewGoConnectAppPolicy(app, uint32(uid))
++	if err != nil {
++		return nil, err
++	}
++	return &GoConnectAppChild{app: app, adapter: adapter, policy: policy}, nil
++}
+--- a/rules/parser.go
++++ b/rules/parser.go
+@@ -55,6 +55,8 @@
+ 		parsed, parseErr = RC.NewPort(payload, target, C.InPort)
+ 	case "DSCP":
+ 		parsed, parseErr = RC.NewDSCP(payload, target)
++	case "GOCONNECT-APP-CHILD":
++		parsed, parseErr = RC.NewGoConnectAppChild(payload, target, params)
+ 	case "PROCESS-NAME":
+ 		parsed, parseErr = RC.NewProcess(payload, target, C.ProcessName)
+ 	case "PROCESS-PATH":
 --- /dev/null
 +++ b/tunnel/goconnect_dns.go
 @@ -0,0 +1,42 @@
@@ -210,3 +797,76 @@
 +		t.Fatal("destination ports share policy")
 +	}
 +}
+--- a/tunnel/tunnel.go
++++ b/tunnel/tunnel.go
+@@ -327,6 +327,7 @@
+ 		resolved             bool
+ 		attemptProcessLookup = metadata.Type != C.INNER
+ 	)
++	var policyResolveErr error
+ 
+ 	if node, ok := resolver.DefaultHosts.Search(metadata.Host, false); ok {
+ 		metadata.DstIP, _ = node.RandIP()
+@@ -338,7 +339,15 @@
+ 			if !resolved && metadata.Host != "" && !metadata.Resolved() {
+ 				ctx, cancel := context.WithTimeout(context.Background(), resolver.DefaultDNSTimeout)
+ 				defer cancel()
+-				ip, err := resolver.ResolveIP(ctx, metadata.Host)
++				var ip netip.Addr
++				var err error
++				policyResolver, policyDNS := goConnectRuleResolver(metadata.SpecialRules)
++				if policyDNS {
++					ip, err = resolveGoConnectRuleIP(ctx, metadata.Host, policyResolver)
++					policyResolveErr = err
++				} else {
++					ip, err = resolver.ResolveIP(ctx, metadata.Host)
++				}
+ 				if err != nil {
+ 					log.Debugln("[DNS] resolve %s error: %s", metadata.Host, err.Error())
+ 				} else {
+@@ -407,6 +416,14 @@
+ 	default:
+ 		proxy, rule, err = match(metadata, helper)
+ 	}
++	if policyResolveErr != nil {
++		return nil, nil, policyResolveErr
++	}
++	if _, policyDNS := goConnectRuleResolver(metadata.SpecialRules); policyDNS && metadata.DstIP.IsValid() {
++		// Pin the address used for policy matching; Pure keeps the original
++		// hostname for statistics but dials the same literal IP on either exit.
++		metadata.DNSMode = C.DNSMapping
++	}
+ 	return
+ }
+ 
+@@ -437,7 +454,7 @@
+ 		return
+ 	}
+ 
+-	key := packet.Key()
++	key := goConnectUDPKey(packet.Key(), metadata)
+ 	sender, loaded := natTable.GetOrCreate(key, func() C.PacketSender {
+ 		sender := newPacketSender()
+ 		if sniffingEnable && snifferDispatcher.Enable() {
+@@ -558,7 +575,10 @@
+ 	}
+ 
+ 	dialMetadata := metadata
+-	if len(metadata.Host) > 0 {
++	if _, policyDNS := goConnectRuleResolver(metadata.SpecialRules); policyDNS {
++		dialMetadata = metadata.Pure()
++	}
++	if _, policyDNS := goConnectRuleResolver(metadata.SpecialRules); len(metadata.Host) > 0 && !policyDNS {
+ 		if node, ok := resolver.DefaultHosts.Search(metadata.Host, false); ok {
+ 			if dstIp, _ := node.RandIP(); !resolver.IsFakeIP(dstIp) {
+ 				dialMetadata.DstIP = dstIp
+@@ -704,6 +724,9 @@
+ 				return rematchProxy, rematchRule, nil
+ 			}
+ 			log.Debugln("[Rule] rematch proxy %s update metadata to rematch-name=%q sub-rule=%q", rematchProxy.Name(), metadata.InName, metadata.SpecialRules)
++			if _, policyDNS := goConnectRuleResolver(metadata.SpecialRules); policyDNS && helper.ResolveIP != nil {
++				helper.ResolveIP()
++			}
+ 			continue
+ 		}
+ 		return proxies["DIRECT"], nil, nil

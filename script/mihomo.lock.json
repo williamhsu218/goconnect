@@ -1,10 +1,10 @@
 {
   "version": "1.19.30",
-  "buildVersion": "v1.19.30-goconnect1",
+  "buildVersion": "v1.19.30-goconnect2",
   "url": "https://codeload.github.com/MetaCubeX/mihomo/tar.gz/refs/tags/v1.19.30",
   "sha256": "ee8a7107707e4bd485460139b1944e7be30016393783f2b4e928c14880c8ca8b",
   "patch": "patches/mihomo-1.19.30-goconnect.patch",
-  "patchSHA256": "f277fead7f42e9ce93c00d388dd8b66998f5a336547335978fed2f32fbb3aa1f",
+  "patchSHA256": "df40af021f4d2e65f52ac0dd06257463f4f5fb552ea5d588d376f4a3ea437506",
   "tags": [
     "with_gvisor"
   ]

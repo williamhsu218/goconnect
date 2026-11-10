@@ -178,6 +178,7 @@ type addressPolicyOptions struct {
 	searchDomains           []string
 	proxyDNSOverSOCKS, dual bool
 	configure               func(map[string]any)
+	nativeProcesses         bool // Native process ownership; never substitute IN-PORT roles.
 }
 
 func newAddressPolicyCore(t *testing.T, mode string, r routeRequest, local []localNetworkRoute, nativeIP, proxyIP string, options ...addressPolicyOptions) *addressPolicyCore {
@@ -198,7 +199,9 @@ func newAddressPolicyCore(t *testing.T, mode string, r routeRequest, local []loc
 	api, _ := freePort()
 	r.RoutingMode = mode
 	r.Token = "address-policy-fixture"
-	r.AppPaths = []string{"/Applications/PolicyRole.app"}
+	if !option.nativeProcesses {
+		r.AppPaths = []string{"/Applications/PolicyRole.app"}
+	}
 	r.managedDNS = &managedDNSPlan{port: f.dns, resolvers: []nativeResolver{{servers: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, port: f.native.port, searchDomains: option.searchDomains}}}
 	cfg := makeTransparentConfig(r, "utun99", api, originalNetwork{Interface: "lo0"}, local, tailscaleBypass{})
 	dns := cfg["dns"].(map[string]any)
@@ -255,7 +258,13 @@ func newAddressPolicyCore(t *testing.T, mode string, r routeRequest, local []loc
 	cfg["socks-port"] = f.listed
 	cfg["mixed-port"] = f.unlisted
 	rules := cfg["rules"].([]string)
+	if option.nativeProcesses {
+		cfg["log-level"] = "debug"
+	}
 	for i, rule := range rules {
+		if option.nativeProcesses {
+			break
+		}
 		if strings.HasPrefix(rule, "PROCESS-PATH-REGEX,") {
 			_, payload, _ := strings.Cut(rule, ",")
 			_, target, _ := strings.Cut(payload, ",")

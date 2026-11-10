@@ -550,7 +550,8 @@ final class AppStore {
                     try route.start(port: port, token: token, apps: configuration.routingApplications,
                                     gateway: gateway, runtime: transport.runtimeURL, mode: configuration.routingMode,
                                     directDomains: configuration.effectiveDirectDomains,
-                                    remoteNetworks: usesCompanyRoutes ? configuration.activeConnection.remoteNetworks : [], company: companyReservation)
+                                    remoteNetworks: usesCompanyRoutes ? configuration.activeConnection.remoteNetworks : [], company: companyReservation,
+                                    directApps: configuration.excludedApplications)
                 }
                 catch { show(error.localizedDescription, error: true); stopFailed = true; stopAll() }
             }

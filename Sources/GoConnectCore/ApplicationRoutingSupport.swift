@@ -74,6 +74,25 @@ public enum ApplicationRoutingSupport {
         return paths
     }
 
+    /// Preserve direct exclusions even if an optional App has been uninstalled.
+    /// Resolve a still-installed CLI alias without widening to its directory.
+    public static func directRoutingPaths(for apps: [AllowedApplication]) throws -> [String] {
+        guard apps.count <= 256 else { throw SupportError(message: "每份名单最多支持 256 个 App 或服务。") }
+        var paths: [String] = []
+        for app in apps {
+            let original = app.path
+            guard original.hasPrefix("/"), !original.contains(where: { ",\0\r\n".contains($0) }),
+                  URL(fileURLWithPath: original).standardizedFileURL.path == original else {
+                throw SupportError(message: "直连目标路径无效，请重新选择。")
+            }
+            let path = app.isExecutableService
+                ? ((try? ExecutableRoutingPath().resolvedPath(for: original)) ?? original)
+                : original
+            if !paths.contains(path) { paths.append(path) }
+        }
+        return paths
+    }
+
     private struct SupportError: LocalizedError {
         let message: String
         var errorDescription: String? { message }

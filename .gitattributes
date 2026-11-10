@@ -1,2 +1,4 @@
 # Keep the upstream license's original formatting verbatim.
 Packaging/Licenses/Sparkle-2.10.1-LICENSE.txt -whitespace
+# Unified-diff context prefixes are patch syntax, not source indentation.
+script/patches/*.patch -whitespace

@@ -11,6 +11,7 @@ public struct RouteSession: Codable {
     public var token: String
     public var socksPort: UInt16
     public var appPaths: [String]
+    public var directAppPaths: [String] = []
     public var gateway: String
     public var routingMode: RoutingMode
     public var directDomains: [DomainRule]

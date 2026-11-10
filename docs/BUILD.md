@@ -2,7 +2,7 @@
 
 本说明面向熟悉终端的 macOS 用户，适用于已集成更新器的源码。当前正式版对应 [v1.0.15 tag](https://github.com/williamhsu218/goconnect/tree/v1.0.15)；复核正式版时先检出该 tag，再执行本文命令。项目由 SwiftUI 界面和 Go 网络组件组成。
 
-本版源码为 **1.0.15 / build 75**，包含更新安装空闲状态与名单 DNS 地址冲突修复，分流审查后的域名/IP 规则匹配修复，以及既有直连地址导入功能。构建与安装、发布的实际结果见对应发布记录；正式/回滚包仍以 `dist/releases.json` 为准。普通构建不会替换它们。
+当前开发候选为 **1.0.16 / build 76，未生产安装或发布**，新增 App 包外 Helper 与内置 CLI 的受限启动链覆盖（见 [实现和隔离验收](APP_CHILD_ROUTING_2026-11-10.md)）；正式版仍为 1.0.15 / 75。本候选，包含更新安装空闲状态与名单 DNS 地址冲突修复，分流审查后的域名/IP 规则匹配修复，以及既有直连地址导入功能。构建与安装、发布的实际结果见对应发布记录；正式/回滚包仍以 `dist/releases.json` 为准。普通构建不会替换它们。
 
 ## 准备工具
 
@@ -15,7 +15,7 @@ brew install go openconnect
 
 当前检查环境：Apple Silicon、macOS 27、Swift 6.4、Go 1.26.6。Homebrew 的组件版本会变化；打包结果会记录实际版本和最低 macOS 要求。较老系统或 Intel 构建需要单独验证。
 
-本版使用 `script/mihomo.lock.json` 锁定 Mihomo v1.19.30 源码归档和 GoConnect 补丁的 SHA-256，由 `script/build_mihomo.py` 在临时目录编译为 `v1.19.30-goconnect1`（`with_gvisor`）。名单模式的按应用 DNS 地址重匹配依赖该补丁，打包器拒绝替换成未修复的本机/Homebrew 内核。源码、补丁、构建配方及许可证随包记录，并纳入第三方源码附件；详见 [分流修复记录](ROUTING_MODE_FIX_2026-11-10.md)。v1.0.14 tag 使用其当时的 Homebrew 内核，不包含此修复。
+本版使用 `script/mihomo.lock.json` 锁定 Mihomo v1.19.30 源码归档和 GoConnect 补丁的 SHA-256，由 `script/build_mihomo.py` 在临时目录编译为 `v1.19.30-goconnect2`（`with_gvisor`）。名单模式的按应用 DNS 地址重匹配依赖该补丁，打包器拒绝替换成未修复的本机/Homebrew 内核。源码、补丁、构建配方及许可证随包记录，并纳入第三方源码附件；详见 [分流修复记录](ROUTING_MODE_FIX_2026-11-10.md)。v1.0.14 tag 使用其当时的 Homebrew 内核，不包含此修复。
 
 Sparkle、Go 模块和 Mihomo 源码有版本及完整性约束，但 OpenConnect 和其动态依赖仍取自本机安装环境，尚不是完整锁定的可复现构建。相同源码重新打包不保证与正式 ZIP 逐字节一致；依赖或工具链升级后须重新执行适用检查，不能复用旧版本的验收结论。
 

@@ -35,6 +35,7 @@ type routeRequest struct {
 	// Root-discovered resolver addresses; never accepted from session JSON.
 	systemDevice     string
 	coreGID          uint32
+	processOwnerUID  uint32   // Authenticated service peer, never accepted from JSON.
 	RemoteNetworks   []string `json:"remoteNetworks,omitempty"`
 	RemoteExcluded   []string `json:"remoteExcluded,omitempty"`
 	systemLAN        []localNetworkRoute
@@ -47,12 +48,21 @@ type routeRequest struct {
 	Token            string       `json:"token"`
 	SOCKSPort        uint16       `json:"socksPort"`
 	AppPaths         []string     `json:"appPaths"`
+	DirectAppPaths   []string     `json:"directAppPaths,omitempty"`
 	Gateway          string       `json:"gateway"`
 	ProbeOnly        bool         `json:"probeOnly,omitempty"`
 	RoutingMode      string       `json:"routingMode,omitempty"`
 }
 
 func (r routeRequest) validate() error {
+	if len(r.DirectAppPaths) > 256 || (len(r.DirectAppPaths) > 0 && (!r.TransparentRouting || r.mode() != modeWhitelist || r.CompanyShared)) {
+		return errors.New("invalid direct application scope")
+	}
+	for _, path := range r.DirectAppPaths {
+		if !validRoutingTargetPath(path, true) {
+			return errors.New("invalid direct application path")
+		}
+	}
 	if r.Company != nil {
 		if !r.TransparentRouting || r.ProbeOnly || r.CompanyShared || len(r.RemoteNetworks) > 0 {
 			return errors.New("invalid company reservation mode")
