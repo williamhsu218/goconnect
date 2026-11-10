@@ -1,8 +1,8 @@
 # 从源码构建
 
-本说明面向熟悉终端的 macOS 用户，适用于已集成更新器的源码。当前正式版对应 [v1.0.15 tag](https://github.com/williamhsu218/goconnect/tree/v1.0.15)；复核正式版时先检出该 tag，再执行本文命令。项目由 SwiftUI 界面和 Go 网络组件组成。
+本说明面向熟悉终端的 macOS 用户，适用于已集成更新器的源码。当前正式版对应 [v1.0.16 tag](https://github.com/williamhsu218/goconnect/tree/v1.0.16)；复核正式版时先检出该 tag，再执行本文命令。项目由 SwiftUI 界面和 Go 网络组件组成。
 
-当前开发候选为 **1.0.16 / build 76，未生产安装或发布**，新增 App 包外 Helper 与内置 CLI 的受限启动链覆盖（见 [实现和隔离验收](APP_CHILD_ROUTING_2026-11-10.md)）；正式版仍为 1.0.15 / 75。本候选，包含更新安装空闲状态与名单 DNS 地址冲突修复，分流审查后的域名/IP 规则匹配修复，以及既有直连地址导入功能。构建与安装、发布的实际结果见对应发布记录；正式/回滚包仍以 `dist/releases.json` 为准。普通构建不会替换它们。
+本版源码为 **1.0.16 / build 76**，新增 App 包外 Helper 与内置 CLI 的受限启动链覆盖（见 [实现和隔离验收](APP_CHILD_ROUTING_2026-11-10.md)）；最终安装和发布结果见对应发布记录。正式/回滚包仍以 `dist/releases.json` 为准，普通构建不替换它们。
 
 ## 准备工具
 
@@ -26,7 +26,7 @@ Sparkle、Go 模块和 Mihomo 源码有版本及完整性约束，但 OpenConnec
 ## 构建应用
 
 ```sh
-git clone --branch v1.0.15 --depth 1 https://github.com/williamhsu218/goconnect.git
+git clone --branch v1.0.16 --depth 1 https://github.com/williamhsu218/goconnect.git
 cd goconnect
 ./script/build_and_run.sh --build-only
 ```

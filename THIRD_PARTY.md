@@ -7,7 +7,7 @@ The app bundle includes license texts and exact component versions under
 | Component | Source | License |
 | --- | --- | --- |
 | OpenConnect 9.21 | https://gitlab.com/openconnect/openconnect | LGPL 2.1 |
-| Mihomo 1.19.30 (candidate v1.19.30-goconnect2) | https://github.com/MetaCubeX/mihomo | GPL 3.0 |
+| Mihomo 1.19.30 (v1.19.30-goconnect2) | https://github.com/MetaCubeX/mihomo | GPL 3.0 |
 | WireGuard Go netstack | https://git.zx2c4.com/wireguard-go | MIT |
 | gVisor | https://github.com/google/gvisor | Apache 2.0 |
 | Go supplemental libraries | https://go.googlesource.com | BSD 3-Clause |
@@ -62,11 +62,11 @@ and exact Go module sources. `prepare_release_sources.py` collects and checks
 these against the accepted app; do not substitute the stock Homebrew Mihomo
 source recipe or an older release's source archive.
 
-## Candidate App process overlay (1.0.16 / build 76)
+## App process overlay (1.0.16 / build 76)
 
-The candidate capability version is `v1.19.30-goconnect2`; the v1.0.15 tag keeps
+The 1.0.16 capability version is `v1.19.30-goconnect2`; the v1.0.15 tag keeps
 its historical `goconnect1` source and recipe. The updated, pinned patch adds an
 opt-in process-instance rule for verified live App launch chains, using public
 Darwin libproc and Security APIs. It does not globally allow a TeamIdentifier,
-process name, interpreter or executable directory. The current candidate's
+process name, interpreter or executable directory. The current release's
 matching component directory is `ThirdParty/mihomo-v1.19.30-goconnect2/`.
