@@ -6,16 +6,16 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/williamhsu218/goconnect/releases</link>
     <description>GoConnect signed updates</description>
     <item>
-      <title>GoConnect 1.0.13</title>
-      <pubDate>Mon, 09 Nov 2026 02:14:34 +0000</pubDate>
-      <sparkle:version>73</sparkle:version>
-      <sparkle:shortVersionString>1.0.13</sparkle:shortVersionString>
+      <title>GoConnect 1.0.14</title>
+      <pubDate>Tue, 10 Nov 2026 00:42:30 +0000</pubDate>
+      <sparkle:version>74</sparkle:version>
+      <sparkle:shortVersionString>1.0.14</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
-      <description>修复名单代理 DNS、副 VPN socket 重连，以及更新结果弹窗长时间停留时误断开主线的问题。保持 VPN 下载，确认安装后正常断开重启。</description>
-      <enclosure url="https://github.com/williamhsu218/goconnect/releases/download/v1.0.13/GoConnect-1.0.13-macos-arm64.zip" length="32137724" type="application/octet-stream" sparkle:edSignature="wlqg1ZLT299SsSwUgJmJ29aPIMmbykUJsxpDcoJoY8MM6FcryFcB3sccfStO2tpSdcHJKK8DMK/D6/oEaCUtCw=="></enclosure>
+      <description>修复按名单代理时浏览器反复请求本地网络权限；保留内网与真实 IPv6 解析。更新后请在诊断页升级网络服务。可保持 VPN 下载，确认安装重启后才断开；请先保存线路草稿。</description>
+      <enclosure url="https://github.com/williamhsu218/goconnect/releases/download/v1.0.14/GoConnect-1.0.14-macos-arm64.zip" length="32137805" type="application/octet-stream" sparkle:edSignature="H7Ei8X080B6hH5YkPiA0vf64TvKHu1hUSoJpUmsJcAphpzBMmaBMI1YUlDSIXbuaTYL0bkuOiqNmSi5LfFLpAA=="></enclosure>
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: Rf2+bR7r4tnF7m/Fdrln04f9jFQS/jvZMgkThja2buFrVfhI01XTuhkCFC513fiEAqG7O6SU2VpTyb6o/9+PAw==
-length: 1383
+edSignature: TK/8QGnDk5Kx3mUxBdWqpRXb4MGgIhm6CxNhXuWls5RR/sMVYkjtf8RtEj+IHH9BuVjLAbHEpPIDAV7RG0nADg==
+length: 1439
 -->
