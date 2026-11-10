@@ -6,16 +6,16 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/williamhsu218/goconnect/releases</link>
     <description>GoConnect signed updates</description>
     <item>
-      <title>GoConnect 1.0.15</title>
-      <pubDate>Tue, 10 Nov 2026 06:05:34 +0000</pubDate>
-      <sparkle:version>75</sparkle:version>
-      <sparkle:shortVersionString>1.0.15</sparkle:shortVersionString>
+      <title>GoConnect 1.0.16</title>
+      <pubDate>Tue, 10 Nov 2026 09:16:38 +0000</pubDate>
+      <sparkle:version>76</sparkle:version>
+      <sparkle:shortVersionString>1.0.16</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
-      <description>修复按模式 DNS 与网段匹配、UDP 出口隔离和更新安装空闲核验。请升级网络服务并重连；检查和下载可保持 VPN，确认安装重启后才正常断开。</description>
-      <enclosure url="https://github.com/williamhsu218/goconnect/releases/download/v1.0.15/GoConnect-1.0.15-macos-arm64.zip" length="32314561" type="application/octet-stream" sparkle:edSignature="Wgai8SzuKPvk9bjdBPItCrZg1oyTu2JivgD0cmfFKeuFU386qfLRjLJiskqeKgsyffwDnRtRR4bw/lbTVvUNCQ=="></enclosure>
+      <description>补齐 App 启动的包外 Helper 与内置 CLI 代理覆盖，保留独立 CLI 和直连排除配置。可保持 VPN 下载；确认安装后才正常断开并重启，请先保存线路草稿。</description>
+      <enclosure url="https://github.com/williamhsu218/goconnect/releases/download/v1.0.16/GoConnect-1.0.16-macos-arm64.zip" length="32336237" type="application/octet-stream" sparkle:edSignature="s06I6kbQoIlaaPy5w8eoAxrMMvnts2LJf9ZNuCdIWs9awi/R3nipDKJedzixWwdaouMvAFwmm0mQM76glKj4DQ=="></enclosure>
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: 0TO3YwMEak9VqwT4zb1dyvkDrK3ME8c45GaDDVYVbSJkWCQaptejyMa7PEPp8SLpmmavPeMUiAYNSIIP1lJSDw==
-length: 1396
+edSignature: 9Z/PwurBMBTc5Vq8gAGkjdegUexXst09hC7k8Bvw3EkU/96FoBxsHoDtRodmb6k0YeD56pHRqwxbRT6JAFjMCw==
+length: 1405
 -->
