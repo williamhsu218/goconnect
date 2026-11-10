@@ -71,7 +71,7 @@ codesign --verify --deep --strict "$GOCONNECT_RELEASE_APP"
 - `SURequireSignedFeed=true`、`SUVerifyUpdateBeforeExtraction=true`；自动下载/安装关闭，自动检查默认关闭。
 - 实际最低 macOS 要求与 `build-requirements.json` 一致，不把源码部署目标当成完整包兼容性。
 
-第三方源码必须对应**此 ZIP 展开的 App**，包括实际链接模块、Sparkle 源码和许可证，不重用旧包的附件代替。生成并校验来源清单、SHA-256、模块 h1 及适用构建材料：
+第三方源码必须对应**此 ZIP 展开的 App**，包括实际链接模块、Sparkle 源码和许可证，不重用旧包的附件代替。候选若使用 GoConnect Mihomo 补丁，还须核对包内 `mihomo-v1.19.30-goconnect1` 的锁文件、补丁哈希与配方，以及来源附件中的匹配上游归档和 Go 模块；不得用 stock/Homebrew 内核或旧版源码包代替。生成并校验来源清单、SHA-256、模块 h1 及适用构建材料：
 
 ```sh
 GOCONNECT_RELEASE_SOURCES="GoConnect-${GOCONNECT_RELEASE_VERSION}-third-party-sources"

@@ -157,6 +157,29 @@ func makeTransparentConfig(r routeRequest, device string, port uint16, original 
 	target, fallback := "GoConnect", "OriginalNetwork"
 	if r.mode() == modeGlobal {
 		target, fallback = "OriginalNetwork", "GoConnect"
+	} else if usesManagedDNSFakeIP(r) && hasTransparentAddressRules(r, local, ts) {
+		// Process attribution precedes real DNS. The pinned core resolves only
+		// inside these reserved sub-rules, using that process's chosen resolver,
+		// then rechecks the same address policy against a pinned real IP.
+		addressRules := append([]string(nil), rules...)
+		c["sub-rules"] = map[string][]string{
+			nativeAddressRules: append(append([]string(nil), addressRules...), "MATCH,OriginalNetwork"),
+			proxyAddressRules:  append(append([]string(nil), addressRules...), "MATCH,GoConnect"),
+		}
+		proxies = append(proxies,
+			map[string]any{"name": "GoConnectAddressPolicy", "type": "rematch", "target-sub-rule": proxyAddressRules},
+			map[string]any{"name": "OriginalAddressPolicy", "type": "rematch", "target-sub-rule": nativeAddressRules})
+		target, fallback = "GoConnectAddressPolicy", "OriginalAddressPolicy"
+	}
+	if !r.ProbeOnly {
+		// An application can reuse one UDP socket for different destinations.
+		// Keep each destination's policy and company gate independently matched.
+		subRules, ok := c["sub-rules"].(map[string][]string)
+		if !ok {
+			subRules = map[string][]string{}
+		}
+		subRules[udpDestinationRules] = []string{"MATCH,REJECT"} // Capability marker, never selected.
+		c["sub-rules"] = subRules
 	}
 	for _, path := range r.AppPaths {
 		rules = append(rules, processPathRule(path, target))
@@ -169,6 +192,22 @@ func makeTransparentConfig(r routeRequest, device string, port uint16, original 
 	c["sniffer"] = map[string]any{"enable": true, "parse-pure-ip": true, "force-dns-mapping": true, "override-destination": true, "sniff": map[string]any{"HTTP": map[string]any{"ports": []string{"1-65535"}}, "TLS": map[string]any{"ports": []string{"1-65535"}}, "QUIC": map[string]any{"ports": []int{443, 8443}}}}
 	configureManagedDNS(c, r, original)
 	return c
+}
+
+const nativeAddressRules = "goconnect-native-addresses"
+const proxyAddressRules = "goconnect-proxy-addresses"
+const udpDestinationRules = "goconnect-udp-destinations"
+
+func hasTransparentAddressRules(r routeRequest, local []localNetworkRoute, ts tailscaleBypass) bool {
+	if len(local) > 0 || len(ts.Prefixes) > 0 || len(r.RemoteNetworks) > 0 || r.Company != nil {
+		return true
+	}
+	for _, rule := range r.DirectDomains {
+		if _, ok := directIPPrefix(rule.Domain); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // A scoped cached lookup may shadow the static entry in `route get`. Verify
@@ -526,17 +565,16 @@ func cleanupTransparentRoutesWithDiagnostics(path string, s *transparentState, c
 	return nil
 }
 
-func validateTransparentAddresses(remote []string) error {
-	reserved := []netip.Prefix{netip.MustParsePrefix(systemCaptureAddress + "/30").Masked(), netip.MustParsePrefix(systemCaptureIPv6 + "/126").Masked()}
+func transparentInterfacePrefixes() ([]netip.Prefix, error) {
 	interfaces, err := net.Interfaces()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var prefixes []netip.Prefix
 	for _, iface := range interfaces {
 		addrs, err := iface.Addrs()
 		if err != nil {
-			return err
+			return nil, err
 		}
 		for _, addr := range addrs {
 			if p, err := netip.ParsePrefix(addr.String()); err == nil {
@@ -544,7 +582,50 @@ func validateTransparentAddresses(remote []string) error {
 			}
 		}
 	}
-	for _, value := range remote {
+	return prefixes, nil
+}
+
+func transparentIPv4Routes() ([]netip.Prefix, error) {
+	table, err := systemCommand("/usr/sbin/netstat", "-rn", "-f", "inet")
+	if err != nil {
+		return nil, err
+	}
+	return transparentIPv4RoutePrefixes(string(table)), nil
+}
+
+// Conflict discovery is independent of DIRECT policy: 198.18/16 is not RFC1918,
+// and a static, interface, reject or blackhole route can still consume a mapping.
+// Default routes are expected and are excluded by parseRoutePrefix.
+func transparentIPv4RoutePrefixes(table string) []netip.Prefix {
+	var prefixes []netip.Prefix
+	for _, line := range strings.Split(table, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			continue
+		}
+		if p, ok := parseRoutePrefix(fields[0]); ok && p.Addr().Is4() {
+			prefixes = append(prefixes, p)
+		}
+	}
+	return prefixes
+}
+
+type transparentAddressSpace struct {
+	interfaces      []netip.Prefix
+	routes          []netip.Prefix
+	local           []localNetworkRoute
+	tailscale       tailscaleBypass
+	original, outer originalNetwork
+}
+
+var errManagedDNSFakeIPConflict = fmt.Errorf("名单 DNS 映射地址池 %s 与既有网络或保留路径冲突，请调整冲突网络后重试", netip.MustParsePrefix(managedDNSFakeIPRange).Masked())
+
+// Pure preflight: never steal an existing more-specific route or choose another
+// pool. The interface snapshot is supplied so conflicts need no host mutation.
+func validateTransparentAddresses(r routeRequest, space transparentAddressSpace) error {
+	reserved := []netip.Prefix{netip.MustParsePrefix(systemCaptureAddress + "/30").Masked(), netip.MustParsePrefix(systemCaptureIPv6 + "/126").Masked()}
+	prefixes := append([]netip.Prefix(nil), space.interfaces...)
+	for _, value := range r.RemoteNetworks {
 		p, ok := remotePrefix(value)
 		if !ok {
 			return errors.New("invalid remote prefix")
@@ -552,13 +633,99 @@ func validateTransparentAddresses(remote []string) error {
 		prefixes = append(prefixes, p)
 	}
 	for _, p := range prefixes {
-		for _, r := range reserved {
-			if r.Overlaps(p) {
+		for _, managed := range reserved {
+			if managed.Overlaps(p) {
 				return errors.New("本机或公司网段与隧道地址冲突，请调整后重试。")
 			}
 		}
 	}
+	if !usesManagedDNSFakeIP(r) {
+		return nil
+	}
+	pool := netip.MustParsePrefix(managedDNSFakeIPRange).Masked()
+	check := func(source string, p netip.Prefix) error {
+		if pool.Overlaps(p) {
+			return fmt.Errorf("%w（%s）。", errManagedDNSFakeIPConflict, source)
+		}
+		return nil
+	}
+	for _, p := range prefixes {
+		if err := check("本机接口或公司网段", p); err != nil {
+			return err
+		}
+	}
+	for _, route := range space.local {
+		if err := check("本地保留路由", route.Prefix); err != nil {
+			return err
+		}
+	}
+	for _, p := range space.routes {
+		if err := check("既有 IPv4 路由", p); err != nil {
+			return err
+		}
+	}
+	for _, p := range space.tailscale.Prefixes {
+		if err := check("Tailscale 保留路由", p); err != nil {
+			return err
+		}
+	}
+	for _, rule := range r.DirectDomains {
+		if p, ok := directIPPrefix(rule.Domain); ok {
+			if err := check("直连 IP 规则", p); err != nil {
+				return err
+			}
+		}
+	}
+	// These endpoints must retain their real identity. A pinned gateway host
+	// route or a native DNS server inside the fake pool would bypass mapping.
+	addresses := []string{r.Gateway, space.original.Gateway, space.outer.Gateway}
+	for _, resolver := range r.managedDNS.resolvers {
+		for _, server := range resolver.servers {
+			addresses = append(addresses, server.String())
+		}
+	}
+	if r.Company != nil {
+		for _, value := range r.Company.Networks {
+			p, err := netip.ParsePrefix(value)
+			if err != nil {
+				return errors.New("invalid company prefix")
+			}
+			if err := check("公司保留网段", p); err != nil {
+				return err
+			}
+		}
+		addresses = append(addresses, r.Company.GatewayIPs...)
+		addresses = append(addresses, r.Company.DNSServers...)
+	}
+	for _, value := range addresses {
+		if a, err := netip.ParseAddr(value); err == nil {
+			a = a.Unmap().WithZone("")
+			if err := check("网关或 DNS 地址", netip.PrefixFrom(a, a.BitLen())); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
+}
+
+// All new-session device/core/route/DNS operations stay in start, which cannot
+// run until both interface discovery and pure address validation succeed.
+func withValidatedTransparentAddresses(r routeRequest, space transparentAddressSpace, interfaces, routes func() ([]netip.Prefix, error), start func() error) error {
+	var err error
+	space.interfaces, err = interfaces()
+	if err != nil {
+		return err
+	}
+	if usesManagedDNSFakeIP(r) {
+		space.routes, err = routes()
+		if err != nil {
+			return err
+		}
+	}
+	if err = validateTransparentAddresses(r, space); err != nil {
+		return err
+	}
+	return start()
 }
 
 func transparentSession(ctx context.Context, path string, uid uint32, pid int) (result error) {
@@ -631,34 +798,34 @@ func transparentSession(ctx context.Context, path string, uid uint32, pid int) (
 		}
 	}
 	exitLog.stage = "address"
-	if e = validateTransparentAddresses(r.RemoteNetworks); e != nil {
-		return e
-	}
-	exitLog.stage = "device"
-	device, e := chooseDevice()
-	if e != nil {
-		return e
-	}
-	exitLog.stage = "port"
-	port, e := freePort()
-	if e != nil {
-		return e
-	}
-	exitLog.stage = "runtime"
-	runtime, e := runtimePath()
-	if e != nil {
-		return e
-	}
-	if e = secureRootPath(filepath.Join(runtime, "bin/mihomo"), false); e != nil {
-		return e
-	}
-	exitLog.stage = "journal"
-	state := transparentState{Device: device, State: "starting"}
-	dir, e := initializeSessionDirectory(serviceRunDirectory, "transparent-", func(path string) error { return saveTransparentState(path, state) })
-	if e != nil {
-		return e
-	}
-	statePath := filepath.Join(dir, "state.json")
-	connection := transparentConnection{control: c, port: port, original: original, outer: outerOriginal, device: device, statePath: statePath, state: &state, runtime: runtime, local: local, tails: ts, exitLog: exitLog, ops: defaultTransparentRuntime()}
-	return connection.run(ctx)
+	space := transparentAddressSpace{local: local, tailscale: ts, original: original, outer: outerOriginal}
+	return withValidatedTransparentAddresses(r, space, transparentInterfacePrefixes, transparentIPv4Routes, func() error {
+		exitLog.stage = "device"
+		device, e := chooseDevice()
+		if e != nil {
+			return e
+		}
+		exitLog.stage = "port"
+		port, e := freePort()
+		if e != nil {
+			return e
+		}
+		exitLog.stage = "runtime"
+		runtime, e := runtimePath()
+		if e != nil {
+			return e
+		}
+		if e = secureRootPath(filepath.Join(runtime, "bin/mihomo"), false); e != nil {
+			return e
+		}
+		exitLog.stage = "journal"
+		state := transparentState{Device: device, State: "starting"}
+		dir, e := initializeSessionDirectory(serviceRunDirectory, "transparent-", func(path string) error { return saveTransparentState(path, state) })
+		if e != nil {
+			return e
+		}
+		statePath := filepath.Join(dir, "state.json")
+		connection := transparentConnection{control: c, port: port, original: original, outer: outerOriginal, device: device, statePath: statePath, state: &state, runtime: runtime, local: local, tails: ts, exitLog: exitLog, ops: defaultTransparentRuntime()}
+		return connection.run(ctx)
+	})
 }

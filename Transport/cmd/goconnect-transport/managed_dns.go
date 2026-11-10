@@ -16,8 +16,16 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 )
 
+// Keep the core configuration and the pre-TUN conflict check on the same pool.
+const managedDNSFakeIPRange = "198.18.0.1/16"
+
+func usesManagedDNSFakeIP(r routeRequest) bool {
+	return r.managedDNS != nil && !r.ProbeOnly && r.mode() == modeWhitelist
+}
+
 type nativeResolver struct {
 	domain, iface string
+	searchDomains []string
 	servers       []netip.Addr
 	port, order   int
 	scoped        bool
@@ -57,6 +65,11 @@ func parseNativeResolvers(data string) ([]nativeResolver, error) {
 				current.servers = append(current.servers, a.Unmap())
 			case key == "domain":
 				current.domain = strings.TrimSuffix(strings.ToLower(value), ".")
+			case strings.HasPrefix(key, "search domain["):
+				domain := strings.TrimSuffix(strings.ToLower(value), ".")
+				if validDirectDomain(domain) && strings.Contains(domain, ".") {
+					current.searchDomains = append(current.searchDomains, domain)
+				}
 			case key == "port":
 				port, err := strconv.Atoi(value)
 				if err != nil || port < 1 || port > 65535 {
@@ -176,10 +189,15 @@ func configureManagedDNS(config map[string]any, r routeRequest, original origina
 	}
 	privateResolvers := map[string]nativeResolver{}
 	for _, resolver := range p.resolvers {
-		if resolver.domain != "" && len(resolver.servers) > 0 && validDirectDomain(resolver.domain) {
-			previous, exists := privateResolvers[resolver.domain]
+		// DHCP search suffixes are explicit native DNS context too. Preserve
+		// those private names without probing arbitrary public/AI names locally.
+		for _, domain := range append([]string{resolver.domain}, resolver.searchDomains...) {
+			if domain == "" || len(resolver.servers) == 0 || !validDirectDomain(domain) {
+				continue
+			}
+			previous, exists := privateResolvers[domain]
 			if !exists || resolver.order < previous.order || (resolver.order == previous.order && previous.scoped && !resolver.scoped) {
-				privateResolvers[resolver.domain] = resolver
+				privateResolvers[domain] = resolver
 			}
 		}
 	}
@@ -197,7 +215,7 @@ func configureManagedDNS(config map[string]any, r routeRequest, original origina
 		// public names with system DNS when their socket selects OriginalNetwork.
 		"direct-nameserver": proxied, "direct-nameserver-follow-policy": true,
 	}
-	if r.mode() == modeWhitelist {
+	if usesManagedDNSFakeIP(r) {
 		// A system lookup comes from the shared OS resolver, before the core
 		// knows which application's connection will consume it. Return a local
 		// mapping; defer upstream resolution until process-based routing picks
@@ -205,7 +223,7 @@ func configureManagedDNS(config map[string]any, r routeRequest, original origina
 		// because a few applications are on the proxy list.
 		dns := config["dns"].(map[string]any)
 		dns["enhanced-mode"] = "fake-ip"
-		dns["fake-ip-range"] = "198.18.0.1/16"
+		dns["fake-ip-range"] = managedDNSFakeIPRange
 		// ULA fake AAAA records make public websites look like LAN devices to
 		// browsers' Local Network Access checks. Keep IPv6 enabled, but leave
 		// only the synthetic IPv6 pool empty: the core returns NODATA without

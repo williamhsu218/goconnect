@@ -45,18 +45,29 @@ struct GoConnectApp: App {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     static var isUpdateQA: Bool {
-        Bundle.main.bundleIdentifier == "com.willhsu.GoConnect.UpdateQA" &&
-        Bundle.main.object(forInfoDictionaryKey: "GoConnectUpdateQAMode") as? Bool == true
+        isUpdateQABundle(.main)
     }
-    let store: AppStore = {
-        guard isUpdateQA else { return AppStore() }
-        let path = Bundle.main.object(forInfoDictionaryKey: "GoConnectUpdateQADataDirectory") as? String
+    static func isUpdateQABundle(_ bundle: Bundle) -> Bool {
+        bundle.bundleIdentifier == "com.willhsu.GoConnect.UpdateQA" &&
+        bundle.object(forInfoDictionaryKey: "GoConnectUpdateQAMode") as? Bool == true
+    }
+    let store: AppStore = AppDelegate.makeStore()
+
+    // Use the same factory in the signed QA entry point and its regressions.
+    // The production bundle always retains the real, fixed helper status reader.
+    static func makeStore(bundle: Bundle = .main) -> AppStore {
+        guard isUpdateQABundle(bundle) else { return AppStore() }
+        let path = bundle.object(forInfoDictionaryKey: "GoConnectUpdateQADataDirectory") as? String
         let temporary = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
         let proposed = path.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath() }
         let directory = proposed.flatMap { $0.path.hasPrefix(temporary.path + "/") ? $0 : nil }
             ?? temporary.appendingPathComponent("GoConnect-UpdateQA-" + UUID().uuidString)
-        return AppStore(dataDirectory: directory, diagnostics: FaultDiagnostics(directory: directory.appendingPathComponent("logs")), refreshRuntime: false)
-    }()
+        let service = NetworkServiceClient(statusReader: { _ in
+            NetworkServiceStatus(state: "notInstalled", message: "隔离更新验收不访问正式网络服务。")
+        })
+        return AppStore(dataDirectory: directory, diagnostics: FaultDiagnostics(directory: directory.appendingPathComponent("logs")),
+                        refreshRuntime: false, networkServiceClient: service)
+    }
     lazy var updater = AppUpdater(safetyState: { [weak self] in
         self?.store.updateSafetyState ?? UpdateSafetyState(connectionOrServiceActive: true)
     }, prepareForInstallation: { [weak self] in

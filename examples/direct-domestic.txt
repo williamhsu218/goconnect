@@ -1,0 +1,44 @@
+# GoConnect 国内常用网站直连地址 · 2026-11-07
+# UTF-8，每行一个域名，默认包含子域名。
+# 仅合并新增；不会替换现有地址、App 名单或全局模式。
+# 不接管所有中国 IP，不新增 AI 专用规则或公共云通配规则。
+# 线路配置 → 直连域名与 IP → 导入地址 → 预览 → 合并到草稿 → 保存线路。
+# 连接期间当前线路保持只读；保存后下次连接生效。
+
+# 已有常用网站（重复项导入时会自动跳过）
+baidu.com
+taobao.com
+weibo.com
+douyin.com
+xiaohongshu.com
+weixin.com
+tencent.com
+qq.com
+quark.cn
+
+# 购物
+jd.com
+360buyimg.com
+tmall.com
+
+# 视频、社区
+bilibili.com
+hdslb.com
+bilivideo.com
+youku.com
+iqiyi.com
+zhihu.com
+zhimg.com
+douban.com
+doubanio.com
+
+# 网盘（App 已有直连不等于浏览器访问也直连）
+alipan.com
+aliyundrive.com
+baidupcs.com
+
+# 生活、出行
+meituan.com
+dianping.com
+12306.cn
+amap.com

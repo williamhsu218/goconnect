@@ -92,6 +92,11 @@ def main():
         (contents / "MacOS").mkdir(parents=True)
         (contents / "Resources").mkdir()
         shutil.copy2(binary, contents / "MacOS/GoConnect")
+        # The UI target links Sparkle even though updates are disabled in this
+        # isolated app. Keep its signed framework and symlinks intact.
+        sparkle = work / "swift/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
+        (contents / "Frameworks").mkdir()
+        shutil.copytree(sparkle, contents / "Frameworks/Sparkle.framework", symlinks=True)
         with (contents / "Info.plist").open("wb") as stream:
             plistlib.dump({"CFBundleIdentifier": BUNDLE_ID, "CFBundleExecutable": "GoConnect", "CFBundleName": "GoConnect UI Preview", "CFBundlePackageType": "APPL", "LSMinimumSystemVersion": "14.0", "NSPrincipalClass": "NSApplication", "CFBundleDevelopmentRegion": "zh_CN", "CFBundleLocalizations": ["zh-Hans"]}, stream)
         subprocess.run(["codesign", "--force", "--sign", "-", str(bundle)], check=True)
@@ -104,6 +109,7 @@ def main():
         print(json.dumps({key: value for key, value in metadata.items() if key != "sourceViewHashes"}), flush=True)
         if not args.run:
             return
+        (evidence / "preview-pid.txt").unlink(missing_ok=True)
         environment = {"GOCONNECT_DATA_DIR": str(work / "data"), "GOCONNECT_PREVIEW_EVIDENCE": str(evidence)}
         launch = ["open", "-n", "-W"]
         for key, value in environment.items():
@@ -117,6 +123,8 @@ def main():
             return_code = process.wait()
             if return_code:
                 raise subprocess.CalledProcessError(return_code, launch)
+            if not (evidence / "preview-pid.txt").exists():
+                raise RuntimeError("Preview exited before applicationDidFinishLaunching; inspect the crash report.")
         finally:
             pid_file = evidence / "preview-pid.txt"
             if pid_file.exists():

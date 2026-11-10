@@ -28,6 +28,20 @@ def dependencies(binary):
     return values
 
 
+def collect_patched_mihomo(directory, output, resume=False):
+    from build_mihomo import load_lock
+    source = json.loads((directory / "source.json").read_text())
+    lock, patch = load_lock(directory / "mihomo.lock.json")
+    if (source.get("kind") != "goconnect-patched-go" or source["url"] != lock["url"]
+            or source["version"] != lock["buildVersion"] or source["tags"] != lock["tags"]
+            or source["patchSHA256"] != lock["patchSHA256"] or source["sha256"] != lock["sha256"]):
+        raise ValueError("Mihomo source/build provenance mismatch")
+    destination = output / "components" / directory.name
+    shutil.copytree(directory, destination, dirs_exist_ok=resume)
+    return {"component": directory.name, "url": source["url"], "sha256": source["sha256"],
+            "patchSHA256": source["patchSHA256"], "file": str((destination / "upstream.tar.gz").relative_to(output))}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--app", type=Path, required=True)
@@ -43,6 +57,10 @@ def main():
     manifest, downloads = [], []
     for directory in sorted(third_party.iterdir()):
         source_metadata = directory / "source.json"
+        if source_metadata.is_file() and directory.name.startswith("mihomo-"):
+            record = collect_patched_mihomo(directory, output, args.resume)
+            manifest.append(record); downloads.append(record)
+            continue
         if source_metadata.is_file() and directory.name.startswith("Sparkle-"):
             source = json.loads(source_metadata.read_text())
             if source["name"] != "Sparkle" or not source["url"].startswith("https://github.com/sparkle-project/Sparkle/archive/refs/tags/"):
@@ -146,7 +164,8 @@ def main():
         "go-modules/ contains the exact Go dependencies linked into Mihomo and GoConnectTransport,\n"
         "verified against the h1 checksums recorded in those binaries. sources.json lists provenance\n"
         "and SHA-256 checksums. The project source and build scripts accompany the same GitHub tag.\n"
-        "Use the recorded formulas to rebuild external libraries and Mihomo; build GoConnect with\n"
+        "Use the recorded formulas for external libraries. Patched Mihomo includes its pinned lock,\n"
+        "build_mihomo.py and patches/ recipe alongside upstream.tar.gz. Build GoConnect with\n"
         "script/build_and_run.sh. Replacing bundled binaries requires re-signing the local bundle.\n")
     archive = output.parent / (output.name + ".tar.gz")
     with tarfile.open(archive, "w:gz") as tar:

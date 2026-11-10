@@ -6,9 +6,14 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from build_mihomo import load_lock
 
 app = Path(sys.argv[1]).resolve()
 runtime = app / "Contents/Resources/Runtime"
+lock, patch = load_lock(app / "Contents/Resources/ThirdParty/mihomo-v1.19.30-goconnect1/mihomo.lock.json")
+version = subprocess.check_output([str(runtime / "bin/mihomo"), "-v"], text=True)
+if lock["buildVersion"] not in version:
+    raise SystemExit("Runtime lacks GoConnect policy DNS capability")
 for binary in [*(runtime / "bin").iterdir(), *(runtime / "lib").iterdir()]:
     text = subprocess.check_output(["otool", "-L", str(binary)], text=True)
     for line in text.splitlines()[1:]:
@@ -23,7 +28,7 @@ with tempfile.TemporaryDirectory(prefix="goconnect-check-") as directory:
         session["liveRouting"] = live
         session["routingMode"] = mode
         session["appPaths"] = [] if empty else ["/Applications/Example (QA).app"]
-        session["directDomains"] = [{"domain": "example.com", "includeSubdomains": True}]
+        session["directDomains"] = [{"domain": "example.com", "includeSubdomains": True}, {"domain": "198.51.100.0/24"}]
         path.write_text(json.dumps(session))
         subprocess.run([str(runtime / "bin/GoConnectTransport"), "config-check", str(path)], check=True)
 print("Runtime dependencies and legacy/live Mihomo modes, empty App lists and direct-domain exceptions passed; no system routes changed.")

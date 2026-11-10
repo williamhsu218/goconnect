@@ -1,0 +1,212 @@
+--- a/tunnel/tunnel.go
++++ b/tunnel/tunnel.go
+@@ -327,6 +327,7 @@
+ 		resolved             bool
+ 		attemptProcessLookup = metadata.Type != C.INNER
+ 	)
++	var policyResolveErr error
+ 
+ 	if node, ok := resolver.DefaultHosts.Search(metadata.Host, false); ok {
+ 		metadata.DstIP, _ = node.RandIP()
+@@ -338,7 +339,15 @@
+ 			if !resolved && metadata.Host != "" && !metadata.Resolved() {
+ 				ctx, cancel := context.WithTimeout(context.Background(), resolver.DefaultDNSTimeout)
+ 				defer cancel()
+-				ip, err := resolver.ResolveIP(ctx, metadata.Host)
++				var ip netip.Addr
++				var err error
++				policyResolver, policyDNS := goConnectRuleResolver(metadata.SpecialRules)
++				if policyDNS {
++					ip, err = resolveGoConnectRuleIP(ctx, metadata.Host, policyResolver)
++					policyResolveErr = err
++				} else {
++					ip, err = resolver.ResolveIP(ctx, metadata.Host)
++				}
+ 				if err != nil {
+ 					log.Debugln("[DNS] resolve %s error: %s", metadata.Host, err.Error())
+ 				} else {
+@@ -407,6 +416,14 @@
+ 	default:
+ 		proxy, rule, err = match(metadata, helper)
+ 	}
++	if policyResolveErr != nil {
++		return nil, nil, policyResolveErr
++	}
++	if _, policyDNS := goConnectRuleResolver(metadata.SpecialRules); policyDNS && metadata.DstIP.IsValid() {
++		// Pin the address used for policy matching; Pure keeps the original
++		// hostname for statistics but dials the same literal IP on either exit.
++		metadata.DNSMode = C.DNSMapping
++	}
+ 	return
+ }
+ 
+@@ -437,7 +454,7 @@
+ 		return
+ 	}
+ 
+-	key := packet.Key()
++	key := goConnectUDPKey(packet.Key(), metadata)
+ 	sender, loaded := natTable.GetOrCreate(key, func() C.PacketSender {
+ 		sender := newPacketSender()
+ 		if sniffingEnable && snifferDispatcher.Enable() {
+@@ -558,7 +575,10 @@
+ 	}
+ 
+ 	dialMetadata := metadata
+-	if len(metadata.Host) > 0 {
++	if _, policyDNS := goConnectRuleResolver(metadata.SpecialRules); policyDNS {
++		dialMetadata = metadata.Pure()
++	}
++	if _, policyDNS := goConnectRuleResolver(metadata.SpecialRules); len(metadata.Host) > 0 && !policyDNS {
+ 		if node, ok := resolver.DefaultHosts.Search(metadata.Host, false); ok {
+ 			if dstIp, _ := node.RandIP(); !resolver.IsFakeIP(dstIp) {
+ 				dialMetadata.DstIP = dstIp
+@@ -704,6 +724,9 @@
+ 				return rematchProxy, rematchRule, nil
+ 			}
+ 			log.Debugln("[Rule] rematch proxy %s update metadata to rematch-name=%q sub-rule=%q", rematchProxy.Name(), metadata.InName, metadata.SpecialRules)
++			if _, policyDNS := goConnectRuleResolver(metadata.SpecialRules); policyDNS && helper.ResolveIP != nil {
++				helper.ResolveIP()
++			}
+ 			continue
+ 		}
+ 		return proxies["DIRECT"], nil, nil
+--- /dev/null
++++ b/tunnel/goconnect_dns.go
+@@ -0,0 +1,42 @@
++package tunnel
++
++import (
++	"context"
++	"errors"
++	"github.com/metacubex/mihomo/component/resolver"
++	C "github.com/metacubex/mihomo/constant"
++	"net/netip"
++)
++
++// Only GoConnect's reserved, process-selected sub-rules opt into this resolver
++// selection. Ordinary Mihomo configurations retain upstream behavior.
++func goConnectRuleResolver(scope string) (resolver.Resolver, bool) {
++	switch scope {
++	case "goconnect-native-addresses":
++		return resolver.DirectHostResolver, true
++	case "goconnect-proxy-addresses":
++		return resolver.DefaultResolver, true
++	default:
++		return nil, false
++	}
++}
++func resolveGoConnectRuleIP(ctx context.Context, host string, r resolver.Resolver) (netip.Addr, error) {
++	// Unlike the general resolver API, never fall back to the OS resolver when
++	// an expected policy resolver is missing, disabled or fails.
++	if r == nil || !r.Invalid() {
++		return netip.Addr{}, errors.New("GoConnect policy resolver unavailable")
++	}
++	return resolver.ResolveIPWithResolver(ctx, host, r)
++}
++
++// Only GoConnect's explicit marker changes upstream source-only UDP NAT keys.
++// Each destination must pass rule matching, including a blocked company gate.
++func goConnectUDPKey(key string, metadata *C.Metadata) string {
++	configMux.RLock()
++	_, enabled := subRules["goconnect-udp-destinations"]
++	configMux.RUnlock()
++	if enabled {
++		return key + "|" + metadata.RemoteAddress()
++	}
++	return key
++}
+--- /dev/null
++++ b/tunnel/goconnect_dns_test.go
+@@ -0,0 +1,91 @@
++package tunnel
++
++import (
++	"context"
++	"errors"
++	"github.com/metacubex/mihomo/component/resolver"
++	C "github.com/metacubex/mihomo/constant"
++	"github.com/miekg/dns"
++	"net/netip"
++	"testing"
++)
++
++type goConnectTestResolver struct {
++	fail  bool
++	calls int
++}
++
++func (r *goConnectTestResolver) LookupIP(context.Context, string) ([]netip.Addr, error) {
++	r.calls++
++	if r.fail {
++		return nil, errors.New("synthetic DNS failure")
++	}
++	return []netip.Addr{netip.MustParseAddr("192.0.2.42")}, nil
++}
++func (r *goConnectTestResolver) LookupIPv4(c context.Context, h string) ([]netip.Addr, error) {
++	return r.LookupIP(c, h)
++}
++func (r *goConnectTestResolver) LookupIPv6(c context.Context, h string) ([]netip.Addr, error) {
++	return r.LookupIP(c, h)
++}
++func (r *goConnectTestResolver) ResolveECH(context.Context, string) ([]byte, error) { return nil, nil }
++func (r *goConnectTestResolver) ExchangeContext(context.Context, *dns.Msg) (*dns.Msg, error) {
++	return nil, nil
++}
++func (r *goConnectTestResolver) Invalid() bool    { return true }
++func (r *goConnectTestResolver) ClearCache()      {}
++func (r *goConnectTestResolver) ResetConnection() {}
++func TestGoConnectRuleResolverSelection(t *testing.T) {
++	oldD, oldN := resolver.DefaultResolver, resolver.DirectHostResolver
++	defer func() { resolver.DefaultResolver, resolver.DirectHostResolver = oldD, oldN }()
++	proxy, native := &goConnectTestResolver{}, &goConnectTestResolver{}
++	resolver.DefaultResolver, resolver.DirectHostResolver = proxy, native
++	if r, ok := goConnectRuleResolver("goconnect-proxy-addresses"); !ok || r != proxy {
++		t.Fatal("proxy DNS boundary")
++	}
++	if r, ok := goConnectRuleResolver("goconnect-native-addresses"); !ok || r != native {
++		t.Fatal("native DNS boundary")
++	}
++	if _, ok := goConnectRuleResolver("ordinary-user-rules"); ok {
++		t.Fatal("ordinary configurations opted in")
++	}
++}
++func TestGoConnectRuleResolverNeverUsesSystemFallback(t *testing.T) {
++	old := resolver.SystemResolver
++	fallback := &goConnectTestResolver{}
++	resolver.SystemResolver = fallback
++	defer func() { resolver.SystemResolver = old }()
++	if _, err := resolveGoConnectRuleIP(context.Background(), "service.example", nil); err == nil {
++		t.Fatal("missing resolver accepted")
++	}
++	failed := &goConnectTestResolver{fail: true}
++	if _, err := resolveGoConnectRuleIP(context.Background(), "service.example", failed); err == nil {
++		t.Fatal("failed resolver accepted")
++	}
++	if fallback.calls != 0 {
++		t.Fatal("DNS failure escaped to system resolver")
++	}
++}
++
++func TestGoConnectUDPDestinationKey(t *testing.T) {
++	old := subRules
++	defer func() { subRules = old }()
++	a := &C.Metadata{DstIP: netip.MustParseAddr("192.0.2.1"), DstPort: 443}
++	b := &C.Metadata{DstIP: netip.MustParseAddr("192.0.2.2"), DstPort: 443}
++	subRules = nil
++	if goConnectUDPKey("source", a) != "source" {
++		t.Fatal("ordinary UDP changed")
++	}
++	subRules = map[string][]C.Rule{"goconnect-udp-destinations": nil}
++	if goConnectUDPKey("source", a) == goConnectUDPKey("source", b) {
++		t.Fatal("destinations share policy")
++	}
++	if goConnectUDPKey("source", a) != goConnectUDPKey("source", a) {
++		t.Fatal("same target mapping unstable")
++	}
++	b.DstIP = a.DstIP
++	b.DstPort = 8443
++	if goConnectUDPKey("source", a) == goConnectUDPKey("source", b) {
++		t.Fatal("destination ports share policy")
++	}
++}

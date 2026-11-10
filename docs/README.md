@@ -1,6 +1,12 @@
 # 技术记录索引
 
+- [1.0.15 候选分流修复](ROUTING_MODE_FIX_2026-11-10.md) — Codex 与 Gemini 分工完成名单地址规则和公司域名预检修复，隔离回归通过；原生安装、TUN 与 OTA 验收待单独窗口。
+- [修复前分流模式审查](ROUTING_MODE_AUDIT_2026-11-10.md) — 保留独立审查、复现矩阵及模式边界。
+
+- [1.0.15 / build 75 源码候选：更新安装空闲核验与 fake-IP 冲突修复](UPDATE_IDLE_AND_FAKE_IP_FIX_2026-11-10.md) — 未安装、未发布；正式版仍为 1.0.14 / 74。
+
 - [1.0.14 发布说明（浏览器本地网络权限兼容）](RELEASE_1.0.14.md)；[签名、OTA 与公开发布记录](PUBLISH_1.0.14_2026-11-10.md)；[DNS 与浏览器原生验收](DNS_BROWSER_COMPATIBILITY_2026-11-09.md)。
+
 - [1.0.13 发布说明（更新弹窗期间的连接心跳）](RELEASE_1.0.13.md)；[签名、原生与 OTA 发布记录](PUBLISH_1.0.13_2026-11-09.md)。
 - [1.0.12 发布说明（副线重复重连与白名单 DNS）](RELEASE_1.0.12.md)；[发布与验收记录](PUBLISH_1.0.12_2026-11-09.md)；[socket 清理](COMPANY_RECONNECT_SOCKET_2026-11-09.md)；[DNS 模式边界](WHITELIST_DNS_BOUNDARY_2026-11-09.md)。
 
@@ -51,3 +57,30 @@
 历史发布、故障和验收记录保留原路径及其当时的证据范围；不能据此推断当前运行状态。源码候选版本见根目录 VERSION.json，保留包版本见本机 dist/releases.json。
 
 - [双 VPN 功能测试版与单独窗口验收](DUAL_CONNECTION_INTEGRATED_TEST_2026-11-07.md)
+
+## 工作区合并保留的资料
+
+- [直连地址文件导入与导出](DIRECT_ADDRESS_IMPORT.md)
+- [工作区合并记录](WORKSPACE_CONSOLIDATION_2026-11-08.md)
+
+以下为原开发区的历史记录，安装、发布和已知限制以对应日期及当前发布记录为准：
+
+- [Agy 调用诊断与限定源码复测](AGY_DIAGNOSTIC_2026-11-07.md)
+- [HY2 会话统计与公网出口 IP · 2026-10-31](HY2_METRICS_AND_PUBLIC_IP_2026-10-31.md)
+- [2026-10-21 15:02 掉线与会话凭据拒绝](INCIDENT_2026-10-21_COOKIE_REJECTED.md)
+- [按线路记录本机流量 · 2026-11-05](PROFILE_TRAFFIC_HISTORY_2026-11-05.md)
+- [GitHub 0.11.16 预发布记录（2026-11-05）](PUBLISH_0.11.16_2026-11-05.md)
+- [GoConnect 0.11.17 / build 57 安装与发布记录](PUBLISH_0.11.17_2026-11-06.md)
+- [GoConnect 1.0.1 发布与安装验收](PUBLISH_1.0.1_2026-11-06.md)
+- [GoConnect 1.0.2 发布验收](PUBLISH_1.0.2_2026-11-06.md)
+- [GoConnect 1.0.3 更新状态修复与发布验收](PUBLISH_1.0.3_2026-11-06.md)
+- [GoConnect 1.0.4 菜单栏宽度修正与发布](PUBLISH_1.0.4_2026-11-06.md)
+- [GoConnect 1.0.5 连接修复及紧凑菜单栏发布](PUBLISH_1.0.5_2026-11-06.md)
+- [GoConnect 1.0.6 设置快捷入口发布](PUBLISH_1.0.6_2026-11-06.md)
+- [GoConnect 1.0.7 / build 67 发布验收（2026-11-06）](PUBLISH_1.0.7_2026-11-06.md)
+- [套餐用量改为手动刷新（2026-11-01）](QUOTA_MANUAL_REFRESH_2026-11-01.md)
+- [2026-10-21 UDP 复验与 TLS/CSTP 对照](UDP_DTLS_REPAIR_2026-10-21.md)
+- [浅色精密与按线路流量统计：隔离 UI 验收 · 2026-11-06](UI_ACCEPTANCE_2026-11-06.md)
+- [浅色精密前端重构 · 2026-11-05](UI_LIGHT_PRECISION_2026-11-05.md)
+- [新增线路草稿布局修复 · 2026-10-27](UI_NEW_PROFILE_LAYOUT_FIX_2026-10-27.md)
+- [GoConnect 前端设计升级评估](UI_UPGRADE_ASSESSMENT_2026-11-05.md)

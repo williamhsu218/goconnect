@@ -117,8 +117,29 @@ def embed(source, destination):
         subprocess.run([INSTALL_NAME_TOOL, *dependencies, str(destination)], check=True, capture_output=True)
     return destination
 
-for name in ("openconnect", "mihomo"):
-    embed(Path(shutil.which(name)), bin_dir / name)
+embed(Path(shutil.which("openconnect")), bin_dir / "openconnect")
+from build_mihomo import digest as source_digest, load_lock as load_mihomo_lock
+mihomo_build = Path(os.environ["GOCONNECT_MIHOMO_BUILD"]).resolve()
+mihomo = Path(os.environ["GOCONNECT_MIHOMO_BIN"]).resolve()
+if not mihomo.is_relative_to(WORK) or not mihomo_build.is_relative_to(WORK):
+    raise RuntimeError("Patched Mihomo must come from this temporary build")
+mihomo_lock, mihomo_patch = load_mihomo_lock(ROOT / "script/mihomo.lock.json")
+mihomo_source = json.loads((mihomo_build / "source.json").read_text())
+if (mihomo_source["unsignedBinarySHA256"] != source_digest(mihomo)
+        or mihomo_source["patchSHA256"] != mihomo_lock["patchSHA256"]
+        or mihomo_source["sha256"] != mihomo_lock["sha256"]
+        or mihomo_source["version"] != mihomo_lock["buildVersion"]
+        or mihomo_lock["buildVersion"] not in run(mihomo, "-v")):
+    raise RuntimeError("Patched Mihomo provenance/capability mismatch")
+embed(mihomo, bin_dir / "mihomo")
+mihomo_license = licenses / ("mihomo-" + mihomo_lock["buildVersion"])
+mihomo_license.mkdir()
+shutil.copy2(mihomo_build / "source.json", mihomo_license / "source.json")
+shutil.copy2(mihomo_build / ("mihomo-" + mihomo_lock["version"]) / "LICENSE", mihomo_license / "LICENSE")
+shutil.copy2(ROOT / "script/build_mihomo.py", mihomo_license / "build_mihomo.py")
+shutil.copy2(ROOT / "script/mihomo.lock.json", mihomo_license / "mihomo.lock.json")
+(mihomo_license / "patches").mkdir()
+shutil.copy2(mihomo_patch, mihomo_license / "patches" / mihomo_patch.name)
 ca = Path(run("brew", "--prefix")) / "etc/ca-certificates/cert.pem"
 shutil.copy2(ca, share_dir / "cacert.pem")
 
@@ -140,7 +161,7 @@ while modules_raw.strip():
             if item.is_file() and item.name.startswith(("LICENSE", "COPYING", "NOTICE")):
                 shutil.copy2(item, target / item.name)
 metadata = {"openconnect": run(shutil.which("openconnect"), "--version").splitlines()[0],
-            "mihomo": run(shutil.which("mihomo"), "-v").splitlines()[0], "goModules": modules,
+            "mihomo": run(mihomo, "-v").splitlines()[0], "goModules": modules,
             "sources": ["https://gitlab.com/openconnect/openconnect", "https://github.com/MetaCubeX/mihomo", "https://git.zx2c4.com/wireguard-go", "https://github.com/google/gvisor"]}
 metadata["sparkle"] = {"version": updates["sparkleVersion"], "sourceURL": updates["sparkleSourceURL"], "sourceSHA256": updates["sparkleSourceSHA256"]}
 (licenses / "components.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n")

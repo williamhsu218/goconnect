@@ -55,8 +55,8 @@ print(output)
 PY
 )" || exit 2
 fi
-for tool in swift go python3 brew openconnect mihomo; do
-  command -v "$tool" >/dev/null || { echo "Missing $tool. Install Xcode and run: brew install go openconnect mihomo" >&2; exit 1; }
+for tool in swift go python3 brew openconnect; do
+  command -v "$tool" >/dev/null || { echo "Missing $tool. Install Xcode and run: brew install go openconnect" >&2; exit 1; }
 done
 python3 script/version.py --check
 export MACOSX_DEPLOYMENT_TARGET="$(python3 script/version.py --field deploymentTarget)"
@@ -83,6 +83,9 @@ export GOCONNECT_OUTPUT_DIR="$WORK/package"
 export GOCONNECT_TRANSPORT_BIN_DIR="$WORK/transport-bin"
 export GOCONNECT_REGISTER_APP=0
 export PYTHONDONTWRITEBYTECODE=1
+export GOCONNECT_MIHOMO_BUILD="$WORK/mihomo-build"
+export GOCONNECT_MIHOMO_BIN="$GOCONNECT_MIHOMO_BUILD/mihomo"
+python3 script/build_mihomo.py --work "$GOCONNECT_MIHOMO_BUILD" --output "$GOCONNECT_MIHOMO_BIN"
 SWIFT_BUILD_ARGS=(--build-system native --sdk "$(xcrun --sdk macosx --show-sdk-path)" --scratch-path "$WORK/swift")
 SWIFT_TEST_ARGS=("${SWIFT_BUILD_ARGS[@]}")
 GO_BUILD_ARGS=(-trimpath)
@@ -97,6 +100,8 @@ if [[ "$VERIFY" == 1 ]]; then
   python3 script/test_yunyoo_subscription_service.py
   python3 script/test_signing.py
   python3 script/test_prepare_update.py
+  python3 script/test_build_mihomo.py
+  python3 script/test_prepare_release_sources.py
   swift test "${SWIFT_TEST_ARGS[@]}"
   (cd Transport && go test -race -timeout 60s ./...)
 fi
@@ -119,7 +124,7 @@ fi
 /usr/bin/codesign --verify --deep --strict "$APP"
 if [[ "$VERIFY" == 1 ]]; then
   python3 script/check_runtime.py "$APP"
-  (cd Transport && GOCONNECT_TEST_RUNTIME="$APP/Contents/Resources/Runtime" go test -count=1 -race -v -timeout 60s ./cmd/goconnect-transport -run "TestLive")
+  (cd Transport && GOCONNECT_TEST_RUNTIME="$APP/Contents/Resources/Runtime" go test -count=1 -race -v -timeout 90s ./cmd/goconnect-transport -run "TestLive")
   (cd Transport && GOCONNECT_TEST_RUNTIME="$APP/Contents/Resources/Runtime" go test -count=1 -race -v -timeout 180s ./integration)
 fi
 if [[ -n "$EXPORT_DIR" ]]; then

@@ -85,7 +85,7 @@ final class AppStore {
     var accessTitle: String { configuration.routingMode.title }
     var usesCompanyRoutes: Bool { configuration.activeConnection.usesCompanyRoutes }
     var accessExplanation: String { configuration.routingMode.explanation }
-    let networkService = NetworkServiceClient()
+    let networkService: NetworkServiceClient
     let keychain = KeychainStore()
     let nodeLatency: NodeLatencyStore
     @ObservationIgnored private var legacyYunyooUsage: YunyooUsageStore?
@@ -104,7 +104,8 @@ final class AppStore {
 
     init(dataDirectory: URL? = nil, diagnostics: FaultDiagnostics = .shared, refreshRuntime: Bool = true,
          transportClient: TransportClient? = nil, routeClient: RouteClient? = nil, publicIPChecker: PublicIPChecker? = nil,
-         yunyooUsageStore: YunyooUsageStore? = nil) {
+         yunyooUsageStore: YunyooUsageStore? = nil, networkServiceClient: NetworkServiceClient? = nil) {
+        self.networkService = networkServiceClient ?? NetworkServiceClient()
         self.publicIPChecker = publicIPChecker ?? PublicIPChecker()
         self.transport = transportClient ?? TransportClient(); self.route = routeClient ?? RouteClient()
         self.diagnostics = diagnostics
@@ -178,8 +179,11 @@ final class AppStore {
         RunLoop.main.add(companyTimer!, forMode: .common)
         if refreshRuntime { refreshEnvironment() }
     }
+    private var updateNetworkRuntimeActive: Bool {
+        busy || transport.isRunning || route.isRunning || company.isRunning || company.busy || companyTransport.isRunning || recoveryRequired
+    }
     var updateSafetyState: UpdateSafetyState {
-        UpdateSafetyState(connectionOrServiceActive: busy || transport.isRunning || route.isRunning || company.isRunning || company.busy || companyTransport.isRunning || networkService.status.busy || recoveryRequired,
+        UpdateSafetyState(connectionOrServiceActive: updateNetworkRuntimeActive || networkService.blocksUpdateInstallation,
                           hasUnsavedDraft: profileDraft != nil || companyDraftOpen, isTestingNodes: nodeLatency.isRunning,
                           isUpdatingSubscriptions: subscriptionWorking,
                           isMaintainingService: networkService.working || phase == "serviceMaintenance")
@@ -193,16 +197,44 @@ final class AppStore {
     }
     /// Called only after the user confirms installation of the fully downloaded update.
     /// Keep the existing teardown path and wait for its actual completion before quitting.
-    func prepareForUpdateInstallation() async -> Bool {
+    func prepareForUpdateInstallation(timeout: Duration = .seconds(20),
+                                      servicePollInterval: Duration = .seconds(1)) async -> Bool {
+        guard !Task.isCancelled, timeout > .zero else { return false }
         if let reason = updateSafetyState.preparationBlockingReason {
             show(reason, error: true)
             return false
         }
-        if updateSafetyState.connectionOrServiceActive { disconnect() }
-        for _ in 0..<200 {
+        let clock = ContinuousClock(), deadline = ContinuousClock.now.advanced(by: timeout)
+        // Do not trust a diagnostic read made while the old session was active.
+        // If preparation fails, installation/quit remains protected until a new
+        // trusted read confirms idle; unknown/unauthorized replies are not idle.
+        networkService.requireIdleConfirmation()
+        if updateNetworkRuntimeActive { disconnect() }
+        while clock.now < deadline {
             guard !Task.isCancelled else { return false }
-            if updateSafetyState.blockingReason == nil { return true }
-            do { try await Task.sleep(for: .milliseconds(100)) }
+            if let reason = updateSafetyState.preparationBlockingReason {
+                show(reason, error: true)
+                return false
+            }
+            let pause: Duration
+            if updateNetworkRuntimeActive {
+                pause = .milliseconds(100) // Local teardown only; no helper spawning.
+            } else {
+                let remaining = clock.now.duration(to: deadline)
+                guard let current = await networkService.refreshStatus(timeout: min(.seconds(5), remaining)),
+                      !Task.isCancelled, clock.now < deadline else { return false }
+                if current.confirmsIdleForUpdate {
+                    return updateSafetyState.blockingReason == nil
+                }
+                guard current.ready && current.busy else {
+                    show("无法确认本机网络服务已空闲，已暂停安装；请检测环境后重试。", error: true)
+                    return false
+                }
+                // A worker may still be unwinding after its GUI client exits.
+                // Poll serially at most once a second in production, not at 10 Hz.
+                pause = max(.milliseconds(1), servicePollInterval)
+            }
+            do { try await Task.sleep(for: min(pause, clock.now.duration(to: deadline))) }
             catch { return false }
         }
         show("VPN 或网络服务尚未安全停止，已暂停安装；可检查诊断后重试。", error: true)

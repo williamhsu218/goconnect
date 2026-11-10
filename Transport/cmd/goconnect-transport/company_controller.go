@@ -117,7 +117,7 @@ func validateCompanyReservation(r routeRequest, local []localNetworkRoute, ts ta
 			continue
 		}
 		for _, s := range p.Domains {
-			if domainOverlap(s, d.Domain) {
+			if directDomainOverlap(s, d) {
 				return errors.New("company scope conflicts with direct domain")
 			}
 		}
@@ -145,6 +145,14 @@ func domainOverlap(a, b string) bool {
 	a = strings.TrimSuffix(strings.ToLower(a), ".")
 	b = strings.TrimSuffix(strings.ToLower(b), ".")
 	return a == b || strings.HasSuffix(a, "."+b) || strings.HasSuffix(b, "."+a)
+}
+func directDomainOverlap(companySuffix string, d domainRule) bool {
+	if d.IncludeSubdomains {
+		return domainOverlap(companySuffix, d.Domain)
+	}
+	companySuffix = strings.TrimSuffix(strings.ToLower(companySuffix), ".")
+	domain := strings.TrimSuffix(strings.ToLower(d.Domain), ".")
+	return domain == companySuffix || strings.HasSuffix(domain, "."+companySuffix)
 }
 
 type companyBackend struct {
@@ -708,12 +716,24 @@ func (g *companyGate) configure(config map[string]any) {
 	rules := config["rules"].([]string)
 	companyRules := []string{}
 	for _, scope := range g.reservation.Networks {
+		// Mihomo skips UDP-incompatible adapters during matching. Reject UDP
+		// explicitly so the TCP-only company gate cannot fall through to a
+		// public/default exit, including after deferred address resolution.
+		companyRules = append(companyRules, "AND,((NETWORK,UDP),(IP-CIDR,"+scope+",no-resolve)),REJECT")
 		companyRules = append(companyRules, "IP-CIDR,"+scope+",CompanyGate,no-resolve")
 	}
 	for _, domain := range g.reservation.Domains {
+		companyRules = append(companyRules, "AND,((NETWORK,UDP),(DOMAIN-SUFFIX,"+domain+")),REJECT")
 		companyRules = append(companyRules, "DOMAIN-SUFFIX,"+domain+",CompanyGate")
 	}
 	config["rules"] = append(companyRules, rules...)
+	if subRules, ok := config["sub-rules"].(map[string][]string); ok {
+		for _, name := range []string{nativeAddressRules, proxyAddressRules} {
+			if rules, exists := subRules[name]; exists {
+				subRules[name] = append(append([]string(nil), companyRules...), rules...)
+			}
+		}
+	}
 	sniff := config["sniffer"].(map[string]any)
 	sniff["skip-dst-address"] = g.reservation.Networks
 	skipped := make([]string, 0, len(g.reservation.Domains))

@@ -1,6 +1,8 @@
 # 从源码构建
 
-本说明面向熟悉终端的 macOS 用户，适用于已集成更新器的正式源码。当前正式版对应 [v1.0.7 tag](https://github.com/williamhsu218/goconnect/tree/v1.0.7)；先检出目标版本，再执行本文命令。项目由 SwiftUI 界面和 Go 网络组件组成。
+本说明面向熟悉终端的 macOS 用户，适用于已集成更新器的源码。当前正式版对应 [v1.0.15 tag](https://github.com/williamhsu218/goconnect/tree/v1.0.15)；复核正式版时先检出该 tag，再执行本文命令。项目由 SwiftUI 界面和 Go 网络组件组成。
+
+本版源码为 **1.0.15 / build 75**，包含更新安装空闲状态与名单 DNS 地址冲突修复，分流审查后的域名/IP 规则匹配修复，以及工作区原先保留的未发布直连地址导入功能。构建与安装、发布的实际结果见对应发布记录；正式/回滚包仍以 `dist/releases.json` 为准。普通构建不会替换它们。
 
 ## 准备工具
 
@@ -8,10 +10,14 @@
 
 ```sh
 xcode-select --install
-brew install go openconnect mihomo
+brew install go openconnect
 ```
 
 当前检查环境：Apple Silicon、macOS 27、Swift 6.4、Go 1.26.6。Homebrew 的组件版本会变化；打包结果会记录实际版本和最低 macOS 要求。较老系统或 Intel 构建需要单独验证。
+
+本版使用 `script/mihomo.lock.json` 锁定 Mihomo v1.19.30 源码归档和 GoConnect 补丁的 SHA-256，由 `script/build_mihomo.py` 在临时目录编译为 `v1.19.30-goconnect1`（`with_gvisor`）。名单模式的按应用 DNS 地址重匹配依赖该补丁，打包器拒绝替换成未修复的本机/Homebrew 内核。源码、补丁、构建配方及许可证随包记录，并纳入第三方源码附件；详见 [分流修复记录](ROUTING_MODE_FIX_2026-11-10.md)。v1.0.14 tag 使用其当时的 Homebrew 内核，不包含此修复。
+
+Sparkle、Go 模块和Mihomo 源码有版本及完整性约束，但 OpenConnect 和其动态依赖仍取自本机安装环境，尚不是完整锁定的可复现构建。相同源码重新打包不保证与正式 ZIP 逐字节一致；依赖或工具链升级后须重新执行适用检查，不能复用旧版本的验收结论。
 
 当前构建脚本显式使用本机 macOS SDK 和 SwiftPM native 后端。Xcode 27 的默认后端在本项目中会把部署目标写成二进制的 SDK 版本，导致系统使用旧版控件外观；native 后端可正确记录 SDK 27 并启用 Liquid Glass。native 后端当前有弃用提示，升级工具链时需重新核对 `LC_BUILD_VERSION` 和实际窗口外观，再迁移构建方式。
 
@@ -20,7 +26,7 @@ brew install go openconnect mihomo
 ## 构建应用
 
 ```sh
-git clone --branch v1.0.7 --depth 1 https://github.com/williamhsu218/goconnect.git
+git clone --branch v1.0.15 --depth 1 https://github.com/williamhsu218/goconnect.git
 cd goconnect
 ./script/build_and_run.sh --build-only
 ```
@@ -67,7 +73,7 @@ python3 script/release_artifacts.py clean --apply
 ./script/build_and_run.sh --verify
 ```
 
-`--verify` 运行构建/清理边界回归测试、Swift 测试、Go race 检查、完整打包、签名及动态依赖校验，以及使用内置组件的隔离集成测试。它不启动 GUI，不安装特权服务，也不主动改变系统路由。
+`--verify` 从校验后的源码应用内核补丁，运行其解析器边界测试、构建/清理边界回归、Swift 测试、Go race 检查、完整打包、签名及动态依赖校验，以及使用包内内核的隔离集成测试（含 DNS/CIDR/LAN/公司阻断、TCP/UDP/IPv6/TLS）。它不启动 GUI，不安装特权服务，也不主动改变系统路由。
 
 只检查源码：
 
