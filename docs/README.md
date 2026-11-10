@@ -1,5 +1,6 @@
 # 技术记录索引
 
+- [1.0.14 发布说明（浏览器本地网络权限兼容）](RELEASE_1.0.14.md)；[签名、OTA 与公开发布记录](PUBLISH_1.0.14_2026-11-10.md)；[DNS 与浏览器原生验收](DNS_BROWSER_COMPATIBILITY_2026-11-09.md)。
 - [1.0.13 发布说明（更新弹窗期间的连接心跳）](RELEASE_1.0.13.md)；[签名、原生与 OTA 发布记录](PUBLISH_1.0.13_2026-11-09.md)。
 - [1.0.12 发布说明（副线重复重连与白名单 DNS）](RELEASE_1.0.12.md)；[发布与验收记录](PUBLISH_1.0.12_2026-11-09.md)；[socket 清理](COMPANY_RECONNECT_SOCKET_2026-11-09.md)；[DNS 模式边界](WHITELIST_DNS_BOUNDARY_2026-11-09.md)。
 
