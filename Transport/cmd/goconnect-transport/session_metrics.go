@@ -116,6 +116,17 @@ func queryPublicIP(ctx context.Context, client *http.Client, endpoints []string)
 	return "", errors.New("public address unavailable")
 }
 
+func sessionSOCKSDialer(port uint16, token string) (contextDial, error) {
+	if port == 0 || len(token) < 32 || len(token) > 200 {
+		return nil, errors.New("invalid session proxy request")
+	}
+	dialer, err := proxy.SOCKS5("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port))), &proxy.Auth{User: "goconnect", Password: token}, &net.Dialer{Timeout: 5 * time.Second})
+	if err != nil {
+		return nil, err
+	}
+	return dialer.(proxy.ContextDialer).DialContext, nil
+}
+
 // Explicit SOCKS authentication ensures the result belongs to the selected
 // line, even in whitelist mode or when the detector's domain is a DIRECT rule.
 func publicIPCommand(parent context.Context) error {
@@ -126,11 +137,11 @@ func publicIPCommand(parent context.Context) error {
 	if json.NewDecoder(io.LimitReader(os.Stdin, 4096)).Decode(&r) != nil || r.Port == 0 || len(r.Token) < 32 || len(r.Token) > 200 {
 		return errors.New("invalid exit address request")
 	}
-	dialer, err := proxy.SOCKS5("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(int(r.Port))), &proxy.Auth{User: "goconnect", Password: r.Token}, &net.Dialer{Timeout: 5 * time.Second})
+	dial, err := sessionSOCKSDialer(r.Port, r.Token)
 	if err != nil {
 		return err
 	}
-	transport := &http.Transport{Proxy: nil, DialContext: dialer.(proxy.ContextDialer).DialContext, TLSHandshakeTimeout: 5 * time.Second}
+	transport := &http.Transport{Proxy: nil, DialContext: dial, TLSHandshakeTimeout: 5 * time.Second}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: 6 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	ctx, cancel := context.WithTimeout(parent, 13*time.Second)

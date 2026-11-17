@@ -14,7 +14,22 @@ public struct RouteCommandResult: Codable, Sendable {
     public var message: String?
 }
 
+public struct NetworkPathCheck: Codable, Equatable, Sendable {
+    public var result: String
+    public var durationMs: Int64
+}
+
+public struct NetworkPathHealth: Codable, Equatable, Sendable {
+    public var state: String
+    public var sampledAt: Int64
+    public var proxyHTTPS: NetworkPathCheck
+    public var proxyDoH: NetworkPathCheck
+    public var directHTTPS: NetworkPathCheck
+}
+
 public struct RouteSnapshot: Codable, Sendable {
+    public var failureCode: String?
+    public var pathHealth: NetworkPathHealth?
     public var company: CompanyRouteState?
     public var state: String
     public var message: String?

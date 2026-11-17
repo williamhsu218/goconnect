@@ -8,11 +8,15 @@ extension AppStore {
     }
 
     var connectionControlState: VPNControlState {
-        VPNControlState(phase: phase, passwordRequested: passwordRequested,
+        VPNControlState(phase: networkRecoveryActive ? "reconnecting" : phase, passwordRequested: passwordRequested,
                         testOnly: passwordRequested ? pendingPasswordTest : testOnly,
                         routingCheck: false,
                         hasUnmanagedApps: false)
     }
+    var connectionDisplayTitle: String {
+        connectionControlState == .connected && pathHealth?.state == "degraded" ? "线路降级" : connectionControlState.title
+    }
+
     var connectionControlSubtitle: String {
         switch connectionControlState {
         case .off:

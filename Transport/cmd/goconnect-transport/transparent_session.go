@@ -29,6 +29,7 @@ type transparentRuntime struct {
 	removeDirectory func(string) error
 	installDNS      func(*managedDNSPlan) (managedDNSLease, error)
 	checkDNS        func(uint16) error
+	monitorHealth   func(context.Context, routeRequest, originalNetwork) <-chan pathHealth
 }
 
 // These cores own a dual-stack internal TUN even on IPv4-only physical networks.
@@ -44,6 +45,7 @@ func defaultTransparentRuntime() transparentRuntime {
 		removeDirectory: os.RemoveAll,
 		installDNS:      installManagedDNS,
 		checkDNS:        managedDNSReady,
+		monitorHealth:   monitorPathHealth,
 		ticks:           func() (<-chan time.Time, func()) { t := time.NewTicker(time.Second); return t.C, t.Stop },
 		poll: func(c *controlFiles, client *http.Client, port uint16) error {
 			return c.refreshConnections(client, port)
@@ -59,7 +61,10 @@ func defaultTransparentRuntime() transparentRuntime {
 	}
 }
 
-var errSessionEnded = errors.New("session lease ended")
+var (
+	errSessionEnded           = errors.New("session lease ended")
+	errPhysicalNetworkChanged = errors.New("原网络已改变或暂不可用，旧连接已结束")
+)
 
 type transparentConnection struct {
 	port                       uint16
@@ -222,6 +227,10 @@ func (connection *transparentConnection) run(ctx context.Context) (result error)
 	lastHealth := time.Time{}
 	failures := 0
 	var uncertain healthTimeoutWindow
+	probeContext, stopProbes := context.WithCancel(ctx)
+	defer stopProbes()
+	var samples <-chan pathHealth
+	var health pathHealthTracker
 	for {
 		select {
 		case <-ctx.Done():
@@ -235,6 +244,20 @@ func (connection *transparentConnection) run(ctx context.Context) (result error)
 			exitLog.capture("core_exited", e, diagnosticDetails{ExitCode: &code})
 			trace("transparent.core_exited", int64(cmd.ProcessState.ExitCode()))
 			return errors.New("透明分流核心已退出")
+		case sample, open := <-samples:
+			if !open {
+				samples = nil
+				continue
+			}
+			sample = health.observe(sample)
+			c.snapshot.PathHealth = &sample
+			for _, leg := range []struct {
+				name  string
+				check pathCheck
+			}{{"proxy_https", sample.ProxyHTTPS}, {"proxy_doh", sample.ProxyDoH}, {"direct_https", sample.DirectHTTPS}} {
+				traceDetails("path_health."+leg.name, 0, diagnosticDetails{Stage: "path_health", Reason: leg.check.Result, DurationMS: leg.check.DurationMS})
+			}
+			c.write("ready")
 		case <-ticks:
 			if companyGate != nil {
 				companyGate.poll(c)
@@ -351,12 +374,11 @@ func (connection *transparentConnection) run(ctx context.Context) (result error)
 					c.snapshot.Message = "透明分流及系统 DNS 保护已启用；直连域名与内网保留原解析。"
 				}
 				c.write("ready")
+				if !r.ProbeOnly && ops.monitorHealth != nil {
+					samples = ops.monitorHealth(probeContext, r, original)
+				}
 			} else if ops.now().Sub(lastHealth) > 5*time.Second {
 				lastHealth = ops.now()
-				if (dnsLease != nil && (!dnsLease.intact() || ops.checkDNS(r.managedDNS.port) != nil)) || (companyGate != nil && !companyGate.dnsIntact()) {
-					exitLog.stage = "health_dns"
-					return exitLog.fail("dns_unavailable", errors.New("系统 DNS 保护失效，已停止本次连接并恢复原解析"))
-				}
 				deferTimeout := func(err error, details diagnosticDetails) bool {
 					if !readOnlyProbeTimeout(err) || !uncertain.retry(lastHealth, ops.now()) {
 						return false
@@ -371,18 +393,31 @@ func (connection *transparentConnection) run(ctx context.Context) (result error)
 					traceDetails("transparent.health_deferred", 0, details)
 					return true
 				}
+				dnsUnavailable := (dnsLease != nil && (!dnsLease.intact() || ops.checkDNS(r.managedDNS.port) != nil)) || (companyGate != nil && !companyGate.dnsIntact())
+				var networkErr error
 				if !r.ProbeOnly {
 					exitLog.stage = "health_network"
-					now, e := ops.network(true)
-					if e != nil {
-						if deferTimeout(e, diagnosticDetails{}) {
+					var now originalNetwork
+					now, networkErr = ops.network(true)
+					if errors.Is(networkErr, errNoScopedPhysicalNetwork) {
+						exitLog.capture("network_unavailable", networkErr, diagnosticDetails{ExpectedInterface: original.Interface})
+						return errPhysicalNetworkChanged
+					}
+					if networkErr == nil && now != original {
+						exitLog.capture("network_changed", nil, diagnosticDetails{ExpectedInterface: original.Interface, ActualInterface: now.Interface, GatewayChanged: now.Gateway != original.Gateway})
+						return errPhysicalNetworkChanged
+					}
+				}
+				if dnsUnavailable {
+					exitLog.stage = "health_dns"
+					return exitLog.fail("dns_unavailable", errors.New("系统 DNS 保护失效，已停止本次连接并恢复原解析"))
+				}
+				if !r.ProbeOnly {
+					if networkErr != nil {
+						if deferTimeout(networkErr, diagnosticDetails{}) {
 							continue
 						}
-						return exitLog.fail("network_query_failed", fmt.Errorf("原网络检查失败: %w", e))
-					}
-					if now != original {
-						exitLog.capture("network_changed", nil, diagnosticDetails{ExpectedInterface: original.Interface, ActualInterface: now.Interface, GatewayChanged: now.Gateway != original.Gateway})
-						return errors.New("原网络已改变，已停止本次连接；请重新连接")
+						return exitLog.fail("network_query_failed", fmt.Errorf("原网络检查失败: %w", networkErr))
 					}
 					exitLog.stage = "health_gateway"
 					ok, e := transparentGatewayReadyWith(r.Gateway, outerOriginal, routeCommand)

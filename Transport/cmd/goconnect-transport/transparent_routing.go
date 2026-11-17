@@ -18,7 +18,10 @@ import (
 
 type originalNetwork struct{ Interface, Gateway string }
 
-var errPhysicalNetwork = errors.New("当前公网由其它 VPN 接管或网关无效，请检查原网络。")
+var (
+	errPhysicalNetwork         = errors.New("当前公网由其它 VPN 接管或网关无效，请检查原网络。")
+	errNoScopedPhysicalNetwork = errors.New("找不到原网络接口")
+)
 
 type transparentRoute struct {
 	Prefix, Interface, Gateway string
@@ -89,10 +92,10 @@ func originalPhysicalNetworkWith(probe bool, interfaces func() ([]net.Interface,
 			}
 		}
 	}
-	if lastFailure != nil {
+	if diagnosticError(lastFailure).Reason == "system_timeout" {
 		return originalNetwork{}, fmt.Errorf("找不到原网络接口: %w", lastFailure)
 	}
-	return originalNetwork{}, errors.New("找不到原网络接口")
+	return originalNetwork{}, errors.Join(errNoScopedPhysicalNetwork, lastFailure)
 }
 
 func transparentCapturePrefixes(probe bool) []string {

@@ -111,6 +111,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private func refreshStatus() {
         guard active, let item = statusItem, let button = item.button else { return }
         let state = store.connectionControlState
+        let displayTitle = store.connectionDisplayTitle
+        let iconState = state == .connected && store.pathHealth?.state == "degraded" ? VPNControlState.failed : state
         let line = store.configuration.activeConnection.displayName
         let enabled = defaults.bool(forKey: MenuBarPreferences.showsNetworkRatesKey)
         let direction = defaults.string(forKey: MenuBarPreferences.rateDirectionKey)
@@ -126,18 +128,18 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         button.imageScaling = enabled ? .scaleNone : .scaleProportionallyDown
         item.length = enabled ? MenuBarRateImage.statusItemWidth : NSStatusItem.squareLength
         if enabled {
-            let key = state.rawValue + "|" + presentation.title
+            let key = iconState.rawValue + "|" + presentation.title
             if key != renderedRateKey {
-                button.image = MenuBarRateImage.image(icon: icon(for: state), lines: presentation.lines)
+                button.image = MenuBarRateImage.image(icon: icon(for: iconState), lines: presentation.lines)
                 renderedRateKey = key
             }
         } else {
             renderedRateKey = nil
-            button.image = icon(for: state)
+            button.image = icon(for: iconState)
         }
         let rates = presentation.accessibilityDescription.map { "\n当前线路 · " + $0 } ?? ""
-        button.toolTip = (Product.isNetworkTestApp ? "GoConnect 双 VPN 测试版 ·" : "GoConnect ·") + " \(state.title)\n\(line) · \(store.accessTitle)" + rates
-        button.setAccessibilityValue(state.title + (presentation.accessibilityDescription.map { "，" + $0 } ?? ""))
+        button.toolTip = (Product.isNetworkTestApp ? "GoConnect 双 VPN 测试版 ·" : "GoConnect ·") + " \(displayTitle)\n\(line) · \(store.accessTitle)" + rates
+        button.setAccessibilityValue(displayTitle + (presentation.accessibilityDescription.map { "，" + $0 } ?? ""))
         expiryTimer?.invalidate()
         expiryTimer = nil
         if let deadline = presentation.expiresAt {
@@ -157,7 +159,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let state = store.connectionControlState
         let policy = store.menuBarControlPolicy
         if Product.isNetworkTestApp { add("GoConnect 双 VPN 测试版", symbol: "testtube.2", enabled: false) }
-        add(state.title, symbol: state.symbol, enabled: false)
+        add(store.connectionDisplayTitle, symbol: state == .connected && store.pathHealth?.state == "degraded" ? "exclamationmark.circle.fill" : state.symbol, enabled: false)
         add(connection.displayName, symbol: "server.rack", enabled: false)
         add(connection.connectionSummary, enabled: false)
         do {

@@ -107,7 +107,7 @@ func (l *fixtureDNSLease) intact() bool { return l.installed && !l.removed && !l
 func (l *fixtureDNSLease) close() error { l.removed = true; return nil }
 
 func TestTransparentProductionLifecycleFaults(t *testing.T) {
-	for _, outcome := range []string{"disconnect", "lease-revoked", "cancel-during-route", "lease-revoked-during-route", "network-changed-before-ready", "ipv6-next-hop-changed", "capture-missing", "borrowed-direct-missing", "core-exit", "core-health-failed", "intermittent-health", "startup-timeout", "core-start-failed", "config-write-failed", "cleanup-no-effect", "cleanup-query-timeout", "directory-remove-failed", "core-stop-failed", "panic-after-ready", "dns-install-failed", "dns-owner-lost", "dns-listener-failed"} {
+	for _, outcome := range []string{"disconnect", "lease-revoked", "cancel-during-route", "lease-revoked-during-route", "network-changed-before-ready", "network-changed-after-ready", "network-lost-after-ready", "network-changed-cleanup-failed", "ipv6-next-hop-changed", "capture-missing", "borrowed-direct-missing", "core-exit", "core-health-failed", "intermittent-health", "startup-timeout", "core-start-failed", "config-write-failed", "cleanup-no-effect", "cleanup-query-timeout", "directory-remove-failed", "core-stop-failed", "panic-after-ready", "dns-install-failed", "dns-owner-lost", "dns-listener-failed"} {
 		t.Run(outcome, func(t *testing.T) {
 			controlDir := controlFixture(t)
 			control, err := openControl(filepath.Join(controlDir, "session.json"))
@@ -152,6 +152,7 @@ func TestTransparentProductionLifecycleFaults(t *testing.T) {
 			}
 			ops := defaultTransparentRuntime()
 			ops.command = network.command
+			ops.monitorHealth = nil // The fixture never contacts public probe endpoints.
 			ops.installDNS = func(*managedDNSPlan) (managedDNSLease, error) {
 				if outcome == "dns-install-failed" {
 					return nil, syscall.EIO
@@ -174,7 +175,11 @@ func TestTransparentProductionLifecycleFaults(t *testing.T) {
 				return tick.C, tick.Stop
 			}
 			ops.network = func(bool) (originalNetwork, error) {
-				if outcome == "network-changed-before-ready" {
+				if outcome == "network-lost-after-ready" && polls > 0 {
+					return originalNetwork{}, errNoScopedPhysicalNetwork
+				}
+				changedAfterReady := polls > 0 && (outcome == "network-changed-after-ready" || outcome == "network-changed-cleanup-failed")
+				if outcome == "network-changed-before-ready" || changedAfterReady {
 					return originalNetwork{Interface: "en1", Gateway: "192.168.2.1"}, nil
 				}
 				return originalNetwork{Interface: "en0", Gateway: "192.168.1.1"}, nil
@@ -225,6 +230,8 @@ func TestTransparentProductionLifecycleFaults(t *testing.T) {
 					cancel()
 				case "lease-revoked":
 					os.Remove(filepath.Join(controlDir, "lease"))
+				case "network-changed-cleanup-failed":
+					network.noDelete = true
 				case "ipv6-next-hop-changed":
 					network.gateway6 = "fe80::2%en0"
 				case "capture-missing":
@@ -259,8 +266,10 @@ func TestTransparentProductionLifecycleFaults(t *testing.T) {
 			switch outcome {
 			case "lease-revoked", "lease-revoked-during-route":
 				want = "lease_missing"
-			case "network-changed-before-ready":
+			case "network-changed-before-ready", "network-changed-after-ready", "network-changed-cleanup-failed":
 				want = "network_changed"
+			case "network-lost-after-ready":
+				want = "network_unavailable"
 			case "ipv6-next-hop-changed":
 				want = "gateway_changed"
 			case "capture-missing", "borrowed-direct-missing":
@@ -283,7 +292,7 @@ func TestTransparentProductionLifecycleFaults(t *testing.T) {
 			if first.Reason != want || final.Reason != want {
 				t.Fatalf("wrong first/final cause: %+v %+v, %v", first, final, result)
 			}
-			retained := outcome == "cleanup-no-effect" || outcome == "cleanup-query-timeout" || outcome == "directory-remove-failed" || outcome == "core-stop-failed"
+			retained := outcome == "network-changed-cleanup-failed" || outcome == "cleanup-no-effect" || outcome == "cleanup-query-timeout" || outcome == "directory-remove-failed" || outcome == "core-stop-failed"
 			_, statErr := os.Stat(dir)
 			if retained == os.IsNotExist(statErr) {
 				t.Fatal("wrong journal retention", outcome, statErr)
@@ -310,6 +319,13 @@ func TestTransparentProductionLifecycleFaults(t *testing.T) {
 			}
 			if snapshotErr != nil || snapshot.State != wantState {
 				t.Fatal("wrong terminal status", snapshot.State, wantState, snapshotErr)
+			}
+			wantCode := ""
+			if outcome == "network-changed-after-ready" || outcome == "network-lost-after-ready" {
+				wantCode = "physical_network_changed"
+			}
+			if snapshot.FailureCode != wantCode {
+				t.Fatalf("unexpected recovery signal for %s: %q", outcome, snapshot.FailureCode)
 			}
 			if !retained && len(state.Routes) != 0 {
 				t.Fatal("owned routes retained after clean exit", state)

@@ -379,6 +379,9 @@ func (c *controlFiles) finishSession(result *error) {
 	}
 	if *result != nil {
 		c.snapshot.Message = (*result).Error()
+		if errors.Is(*result, errPhysicalNetworkChanged) {
+			c.snapshot.FailureCode = "physical_network_changed"
+		}
 		c.write("failed")
 	} else {
 		c.write("stopped")

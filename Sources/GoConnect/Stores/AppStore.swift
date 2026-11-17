@@ -67,6 +67,9 @@ final class AppStore {
     var discardProfileChangesRequested = false
     var pendingProfilePage: Page?
     var routeSnapshot: RouteSnapshot?
+    private(set) var pathHealth: NetworkPathHealth?
+    private(set) var networkRecoveryActive = false
+    @ObservationIgnored private var networkRecoveryTask: Task<Void, Never>?
     var passwordRequested = false
     private(set) var pendingPasswordTest = false
     private var token = ""
@@ -126,6 +129,9 @@ final class AppStore {
         route.onSnapshot = { [weak self] snapshot in
             guard let self else { return }
             self.routeSnapshot = snapshot
+            if snapshot.state == "ready", ["authorizing", "connected", "reconnecting"].contains(self.phase), self.pathHealth != snapshot.pathHealth {
+                self.pathHealth = snapshot.pathHealth
+            }
             if let state = snapshot.company { self.company?.routeState(state) }
         }
         self.publicIPChecker.onResult = { [weak self] ip in
@@ -240,7 +246,7 @@ final class AppStore {
         show("VPN 或网络服务尚未安全停止，已暂停安装；可检查诊断后重试。", error: true)
         return false
     }
-    var busy: Bool { passwordRequested || networkService.working || !["idle", "failed"].contains(phase) }
+    var busy: Bool { networkRecoveryActive || passwordRequested || networkService.working || !["idle", "failed"].contains(phase) }
     func showTraffic(for id: UUID) {
         trafficProfileID = id
         navigate(to: .traffic)
@@ -262,7 +268,9 @@ final class AppStore {
         }
     }
     var statusSubtitle: String {
-        switch phase {
+        if networkRecoveryActive { return "正在等待原网络稳定并重新连接。你可以随时停止恢复。" }
+        if phase == "connected", pathHealth?.state == "degraded" { return "代理探测连续失败，可在诊断中查看各路径结果。" }
+        return switch phase {
         case "connected": accessExplanation
         case "reconnecting": "隧道暂时不可用，正在自动恢复；分流规则保持，可随时关闭连接。"
         case "testing": configuration.activeConnection.subscription == nil ? "临时隧道已建立，尚未接管任何 App 流量。" : "节点代理已就绪，尚未接管 App 流量；实际可达性需通过请求验证。"
@@ -439,25 +447,35 @@ final class AppStore {
         hasOtherRouter = false
     }
     func connect(test: Bool = false) {
-        guard !Product.isIsolatedTestApp else { show("此隔离测试包仅验收界面与配置，不接管系统网络。", error: true); return }
-        guard allowsOperationDuringUpdate() else { return }
-        if Product.isNetworkTestApp, let reason = networkService.testHostMessage { show(reason, error: true); networkService.refresh(); return }
-        guard !busy, !company.isRunning, !company.busy, !companyDraftOpen, profileDraft == nil else { return }
-        guard !recoveryRequired else { show("上次网络进程未能退出，已暂停重连。请导出诊断并重启 macOS 后再连接。", error: true); return }
-        guard !nodeLatency.isRunning else { show("请先停止节点测试，再连接 VPN。", error: true); return }
+        _ = startConnection(test: test, restoringNetwork: false)
+    }
+    @discardableResult
+    private func startConnection(test: Bool, restoringNetwork: Bool) -> Bool {
+        guard !Product.isIsolatedTestApp else { show("此隔离测试包仅验收界面与配置，不接管系统网络。", error: true); return false }
+        guard allowsOperationDuringUpdate() else { return false }
+        if Product.isNetworkTestApp, let reason = networkService.testHostMessage { show(reason, error: true); networkService.refresh(); return false }
+        let available = restoringNetwork ? networkRecoveryActive && ["idle", "failed"].contains(phase) && !networkService.working : !busy
+        guard available, !company.isRunning, !company.busy, !companyDraftOpen, profileDraft == nil else { return false }
+        guard !recoveryRequired else { show("上次网络进程未能退出，已暂停重连。请导出诊断并重启 macOS 后再连接。", error: true); return false }
+        guard !nodeLatency.isRunning else { show("请先停止节点测试，再连接 VPN。", error: true); return false }
         do {
             if configuration.activeConnection.subscription == nil { _ = try configuration.profile.validatedServer() }
-            else if selectedSubscriptionNode == nil { show("当前节点已不存在，请在订阅管理中重新选择。", error: true); page = .subscriptions; return }
-            guard localReady else { show("运行组件不完整，请重新运行项目构建脚本。", error: true); return }
+            else if selectedSubscriptionNode == nil { show("当前节点已不存在，请在订阅管理中重新选择。", error: true); page = .subscriptions; return false }
+            guard localReady else { show("运行组件不完整，请重新运行项目构建脚本。", error: true); return false }
             if !test { _ = try ApplicationRoutingSupport.routingPaths(for: configuration.routingApplications) }
 
             if configuration.activeConnection.companyRoutesEnabled && (configuration.activeConnection.subscription != nil || configuration.activeConnection.remoteNetworks.isEmpty) {
-                show("公司内网模式仅支持 AnyConnect，请先在线路配置中填写明确的公司网段。", error: true); return
+                show("公司内网模式仅支持 AnyConnect，请先在线路配置中填写明确的公司网段。", error: true)
+                return false
             }
             let secret = password.isEmpty && configuration.profile.rememberPassword ? (try keychain.read(configuration.profile.id) ?? "") : password
-            guard configuration.activeConnection.subscription != nil || !secret.isEmpty else { pendingPasswordTest = test; passwordRequested = true; return }
-            guard !secret.contains("\n"), !secret.contains("\r") else { show("密码不能包含换行。", error: true); return }
-            guard save() else { return }
+            guard configuration.activeConnection.subscription != nil || !secret.isEmpty else {
+                if !restoringNetwork { pendingPasswordTest = test; passwordRequested = true }
+                return false
+            }
+            guard !secret.contains("\n"), !secret.contains("\r") else { show("密码不能包含换行。", error: true); return false }
+            guard restoringNetwork ? configurationReadable : save() else { return false }
+            pathHealth = nil
             testOnly = test; routeReported = false; stopFailed = false; routeSnapshot = nil; connectedAt = nil; addresses = []; received = 0; sent = 0
             trafficHistory.endSession()
             resetSessionMetrics()
@@ -467,6 +485,9 @@ final class AppStore {
             token = UUID().uuidString + UUID().uuidString
             connectionGeneration = UUID()
             let attempt = connectionGeneration
+            let startingLine = configuration.activeConnection
+            let startingNode = selectedSubscriptionNode
+            let startingCompany = companyConfiguration
             phase = test ? "connecting" : "preparingService"
             show("正在准备透明 App 分流服务。")
             password = ""
@@ -481,9 +502,25 @@ final class AppStore {
                             companyReservation = try await CompanyGatewayResolver.reservation(companyConfiguration, configuration: configuration)
                         } else { companyReservation = nil }
                         guard connectionGeneration == attempt, phase == "preparingService" else { return }
-                        try await networkService.ensureReady()
+                        if restoringNetwork {
+                            guard await networkService.refreshStatus().map({ $0.ready && !$0.busy }) == true else {
+                                guard connectionGeneration == attempt else { return }
+                                phase = "failed"
+                                show("本机网络服务暂未就绪。", error: true)
+                                return
+                            }
+                        } else {
+                            try await networkService.ensureReady()
+                        }
                     }
                     guard connectionGeneration == attempt else { return }
+                    if restoringNetwork && (
+                        updateOperationBlocked || configuration.activeConnection != startingLine ||
+                        selectedSubscriptionNode != startingNode || companyConfiguration != startingCompany
+                    ) {
+                        phase = "failed"
+                        return
+                    }
                     guard phase == "preparingService" || phase == "connecting" else { finishStopping(); return }
                     phase = "connecting"
                     if let node = selectedSubscriptionNode { try transport.start(node: node, token: token) }
@@ -493,11 +530,16 @@ final class AppStore {
                     phase = "failed"; show(error.localizedDescription, error: true)
                 }
             }
-        } catch { phase = "failed"; show(error.localizedDescription, error: true) }
+            return true
+        } catch {
+            phase = "failed"; show(error.localizedDescription, error: true)
+            return false
+        }
     }
     func disconnect() {
         company?.primaryStopping()
         guard busy else { return }
+        cancelNetworkRecovery()
         if passwordRequested { passwordRequested = false; return }
         diagnostics.record(.disconnectRequested)
         stopFailed = false
@@ -507,7 +549,7 @@ final class AppStore {
         company?.primaryStopping()
         trafficHistory.endSession()
         publicIPChecker.stop(); publicIPChecking = false; publicIP = nil; publicIPCheckedAt = nil
-        trafficAvailable = false
+        trafficAvailable = false; pathHealth = nil
         connectionGeneration = UUID()
         transportRecovering = false
         phase = "stopping"; route.stop(); transport.stop()
@@ -516,7 +558,7 @@ final class AppStore {
     private func finishStopping() {
         if phase == "stopping", !route.isRunning, !transport.isRunning, !company.isRunning, !companyTransport.isRunning {
             phase = stopFailed ? "failed" : "idle"
-            if !stopFailed { show("已断开。") }
+            if !stopFailed && !networkRecoveryActive { show("已断开。") }
         }
     }
     func handle(_ event: TransportEvent) {
@@ -624,8 +666,9 @@ final class AppStore {
         if state == "ready" && phase == "authorizing" {
             routeReported = true
             phase = transportRecovering ? "reconnecting" : "connected"
-            show(configuration.routingMode.title + "已启用，应用无需配置代理。")
+            if !networkRecoveryActive { show(configuration.routingMode.title + "已启用，应用无需配置代理。") }
         } else if ["failed", "serviceFailed"].contains(state) && phase != "stopping" {
+            if state == "failed", beginNetworkRecovery() { return }
             if ["connected", "reconnecting", "protected"].contains(phase) { reportUnexpectedDisconnect(source: 2) }
             else { show(routeSnapshot?.message ?? "本机分流服务未能启动，请在诊断中重新检测服务和网络环境。", error: true) }
             stopFailed = true; stopAll()
@@ -639,6 +682,79 @@ final class AppStore {
             }
         }
     }
+    private func beginNetworkRecovery() -> Bool {
+        guard routeSnapshot?.failureCode == "physical_network_changed",
+              ["connected", "reconnecting"].contains(phase), !testOnly, !networkRecoveryActive,
+              !updateOperationBlocked, !recoveryRequired,
+              configuration.activeConnection.subscription != nil || configuration.profile.rememberPassword else { return false }
+        let original = configuration
+        let originalNode = selectedSubscriptionNode
+        let originalCompany = companyConfiguration
+        networkRecoveryActive = true
+        diagnostics.record(.networkRecoveryStarted)
+        stopFailed = false
+        stopAll()
+        show("检测到原网络变化，正在恢复当前线路。")
+        networkRecoveryTask = Task { [weak self] in
+            guard let self else { return }
+            let clock = ContinuousClock()
+            let deadline = clock.now.advanced(by: .seconds(50))
+            let delays: [Duration] = originalNode == nil ? [.zero] : [.zero, .seconds(2), .seconds(4)]
+            let restored = await NetworkRecovery.retryOriginalLine(until: deadline, delays: delays, waitForPath: { limit in
+                while self.phase == "stopping", !Task.isCancelled, clock.now < limit {
+                    do { try await clock.sleep(for: .milliseconds(100)) }
+                    catch { return false }
+                }
+                guard !self.recoveryRequired, !self.updateOperationBlocked,
+                      ["idle", "failed"].contains(self.phase), self.configuration == original,
+                      self.selectedSubscriptionNode == originalNode, self.companyConfiguration == originalCompany else { return false }
+                return await NetworkRecovery.waitForPhysicalPath(until: limit)
+            }, attempt: {
+                guard self.configuration == original, self.selectedSubscriptionNode == originalNode,
+                      self.companyConfiguration == originalCompany,
+                      !self.updateOperationBlocked, !self.recoveryRequired,
+                      self.startConnection(test: false, restoringNetwork: true) else { return .stop }
+                self.diagnostics.record(.networkRecoveryAttempt)
+                while !Task.isCancelled, clock.now < deadline {
+                    if self.phase == "connected" { return .connected }
+                    if self.phase == "failed" || self.phase == "idle" { return .retry }
+                    if self.recoveryRequired || self.updateOperationBlocked { return .stop }
+                    do { try await clock.sleep(for: .milliseconds(100)) }
+                    catch { return .stop }
+                }
+                return .stop
+            })
+            // An established route has its own first end-to-end sample. A slow
+            // probe must not destroy a locally valid connection.
+            if restored {
+                let verifyBy = min(deadline, clock.now.advanced(by: .seconds(13)))
+                while !Task.isCancelled, self.phase == "connected", self.pathHealth == nil, clock.now < verifyBy {
+                    do { try await clock.sleep(for: .milliseconds(100)) }
+                    catch { return }
+                }
+            }
+            guard !Task.isCancelled else { return }
+            self.networkRecoveryActive = false
+            self.networkRecoveryTask = nil
+            let connected = self.phase == "connected"
+            self.diagnostics.record(.networkRecoveryFinished, value: connected ? 1 : 0)
+            if connected {
+                self.show(self.pathHealth?.state == "reachable" ? "原线路已恢复，代理 HTTPS 与 DoH 均可用。" : "原线路已重建，公网可用性正在复核。")
+            } else {
+                if self.busy && self.phase != "stopping" { self.stopFailed = true; self.stopAll() }
+                if self.phase == "idle" { self.phase = "failed" }
+                self.show("未能自动恢复原线路，请检查网络后手动连接。", error: true)
+            }
+        }
+        return true
+    }
+
+    private func cancelNetworkRecovery() {
+        networkRecoveryTask?.cancel()
+        networkRecoveryTask = nil
+        networkRecoveryActive = false
+    }
+
     private func quarantineNetwork() {
         recoveryRequired = true
         let url = file.url.deletingLastPathComponent().appendingPathComponent("network-quarantine.json")

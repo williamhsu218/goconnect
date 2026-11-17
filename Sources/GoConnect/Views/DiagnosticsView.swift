@@ -69,6 +69,17 @@ struct DiagnosticsView: View {
                             Divider()
                             statusRow("网络接管", value: store.routeSnapshot?.captureMode == "transparent-routes" ? "系统路由 → TUN" : "暂无接管数据", good: nil)
                                 .padding(.vertical, 8)
+                            if let health = store.pathHealth {
+                                Divider()
+                                statusRow("代理 HTTPS", value: pathCheckDescription(health.proxyHTTPS), good: health.proxyHTTPS.result == "ok")
+                                    .padding(.vertical, 8)
+                                Divider()
+                                statusRow("代理 DoH", value: pathCheckDescription(health.proxyDoH), good: health.proxyDoH.result == "ok")
+                                    .padding(.vertical, 8)
+                                Divider()
+                                statusRow("原网络 HTTPS", value: pathCheckDescription(health.directHTTPS), good: health.directHTTPS.result == "ok")
+                                    .padding(.vertical, 8)
+                            }
                             if let snapshot = store.routeSnapshot {
                                 Divider()
                                 HStack {
@@ -220,6 +231,20 @@ struct DiagnosticsView: View {
             Button("清空记录", role: .destructive) { store.activity.removeAll() }
             Button("取消", role: .cancel) { }
         } message: { Text("如需保留本次记录，请先导出摘要。磁盘诊断日志不会删除。") }
+    }
+
+    private func pathCheckDescription(_ check: NetworkPathCheck) -> String {
+        let stage: String
+        switch check.result {
+        case "ok": stage = "可用"
+        case "connect": stage = "连接失败"
+        case "tls": stage = "TLS 握手失败"
+        case "response": stage = "未收到响应"
+        case "http_status": stage = "响应状态异常"
+        case "dns_response": stage = "DNS 答复无效"
+        default: return "无法检测"
+        }
+        return "\(stage) · \(check.durationMs) ms"
     }
 
     private func statusRow(_ title: String, value: String, good: Bool?) -> some View {

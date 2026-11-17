@@ -26,15 +26,18 @@ struct VPNConnectionCard: View {
     private var lineLocked: Bool { store.busy || state.isOn }
     private var lineName: String { store.configuration.activeConnection.displayName }
 
+    private var degraded: Bool { state == .connected && store.pathHealth?.state == "degraded" }
+
     private var statusColor: Color {
-        if state.needsAttention { return AppTheme.warning }
+        if state.needsAttention || degraded { return AppTheme.warning }
         if state == .connected { return AppTheme.success }
         return state == .off ? .secondary : AppTheme.accent
     }
 
     /// The badge shape distinguishes each kind of state without relying on its color.
     private var statusBadge: String? {
-        switch state {
+        if degraded { return "exclamationmark.circle.fill" }
+        return switch state {
         case .off: nil
         case .connected, .needsRestart, .interrupted, .failed: state.symbol
         case .reconnecting: "arrow.clockwise.circle.fill"
@@ -48,7 +51,7 @@ struct VPNConnectionCard: View {
     /// routing explanation is shown by ApplicationRoutingCard on the same page.
     private var stateExplanation: String? {
         switch state {
-        case .connected: nil
+        case .connected: degraded ? store.connectionControlSubtitle : nil
         case .off: canStart && !store.busy ? store.statusSubtitle : nil
         default: store.connectionControlSubtitle
         }
@@ -65,7 +68,7 @@ struct VPNConnectionCard: View {
     private var durationDetail: String {
         if metricsActive { return "会话活跃中" }
         switch state {
-        case .reconnecting: return "会话保留，恢复中"
+        case .reconnecting: return "恢复中"
         case .authorizing: return "分流准备中"
         case .disconnecting, .endingDiagnostic: return "会话结束中"
         case .interrupted: return "会话已中断"
@@ -143,7 +146,7 @@ struct VPNConnectionCard: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
-                    Text(state.title)
+                    Text(store.connectionDisplayTitle)
                         .font(.system(size: 28, weight: .semibold))
                         .fixedSize(horizontal: false, vertical: true)
                     if state.isWorking {

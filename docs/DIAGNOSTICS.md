@@ -91,3 +91,9 @@ SIGKILL、进程崩溃、断电或文件系统始终无法写入时，进程无�
 build 55 的历史验证包括 87 项 Swift 测试、Go race/真实组件集成、服务端权限与数据测试、无云悠浏览器会话的新进程导入，以及正式 App 的显示和刷新，当时 VPS 冷启动仍会独立同步。原 8 条线路及其规则保持，另一订阅及目标节点定义保持；仅目标订阅来源、更新时间和配额元数据更新。安装的 76 个普通文件和活动特权组件的 17 个文件均与当时的候选对应内容一致。build 56 已完成安装和同步端部署，Swift 91 项、服务端 9 项测试及真实手动刷新、过期授权恢复、超过五分钟无自动采集均通过，详见 [手动刷新验收记录](QUOTA_MANUAL_REFRESH_2026-11-01.md)。
 
 私有部署地址、授权资料和历史数据回滚材料保存在项目外私有归档，不能整目录公开。这里的安装与验证叙述为对应日期的历史记录；当前正式包和回滚包以 `dist/releases.json` 为准，数据回滚与应用包回滚分别处理。
+
+## 线路可用性与切网恢复
+
+- `path_health.proxy_https`、`path_health.proxy_doh`、`path_health.direct_https` 每 45 秒记录最近的结果和耗时。代理探测使用本次会话的认证 SOCKS 入口，原网络 HTTPS 绑定会话开始时确认的物理接口。HTTPS 探测用服务 IP，DoH 探测另外验证 TLS 和 DNS 响应。
+- 两次连续代理探测失败显示「线路降级」。下一次代理 HTTPS 与 DoH 同时成功时恢复可用状态。单次探测、目标站点抖动和已有的真正路由故障仍按各自层级处理。
+- `connection.network_recovery_started`、`connection.network_recovery_attempt` 和 `connection.network_recovery_finished` 用于核对恢复过程。自动恢复基于服务报告的原网络变化，要求上一会话完成清理，订阅最多尝试三次，使用已保存凭据的 AnyConnect 最多一次。

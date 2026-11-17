@@ -1,8 +1,8 @@
 # 从源码构建
 
-本说明面向熟悉终端的 macOS 用户，适用于已集成更新器的源码。当前正式版对应 [v1.0.16 tag](https://github.com/williamhsu218/goconnect/tree/v1.0.16)；复核正式版时先检出该 tag，再执行本文命令。项目由 SwiftUI 界面和 Go 网络组件组成。
+本说明面向熟悉终端的 macOS 用户，适用于已集成更新器的源码。当前正式版对应 [v1.0.17 tag](https://github.com/williamhsu218/goconnect/tree/v1.0.17)；复核正式版时先检出该 tag，再执行本文命令。项目由 SwiftUI 界面和 Go 网络组件组成。
 
-本版源码为 **1.0.16 / build 76**，新增 App 包外 Helper 与内置 CLI 的受限启动链覆盖（见 [实现和隔离验收](APP_CHILD_ROUTING_2026-11-10.md)）；最终安装和发布结果见对应发布记录。正式/回滚包仍以 `dist/releases.json` 为准，普通构建不替换它们。
+本版源码为 **1.0.17 / build 77**，新增代理健康检测和切网自动恢复（见 [发布说明](RELEASE_1.0.17.md)）；最终安装和发布结果见对应发布记录。正式/回滚包仍以 `dist/releases.json` 为准，普通构建不替换它们。
 
 ## 准备工具
 
@@ -26,7 +26,7 @@ Sparkle、Go 模块和 Mihomo 源码有版本及完整性约束，但 OpenConnec
 ## 构建应用
 
 ```sh
-git clone --branch v1.0.16 --depth 1 https://github.com/williamhsu218/goconnect.git
+git clone --branch v1.0.17 --depth 1 https://github.com/williamhsu218/goconnect.git
 cd goconnect
 ./script/build_and_run.sh --build-only
 ```
