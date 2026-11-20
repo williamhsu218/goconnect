@@ -36,9 +36,10 @@ type Policy struct {
 	Domains    []string
 	DNSServers []string
 
-	prefixes []netip.Prefix
-	domains  []string
-	dnsAddrs []netip.Addr
+	prefixes      []netip.Prefix
+	domains       []string
+	dnsAddrs      []netip.Addr
+	dnsPreference *dnsResolverPreference
 }
 
 // NewPolicy validates and constructs an isolated company split-tunnel policy instance.
@@ -128,12 +129,13 @@ func NewPolicy(cfg Policy) (*Policy, error) {
 	}
 
 	return &Policy{
-		Networks:   normNetworks,
-		Domains:    append([]string(nil), domains...),
-		DNSServers: normDNS,
-		prefixes:   prefixes,
-		domains:    domains,
-		dnsAddrs:   dnsAddrs,
+		Networks:      normNetworks,
+		Domains:       append([]string(nil), domains...),
+		DNSServers:    normDNS,
+		prefixes:      prefixes,
+		domains:       domains,
+		dnsAddrs:      dnsAddrs,
+		dnsPreference: &dnsResolverPreference{},
 	}, nil
 }
 

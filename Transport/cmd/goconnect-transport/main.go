@@ -65,6 +65,12 @@ func main() {
 		err = serviceDiagnostics()
 	case "service-status":
 		emit(serviceStatus())
+	case "recovery-path":
+		if len(os.Args) != 2 {
+			err = errors.New("unexpected recovery path argument")
+		} else {
+			err = reportRecoveryPath(ctx)
+		}
 	case "service-install":
 		if len(os.Args) != 3 {
 			err = errors.New("missing local user")

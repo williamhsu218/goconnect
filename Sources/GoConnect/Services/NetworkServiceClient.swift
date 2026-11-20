@@ -100,7 +100,7 @@ final class NetworkServiceClient {
                 result = NetworkServiceStatus(state: "notInstalled", message: "隔离测试包不访问正式服务。")
             } else {
                 if Product.isNetworkTestApp { try await assertTestHostAvailable() }
-                result = try await Self.boundedStatusRead(executable, reader: statusReader, timeout: timeout)
+                result = try await readServiceStatus(timeout: timeout)
             }
         } catch {
             guard !Task.isCancelled else { return nil }
@@ -118,11 +118,11 @@ final class NetworkServiceClient {
         working = true; generation += 1
         defer { working = false }
         try await assertTestHostAvailable()
-        status = try await Self.boundedStatusRead(executable, reader: statusReader, timeout: .seconds(5))
+        status = try await readServiceStatus()
         if status.ready && !forceInstall { return }
         guard !status.busy else { throw ServiceError("请先断开 VPN 或停止分流自检，再更新服务。") }
         try await authorize(arguments: ["service-install", String(getuid())])
-        status = try await Self.boundedStatusRead(executable, reader: statusReader, timeout: .seconds(5))
+        status = try await readServiceStatus()
         guard status.ready else { throw ServiceError("服务尚未就绪，请在系统设置中检查 GoConnect 后台项目，然后重新检测。") }
     }
 
@@ -131,10 +131,10 @@ final class NetworkServiceClient {
         working = true; generation += 1
         defer { working = false }
         try await assertTestHostAvailable()
-        status = try await Self.boundedStatusRead(executable, reader: statusReader, timeout: .seconds(5))
+        status = try await readServiceStatus()
         guard !status.busy else { throw ServiceError("请先结束测试版连接，再移除测试服务。") }
         try await authorize(arguments: ["service-uninstall"])
-        status = try await Self.boundedStatusRead(executable, reader: statusReader, timeout: .seconds(5))
+        status = try await readServiceStatus()
         guard status.state == "notInstalled" else { throw ServiceError("服务移除后仍能读取到安装信息，请重新检测。") }
     }
 
@@ -152,24 +152,39 @@ final class NetworkServiceClient {
         }
     }
 
-    nonisolated private static func boundedStatusRead(_ executable: URL, reader: @escaping StatusReader,
-                                                     timeout: Duration) async throws -> NetworkServiceStatus {
-        guard timeout > .zero else { throw ServiceError("读取本机服务状态超时。") }
-        let completion = StatusReadCompletion()
+    private func readServiceStatus(timeout: Duration = .seconds(5)) async throws -> NetworkServiceStatus {
+        let read = statusReader
+        let executable = executable
+        return try await Self.boundedRead(timeout: timeout, timeoutMessage: "读取本机服务状态超时。") {
+            try await read(executable)
+        }
+    }
+
+    nonisolated static func readRecoveryPath(_ executable: URL, timeout: Duration) async -> RecoveryNetworkPath? {
+        try? await boundedRead(timeout: timeout, timeoutMessage: "读取系统默认路由超时。") {
+            let data = try await readTransportReply(executable, command: "recovery-path", failure: "无法读取系统默认路由。")
+            return try JSONDecoder().decode(RecoveryNetworkPath.self, from: data)
+        }
+    }
+
+    nonisolated private static func boundedRead<Value: Sendable>(timeout: Duration, timeoutMessage: String,
+                                                                reader: @escaping @Sendable () async throws -> Value) async throws -> Value {
+        guard timeout > .zero else { throw ServiceError(timeoutMessage) }
+        let completion = TransportReadCompletion<Value>()
         let result = try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 completion.install(continuation)
                 completion.register(Task {
                     do {
                         try Task.checkCancellation()
-                        completion.finish(.success(try await reader(executable)))
+                        completion.finish(.success(try await reader()))
                     }
                     catch { completion.finish(.failure(error)) }
                 })
                 completion.register(Task {
                     do { try await Task.sleep(for: timeout) }
                     catch { return }
-                    completion.finish(.failure(ServiceError("读取本机服务状态超时。")))
+                    completion.finish(.failure(ServiceError(timeoutMessage)))
                 })
             }
         } onCancel: {
@@ -182,11 +197,16 @@ final class NetworkServiceClient {
     // Internal for subprocess regressions using a temporary fake helper. The
     // production caller always supplies the sealed Bundle Runtime executable.
     nonisolated static func readStatus(_ executable: URL) async throws -> NetworkServiceStatus {
-        let control = StatusProcessControl()
+        let data = try await readTransportReply(executable, command: "service-status", failure: "无法读取本机服务状态。")
+        return try JSONDecoder().decode(NetworkServiceStatus.self, from: data)
+    }
+
+    nonisolated private static func readTransportReply(_ executable: URL, command: String, failure: String) async throws -> Data {
+        let control = TransportReadProcess()
         let result = try await withTaskCancellationHandler {
             try await Task.detached {
                 let process = Process(), output = Pipe()
-                process.executableURL = executable; process.arguments = ["service-status"]
+                process.executableURL = executable; process.arguments = [command]
                 process.environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "en_US.UTF-8"]
                 process.standardInput = FileHandle.nullDevice
                 process.standardOutput = output; process.standardError = FileHandle.nullDevice
@@ -208,8 +228,8 @@ final class NetworkServiceClient {
                     throw ServiceError("本机服务状态回应过大。")
                 }
                 process.waitUntilExit()
-                guard process.terminationStatus == 0 else { throw ServiceError("无法读取本机服务状态。") }
-                return try JSONDecoder().decode(NetworkServiceStatus.self, from: data)
+                guard process.terminationStatus == 0 else { throw ServiceError(failure) }
+                return data
             }.value
         } onCancel: {
             control.cancel()
@@ -233,14 +253,14 @@ final class NetworkServiceClient {
 }
 
 /// A cancellation/timeout race that does not wait for an uncooperative reader.
-/// Production readers also terminate their own status-only child on cancellation.
-private final class StatusReadCompletion: @unchecked Sendable {
+/// Production readers terminate only their own read-only child on cancellation.
+private final class TransportReadCompletion<Value: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
-    private var result: Result<NetworkServiceStatus, Error>?
-    private var continuation: CheckedContinuation<NetworkServiceStatus, Error>?
+    private var result: Result<Value, Error>?
+    private var continuation: CheckedContinuation<Value, Error>?
     private var tasks: [Task<Void, Never>] = []
 
-    func install(_ continuation: CheckedContinuation<NetworkServiceStatus, Error>) {
+    func install(_ continuation: CheckedContinuation<Value, Error>) {
         lock.lock()
         if let result { lock.unlock(); continuation.resume(with: result) }
         else { self.continuation = continuation; lock.unlock() }
@@ -250,7 +270,7 @@ private final class StatusReadCompletion: @unchecked Sendable {
         if result != nil { lock.unlock(); task.cancel() }
         else { tasks.append(task); lock.unlock() }
     }
-    func finish(_ result: Result<NetworkServiceStatus, Error>) {
+    func finish(_ result: Result<Value, Error>) {
         lock.lock()
         guard self.result == nil else { lock.unlock(); return }
         self.result = result
@@ -262,7 +282,7 @@ private final class StatusReadCompletion: @unchecked Sendable {
     }
 }
 
-private final class StatusProcessControl: @unchecked Sendable {
+private final class TransportReadProcess: @unchecked Sendable {
     private let lock = NSLock()
     private var process: Process?
     private var cancelled = false
@@ -281,7 +301,7 @@ private final class StatusProcessControl: @unchecked Sendable {
         guard !cancelled else { lock.unlock(); return }
         cancelled = true; let process = process; lock.unlock()
         guard let process, process.isRunning else { return }
-        // Only the child launched for this read; never the installed service or VPN.
+        // Only the child launched for this read.
         process.terminate()
         DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(250)) {
             if process.isRunning { _ = kill(process.processIdentifier, SIGKILL) }

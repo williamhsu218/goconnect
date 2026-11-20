@@ -256,6 +256,9 @@ func (connection *transparentConnection) run(ctx context.Context) (result error)
 				check pathCheck
 			}{{"proxy_https", sample.ProxyHTTPS}, {"proxy_doh", sample.ProxyDoH}, {"direct_https", sample.DirectHTTPS}} {
 				traceDetails("path_health."+leg.name, 0, diagnosticDetails{Stage: "path_health", Reason: leg.check.Result, DurationMS: leg.check.DurationMS})
+				for index, attempt := range leg.check.attempts {
+					traceDetails("path_health."+leg.name+"_attempt", int64(index+1), attempt)
+				}
 			}
 			c.write("ready")
 		case <-ticks:

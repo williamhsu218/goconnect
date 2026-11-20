@@ -610,16 +610,16 @@ func TestAnswerLocalDNSListenerSemantics(t *testing.T) {
 }
 
 func TestResolveCompanyDNSUsesConfiguredBackup(t *testing.T) {
-	policy, err := NewPolicy(Policy{
-		Networks:   []string{"10.20.0.0/16"},
-		Domains:    []string{"corp.example"},
-		DNSServers: []string{"192.0.2.53", "192.0.2.54"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	for _, outcome := range []string{"unreachable", "stalled", "server failure", "name error", "outside approved networks"} {
 		t.Run(outcome, func(t *testing.T) {
+			policy, err := NewPolicy(Policy{
+				Networks:   []string{"10.20.0.0/16"},
+				Domains:    []string{"corp.example"},
+				DNSServers: []string{"192.0.2.53", "192.0.2.54"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
 			release := make(chan struct{})
 			defer close(release)
 			server := &memoryDNSServer{
@@ -665,5 +665,120 @@ func TestResolveCompanyDNSUsesConfiguredBackup(t *testing.T) {
 				t.Fatalf("backup did not answer within company DNS scope: %v, %v, %v", addrs, calls, err)
 			}
 		})
+	}
+}
+
+func TestCompanyDNSPreservesNegativeAnswers(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		code  dnsmessage.RCode
+		alias string
+		want  dnsmessage.RCode
+	}{
+		{"name error", dnsmessage.RCodeNameError, "", dnsmessage.RCodeNameError},
+		{"no A records", dnsmessage.RCodeSuccess, "", dnsmessage.RCodeSuccess},
+		{"missing alias target", dnsmessage.RCodeNameError, "target.corp.example.", dnsmessage.RCodeNameError},
+		{"out-of-scope alias", dnsmessage.RCodeNameError, "outside.example.", dnsmessage.RCodeServerFailure},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			policy, err := NewPolicy(Policy{
+				Networks:   []string{"10.20.0.0/16"},
+				Domains:    []string{"corp.example"},
+				DNSServers: []string{"192.0.2.53", "192.0.2.54"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			query := dnsmessage.Message{
+				Header:    dnsmessage.Header{ID: 123, RecursionDesired: true},
+				Questions: []dnsmessage.Question{{Name: mustName("app.corp.example."), Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}},
+			}
+			wire, err := query.Pack()
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := &memoryDNSServer{handler: func(_ int, req *dnsmessage.Message, _ []byte) ([]byte, error) {
+				reply := dnsmessage.Message{Header: dnsmessage.Header{ID: req.ID, Response: true, RCode: tc.code}, Questions: req.Questions}
+				if tc.alias != "" {
+					reply.Answers = []dnsmessage.Resource{{
+						Header: dnsmessage.ResourceHeader{Name: req.Questions[0].Name, Class: dnsmessage.ClassINET, TTL: 60},
+						Body:   &dnsmessage.CNAMEResource{CNAME: mustName(tc.alias)},
+					}}
+				}
+				return frameDNSMessage(t, reply), nil
+			}}
+			var decoded dnsmessage.Message
+			if err := decoded.Unpack(policy.Answer(context.Background(), server, wire)); err != nil {
+				t.Fatal(err)
+			}
+			if decoded.RCode != tc.want || decoded.ID != query.ID || len(server.recordedCalls()) != 1 {
+				t.Fatalf("incorrect scope or negative reply: code=%v calls=%v", decoded.RCode, server.recordedCalls())
+			}
+			if tc.alias != "" && tc.want == dnsmessage.RCodeNameError {
+				if len(decoded.Answers) != 1 || decoded.Answers[0].Header.Name != query.Questions[0].Name ||
+					decoded.Answers[0].Header.TTL > synthesizedAnswerTTL {
+					t.Fatalf("negative reply must preserve its approved alias: %v", decoded.Answers)
+				}
+				alias, ok := decoded.Answers[0].Body.(*dnsmessage.CNAMEResource)
+				if !ok || alias.CNAME != mustName(tc.alias) {
+					t.Fatalf("wrong alias in negative reply: %v", alias)
+				}
+			} else if len(decoded.Answers) != 0 {
+				t.Fatalf("expected an empty answer: %v", decoded.Answers)
+			}
+		})
+	}
+}
+
+func TestCompanyDNSReusesWorkingBackupAfterPrimaryFailure(t *testing.T) {
+	policy, err := NewPolicy(Policy{
+		Networks:   []string{"10.20.0.0/16"},
+		Domains:    []string{"corp.example"},
+		DNSServers: []string{"192.0.2.53", "192.0.2.54"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &memoryDNSServer{handler: func(index int, req *dnsmessage.Message, _ []byte) ([]byte, error) {
+		reply := dnsmessage.Message{Header: dnsmessage.Header{ID: req.ID, Response: true}, Questions: req.Questions}
+		if index == 0 {
+			reply.RCode = dnsmessage.RCodeServerFailure
+		} else {
+			reply.Answers = []dnsmessage.Resource{{
+				Header: dnsmessage.ResourceHeader{Name: req.Questions[0].Name, Class: dnsmessage.ClassINET},
+				Body:   &dnsmessage.AResource{A: [4]byte{10, 20, 0, 7}},
+			}}
+		}
+		return frameDNSMessage(t, reply), nil
+	}}
+	for _, host := range []string{"one.corp.example", "two.corp.example"} {
+		if _, err := policy.Resolve(context.Background(), server, host); err != nil {
+			t.Fatal(err)
+		}
+	}
+	calls := server.recordedCalls()
+	if len(calls) != 3 || calls[0].address != "192.0.2.53:53" || calls[1].address != "192.0.2.54:53" || calls[2].address != "192.0.2.54:53" {
+		t.Fatalf("a second lookup retried the recently failed primary: %v", calls)
+	}
+}
+
+func TestCompanyDNSBackupPreferenceExpiresAndIgnoresOutOfOrderFailure(t *testing.T) {
+	preference := &dnsResolverPreference{}
+	servers := []netip.Addr{netip.MustParseAddr("192.0.2.53"), netip.MustParseAddr("192.0.2.54")}
+	started := time.Unix(100, 0)
+	firstBackup := started.Add(time.Second)
+	preference.useBackup(servers[1], started, firstBackup)
+	// A competing request that observed the same outage cannot extend it.
+	preference.useBackup(servers[1], started.Add(time.Second), firstBackup.Add(2*time.Second))
+	if selected := preference.order(servers, firstBackup.Add(dnsPrimaryCooldown-time.Millisecond)); selected[0] != servers[1] {
+		t.Fatal("backup was not preferred during the cooldown", selected)
+	}
+	if selected := preference.order(servers, firstBackup.Add(dnsPrimaryCooldown)); selected[0] != servers[0] {
+		t.Fatal("primary order did not resume after the cooldown", selected)
+	}
+	preference.primaryAnswered(started.Add(30 * time.Second))
+	preference.useBackup(servers[1], started.Add(20*time.Second), started.Add(32*time.Second))
+	if selected := preference.order(servers, started.Add(33*time.Second)); selected[0] != servers[0] {
+		t.Fatal("a stale failure superseded a newer primary answer", selected)
 	}
 }

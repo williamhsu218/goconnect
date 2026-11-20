@@ -708,7 +708,7 @@ final class AppStore {
                 guard !self.recoveryRequired, !self.updateOperationBlocked,
                       ["idle", "failed"].contains(self.phase), self.configuration == original,
                       self.selectedSubscriptionNode == originalNode, self.companyConfiguration == originalCompany else { return false }
-                return await NetworkRecovery.waitForPhysicalPath(until: limit)
+                return await NetworkRecovery.waitForPhysicalPath(until: limit, runtime: self.transport.runtimeURL)
             }, attempt: {
                 guard self.configuration == original, self.selectedSubscriptionNode == originalNode,
                       self.companyConfiguration == originalCompany,

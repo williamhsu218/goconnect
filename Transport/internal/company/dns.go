@@ -17,13 +17,23 @@ import (
 const (
 	dnsPort              = "53"
 	maxResolveTimeout    = 8 * time.Second
+	dnsPrimaryCooldown   = 15 * time.Second
 	maxCNAMEHops         = 8
 	minDNSWireBytes      = 12
 	maxDNSWireBytes      = 4096
 	synthesizedAnswerTTL = 5
 )
 
-var errDNSNegativeAnswer = errors.New("negative company DNS answer")
+var errDNSUnavailable = errors.New("company DNS resolver unavailable")
+
+type dnsNegativeAnswer struct {
+	code    dnsmessage.RCode
+	aliases []dnsmessage.Resource
+}
+
+func (d *dnsNegativeAnswer) Error() string {
+	return fmt.Sprintf("negative company DNS answer: %v", d.code)
+}
 
 // Dialer abstracts connection establishment so company DNS resolution uses only injected TCP transport.
 type Dialer interface {
@@ -53,20 +63,36 @@ func (p *Policy) Resolve(ctx context.Context, d Dialer, host string) ([]netip.Ad
 	ctx, cancel := context.WithTimeout(ctx, maxResolveTimeout)
 	defer cancel()
 
+	started := time.Now()
+	primary := p.dnsAddrs[0]
+	servers := p.dnsPreference.order(p.dnsAddrs, started)
 	deadline, _ := ctx.Deadline()
 	var lastErr error
-	for i, server := range p.dnsAddrs {
+	primaryUnavailable := false
+	for i, server := range servers {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		// A stalled primary must leave time for the other approved resolvers.
 		// Keep a complete CNAME chain on the same resolver.
-		budget := time.Until(deadline) / time.Duration(len(p.dnsAddrs)-i)
+		budget := time.Until(deadline) / time.Duration(len(servers)-i)
 		attempt, stop := context.WithTimeout(ctx, budget)
 		addrs, retry, err := p.resolveOnServer(attempt, d, server, qname)
 		stop()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		if !retry {
+			var negative *dnsNegativeAnswer
+			if server == primary && (err == nil || errors.As(err, &negative)) {
+				p.dnsPreference.primaryAnswered(started)
+			} else if primaryUnavailable && err == nil {
+				p.dnsPreference.useBackup(server, started, time.Now())
+			}
 			return addrs, err
+		}
+		if server == primary {
+			primaryUnavailable = errors.Is(err, errDNSUnavailable)
 		}
 		lastErr = err
 	}
@@ -76,29 +102,52 @@ func (p *Policy) Resolve(ctx context.Context, d Dialer, host string) ([]netip.Ad
 func (p *Policy) resolveOnServer(ctx context.Context, d Dialer, server netip.Addr, host string) ([]netip.Addr, bool, error) {
 	currentName := host
 	visited := map[string]bool{host: true}
-	cnameHops := 0
+	var aliases []dnsmessage.Resource
 	for {
 		resp, err := queryTCPDNS(ctx, d, server, currentName)
 		if err != nil {
-			return nil, !errors.Is(err, errDNSNegativeAnswer), err
+			return nil, true, err
 		}
 
-		addrs, nextName, hops, err := p.evaluateAnswerChain(currentName, resp.Answers, visited, cnameHops)
+		addrs, nextName, links, err := p.evaluateAnswerChain(currentName, resp.Answers, visited)
 		if err != nil {
 			return nil, false, err
+		}
+		aliases = append(aliases, links...)
+		if resp.RCode == dnsmessage.RCodeNameError {
+			if len(addrs) != 0 {
+				return nil, false, errors.New("DNS name error contains address records")
+			}
+			return nil, false, &dnsNegativeAnswer{code: resp.RCode, aliases: aliases}
 		}
 		if len(addrs) > 0 {
 			return addrs, false, nil
 		}
-		if nextName == "" || nextName == currentName {
-			return nil, false, errors.New("empty DNS answer")
+		if nextName == currentName {
+			if dnsReferral(resp.Authorities) {
+				return nil, true, errors.New("company DNS returned a referral without an answer")
+			}
+			return nil, false, &dnsNegativeAnswer{code: dnsmessage.RCodeSuccess, aliases: aliases}
 		}
-		cnameHops = hops
 		currentName = nextName
 	}
 }
 
-// Answer handles a raw DNS query packet for local UDP/TCP listeners without global caches or upstream fallback.
+// NOERROR with a delegation and no SOA is a referral, not a negative answer.
+func dnsReferral(authorities []dnsmessage.Resource) bool {
+	hasDelegation := false
+	for _, record := range authorities {
+		switch record.Body.(type) {
+		case *dnsmessage.SOAResource:
+			return false
+		case *dnsmessage.NSResource:
+			hasDelegation = true
+		}
+	}
+	return hasDelegation
+}
+
+// Answer handles a raw DNS query packet for local UDP/TCP listeners using only the configured company resolvers.
 func (p *Policy) Answer(ctx context.Context, d Dialer, wire []byte) []byte {
 	if len(wire) < 2 {
 		return nil
@@ -141,6 +190,13 @@ func (p *Policy) Answer(ctx context.Context, d Dialer, wire []byte) []byte {
 
 	case dnsmessage.TypeA:
 		addrs, err := p.Resolve(ctx, d, qname)
+		var negative *dnsNegativeAnswer
+		if errors.As(err, &negative) {
+			reply := packReply(req.Header.ID, req.Header.RecursionDesired, negative.code, qs, negative.aliases)
+			if len(reply) <= maxDNSWireBytes {
+				return reply
+			}
+		}
 		if err != nil || len(addrs) == 0 {
 			return packReply(req.Header.ID, req.Header.RecursionDesired, dnsmessage.RCodeServerFailure, qs, nil)
 		}
@@ -201,7 +257,7 @@ func queryTCPDNS(ctx context.Context, d Dialer, dnsAddr netip.Addr, qname string
 	target := net.JoinHostPort(dnsAddr.String(), dnsPort)
 	conn, err := d.DialContext(ctx, "tcp", target)
 	if err != nil {
-		return nil, fmt.Errorf("dial TCP DNS %s: %w", target, err)
+		return nil, fmt.Errorf("%w: dial TCP DNS %s: %w", errDNSUnavailable, target, err)
 	}
 	defer conn.Close()
 
@@ -221,12 +277,12 @@ func queryTCPDNS(ctx context.Context, d Dialer, dnsAddr netip.Addr, qname string
 	copy(frame[2:], payload)
 
 	if err := writeFull(conn, frame); err != nil {
-		return nil, fmt.Errorf("write TCP DNS query: %w", err)
+		return nil, fmt.Errorf("%w: write TCP DNS query: %w", errDNSUnavailable, err)
 	}
 
 	var lenBuf [2]byte
 	if _, err := io.ReadFull(conn, lenBuf[:]); err != nil {
-		return nil, fmt.Errorf("read TCP DNS length prefix: %w", err)
+		return nil, fmt.Errorf("%w: read TCP DNS length prefix: %w", errDNSUnavailable, err)
 	}
 	respLen := int(binary.BigEndian.Uint16(lenBuf[:]))
 	if respLen < minDNSWireBytes || respLen > maxDNSWireBytes {
@@ -235,7 +291,7 @@ func queryTCPDNS(ctx context.Context, d Dialer, dnsAddr netip.Addr, qname string
 
 	respBuf := make([]byte, respLen)
 	if _, err := io.ReadFull(conn, respBuf); err != nil {
-		return nil, fmt.Errorf("read TCP DNS response body: %w", err)
+		return nil, fmt.Errorf("%w: read TCP DNS response body: %w", errDNSUnavailable, err)
 	}
 
 	var resp dnsmessage.Message
@@ -268,26 +324,26 @@ func queryTCPDNS(ctx context.Context, d Dialer, dnsAddr netip.Addr, qname string
 		return nil, fmt.Errorf("mismatched DNS response question name %q, want %q", rq.Name.String(), qname)
 	}
 
-	if resp.Header.RCode == dnsmessage.RCodeNameError {
-		return nil, fmt.Errorf("%w: %v", errDNSNegativeAnswer, resp.Header.RCode)
-	}
-	if resp.Header.RCode != dnsmessage.RCodeSuccess {
+	switch resp.Header.RCode {
+	case dnsmessage.RCodeSuccess, dnsmessage.RCodeNameError:
+		return &resp, nil
+	case dnsmessage.RCodeServerFailure:
+		return nil, fmt.Errorf("%w: DNS response rcode %v", errDNSUnavailable, resp.Header.RCode)
+	default:
 		return nil, fmt.Errorf("DNS response rcode %v", resp.Header.RCode)
 	}
-	if len(resp.Answers) == 0 {
-		return nil, fmt.Errorf("%w: empty DNS answer section", errDNSNegativeAnswer)
-	}
-
-	return &resp, nil
 }
 
 func (p *Policy) evaluateAnswerChain(
 	startName string,
 	answers []dnsmessage.Resource,
 	visited map[string]bool,
-	cnameHops int,
-) ([]netip.Addr, string, int, error) {
-	cnameMap := make(map[string]string)
+) ([]netip.Addr, string, []dnsmessage.Resource, error) {
+	type cnameRecord struct {
+		target string
+		record dnsmessage.Resource
+	}
+	cnameMap := make(map[string]cnameRecord)
 	type aEntry struct {
 		owner string
 		addr  netip.Addr
@@ -296,71 +352,64 @@ func (p *Policy) evaluateAnswerChain(
 
 	for _, ans := range answers {
 		if ans.Header.Class != dnsmessage.ClassINET {
-			return nil, "", cnameHops, errors.New("non-IN resource record in DNS answer")
+			return nil, "", nil, errors.New("non-IN resource record in DNS answer")
 		}
 		owner, err := normalizeQueryHostname(ans.Header.Name.String())
 		if err != nil || !p.AllowsDomain(owner) {
-			return nil, "", cnameHops, fmt.Errorf("unapproved answer owner domain %q", ans.Header.Name.String())
+			return nil, "", nil, fmt.Errorf("unapproved answer owner domain %q", ans.Header.Name.String())
 		}
 
 		switch body := ans.Body.(type) {
 		case *dnsmessage.CNAMEResource:
 			target, err := normalizeQueryHostname(body.CNAME.String())
 			if err != nil || !p.AllowsDomain(target) {
-				return nil, "", cnameHops, fmt.Errorf("CNAME target %q is outside approved domain scope", body.CNAME.String())
+				return nil, "", nil, fmt.Errorf("CNAME target %q is outside approved domain scope", body.CNAME.String())
 			}
 			if _, exists := cnameMap[owner]; exists {
-				return nil, "", cnameHops, fmt.Errorf("duplicate CNAME record for %q", owner)
+				return nil, "", nil, fmt.Errorf("duplicate CNAME record for %q", owner)
 			}
-			cnameMap[owner] = target
+			ans.Header.TTL = min(ans.Header.TTL, synthesizedAnswerTTL)
+			cnameMap[owner] = cnameRecord{target, ans}
 
 		case *dnsmessage.AResource:
 			ip := netip.AddrFrom4(body.A)
 			if !p.AllowsIP(ip) {
-				return nil, "", cnameHops, fmt.Errorf("resolved IPv4 address %s is outside approved company networks", ip)
+				return nil, "", nil, fmt.Errorf("resolved IPv4 address %s is outside approved company networks", ip)
 			}
 			aRecords = append(aRecords, aEntry{owner: owner, addr: ip})
 
 		default:
-			return nil, "", cnameHops, fmt.Errorf("unsupported DNS answer record type %v", ans.Header.Type)
+			return nil, "", nil, fmt.Errorf("unsupported DNS answer record type %v", ans.Header.Type)
 		}
 	}
 
 	expectedName := startName
-	consumedCNAMEs := 0
+	var aliases []dnsmessage.Resource
 	for {
-		target, ok := cnameMap[expectedName]
+		link, ok := cnameMap[expectedName]
 		if !ok {
 			break
 		}
-		consumedCNAMEs++
-		cnameHops++
-		if cnameHops > maxCNAMEHops {
-			return nil, "", cnameHops, fmt.Errorf("CNAME chain exceeds maximum depth of %d", maxCNAMEHops)
+		if len(visited) > maxCNAMEHops {
+			return nil, "", nil, fmt.Errorf("CNAME chain exceeds maximum depth of %d", maxCNAMEHops)
 		}
-		if visited[target] {
-			return nil, "", cnameHops, fmt.Errorf("CNAME loop detected at %q", target)
+		if visited[link.target] {
+			return nil, "", nil, fmt.Errorf("CNAME loop detected at %q", link.target)
 		}
-		visited[target] = true
-		expectedName = target
+		visited[link.target] = true
+		aliases = append(aliases, link.record)
+		expectedName = link.target
 	}
 
-	if consumedCNAMEs != len(cnameMap) {
-		return nil, "", cnameHops, errors.New("disconnected or unchained CNAME record in DNS answer")
-	}
-
-	if len(aRecords) == 0 {
-		if consumedCNAMEs == 0 {
-			return nil, "", cnameHops, errors.New("empty DNS answer")
-		}
-		return nil, expectedName, cnameHops, nil
+	if len(aliases) != len(cnameMap) {
+		return nil, "", nil, errors.New("disconnected or unchained CNAME record in DNS answer")
 	}
 
 	uniqueAddrs := make([]netip.Addr, 0, len(aRecords))
 	seenAddrs := make(map[netip.Addr]struct{}, len(aRecords))
 	for _, rec := range aRecords {
 		if rec.owner != expectedName {
-			return nil, "", cnameHops, fmt.Errorf("A record owner %q does not match expected target %q", rec.owner, expectedName)
+			return nil, "", nil, fmt.Errorf("A record owner %q does not match expected target %q", rec.owner, expectedName)
 		}
 		if _, exists := seenAddrs[rec.addr]; !exists {
 			seenAddrs[rec.addr] = struct{}{}
@@ -368,7 +417,7 @@ func (p *Policy) evaluateAnswerChain(
 		}
 	}
 
-	return uniqueAddrs, expectedName, cnameHops, nil
+	return uniqueAddrs, expectedName, aliases, nil
 }
 
 func packReply(

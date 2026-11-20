@@ -5,6 +5,33 @@ import GoConnectCore
 
 @MainActor
 final class NetworkRecoveryTests: XCTestCase {
+    func testWaitingUsesStableDefaultGatewayAndAcceptsSelectedBridge() async {
+        let old = RecoveryNetworkPath(interface: "bridge0", gateway: "192.0.2.1")
+        let new = RecoveryNetworkPath(interface: "bridge0", gateway: "192.0.2.2")
+        let paths: [RecoveryNetworkPath?] = [nil, old, new, new]
+        var reads = 0
+        let reached = await NetworkRecovery.waitForStablePath(until: .now.advanced(by: .seconds(2)),
+                                                              stableFor: .milliseconds(5), interval: .milliseconds(15)) { _ in
+            defer { reads += 1 }
+            return paths[min(reads, paths.count - 1)]
+        }
+        XCTAssertTrue(reached)
+        XCTAssertEqual(reads, paths.count)
+    }
+
+    func testWaitingResetsWhenDefaultRouteDisappears() async {
+        let wifi = RecoveryNetworkPath(interface: "en0", gateway: "192.0.2.1")
+        let paths: [RecoveryNetworkPath?] = [wifi, nil, wifi, wifi]
+        var reads = 0
+        let reached = await NetworkRecovery.waitForStablePath(until: .now.advanced(by: .seconds(2)),
+                                                              stableFor: .milliseconds(5), interval: .milliseconds(15)) { _ in
+            defer { reads += 1 }
+            return paths[min(reads, paths.count - 1)]
+        }
+        XCTAssertTrue(reached)
+        XCTAssertEqual(reads, paths.count)
+    }
+
     func testRecoveryWaitsForPathOnEveryAttemptAndStopsOnSuccess() async {
         let deadline = ContinuousClock.now.advanced(by: .seconds(2))
         var actions: [String] = []

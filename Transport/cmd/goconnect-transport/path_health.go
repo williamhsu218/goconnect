@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"io"
 	"mime"
 	"net"
@@ -21,6 +22,7 @@ import (
 type pathCheck struct {
 	Result     string `json:"result"`
 	DurationMS int64  `json:"durationMs"`
+	attempts   []diagnosticDetails
 }
 
 type pathHealth struct {
@@ -51,8 +53,13 @@ func (s *pathHealthTracker) observe(sample pathHealth) pathHealth {
 
 type contextDial func(context.Context, string, string) (net.Conn, error)
 
-var probeIPv4 = []string{"https://1.1.1.1", "https://8.8.8.8"}
-var probeIPv6 = []string{"https://[2606:4700:4700::1111]", "https://[2001:4860:4860::8888]"}
+type pathProbeEndpoint struct {
+	url, provider string
+	family        int
+}
+
+var probeIPv4 = []pathProbeEndpoint{{"https://1.1.1.1", "cloudflare", 4}, {"https://8.8.8.8", "google", 4}}
+var probeIPv6 = []pathProbeEndpoint{{"https://[2606:4700:4700::1111]", "cloudflare", 6}, {"https://[2001:4860:4860::8888]", "google", 6}}
 
 var pathProbeQuestion = dnsmessage.Question{Name: dnsmessage.MustNewName("example.com."), Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}
 
@@ -81,7 +88,7 @@ func validPathProbeAnswer(wire []byte, id uint16) bool {
 	return false
 }
 
-func physicalProbeDial(network originalNetwork) (contextDial, []string) {
+func physicalProbeDial(network originalNetwork) (contextDial, []pathProbeEndpoint) {
 	gateway, err := netip.ParseAddr(network.Gateway)
 	if err != nil || !physicalInterface.MatchString(network.Interface) {
 		return nil, nil
@@ -120,30 +127,75 @@ func newPathProbeClient(dial contextDial) *http.Client {
 }
 
 type probeTrace struct {
-	tlsStarted atomic.Bool
-	tlsReady   atomic.Bool
+	started    time.Time
+	tlsStarted atomic.Pointer[time.Time]
+	tlsDone    atomic.Pointer[probeTLSCompletion]
+}
+
+type probeTLSCompletion struct {
+	at        time.Time
+	connected bool
 }
 
 func (s *probeTrace) hooks() *httptrace.ClientTrace {
 	return &httptrace.ClientTrace{
-		TLSHandshakeStart: func() { s.tlsStarted.Store(true) },
-		TLSHandshakeDone:  func(_ tls.ConnectionState, err error) { s.tlsReady.Store(err == nil) },
+		TLSHandshakeStart: func() {
+			now := time.Now()
+			s.tlsStarted.Store(&now)
+		},
+		TLSHandshakeDone: func(_ tls.ConnectionState, err error) {
+			s.tlsDone.Store(&probeTLSCompletion{at: time.Now(), connected: err == nil})
+		},
 	}
 }
 
-func checkProbeEndpoint(ctx context.Context, client *http.Client, endpoint string, dns bool) string {
+func (s *probeTrace) finish(attempt *diagnosticDetails) {
+	total := time.Since(s.started)
+	attempt.DurationMS = total.Milliseconds()
+	duration := func(d time.Duration) *int64 {
+		ms := d.Milliseconds()
+		return &ms
+	}
+	begin := s.tlsStarted.Load()
+	if begin == nil {
+		attempt.ConnectMS = duration(total)
+		return
+	}
+	tlsStarted := min(begin.Sub(s.started), total)
+	attempt.ConnectMS = duration(tlsStarted)
+	done := s.tlsDone.Load()
+	if done == nil {
+		attempt.TLSMS = duration(total - tlsStarted)
+		return
+	}
+	tlsDone := max(tlsStarted, min(done.at.Sub(s.started), total))
+	attempt.TLSMS = duration(tlsDone - tlsStarted)
+	if done.connected {
+		attempt.ResponseMS = duration(total - tlsDone)
+	}
+}
+
+func probeTimedOut(err error) bool {
+	var networkError net.Error
+	return errors.As(err, &networkError) && networkError.Timeout()
+}
+
+func checkProbeEndpoint(ctx context.Context, client *http.Client, endpoint pathProbeEndpoint, dns bool) (attempt diagnosticDetails) {
+	attempt = diagnosticDetails{Stage: "path_health", ProbeTarget: endpoint.provider, Family: endpoint.family}
+	target := endpoint.url
 	var id uint16
 	method := http.MethodHead
 	var body io.Reader
 	if dns {
 		id = uint16(time.Now().UnixNano())
 		method = http.MethodPost
-		endpoint += "/dns-query"
+		target += "/dns-query"
 		body = bytes.NewReader(probeDNSMessage(id))
 	}
-	req, err := http.NewRequestWithContext(ctx, method, endpoint, body)
+	req, err := http.NewRequestWithContext(ctx, method, target, body)
 	if err != nil {
-		return "request"
+		attempt.Reason = "request"
+		return
 	}
 	if dns {
 		req.Header.Set("Content-Type", "application/dns-message")
@@ -151,57 +203,71 @@ func checkProbeEndpoint(ctx context.Context, client *http.Client, endpoint strin
 	}
 	// httptrace callbacks may arrive on transport goroutines. Only the
 	// final trace stage is read by the caller after Client.Do returns.
-	trace := new(probeTrace)
+	trace := &probeTrace{started: time.Now()}
+	defer trace.finish(&attempt)
 	req = req.WithContext(httptrace.WithClientTrace(ctx, trace.hooks()))
 	resp, err := client.Do(req)
 	if err != nil {
-		if trace.tlsReady.Load() {
-			return "response"
+		attempt.TimedOut = probeTimedOut(err)
+		done := trace.tlsDone.Load()
+		switch {
+		case done != nil && done.connected:
+			attempt.Reason = "response"
+		case trace.tlsStarted.Load() != nil:
+			attempt.Reason = "tls"
+		default:
+			attempt.Reason = "connect"
 		}
-		if trace.tlsStarted.Load() {
-			return "tls"
-		}
-		return "connect"
+		return
 	}
 	defer resp.Body.Close()
+	attempt.HTTPStatus = resp.StatusCode
 	if !dns {
+		attempt.Reason = "http_status"
 		if resp.StatusCode >= 200 && resp.StatusCode < 400 {
-			return "ok"
+			attempt.Reason = "ok"
 		}
-		return "http_status"
+		return
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "http_status"
+		attempt.Reason = "http_status"
+		return
 	}
 	mediaType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	wire, err := io.ReadAll(io.LimitReader(resp.Body, 4097))
 	if mediaType != "application/dns-message" || err != nil || len(wire) > 4096 || !validPathProbeAnswer(wire, id) {
-		return "dns_response"
+		attempt.Reason = "dns_response"
+		attempt.TimedOut = probeTimedOut(err)
+		return
 	}
-	return "ok"
+	attempt.Reason = "ok"
+	return
 }
 
-func checkPath(ctx context.Context, dial contextDial, endpoints []string, dns bool) pathCheck {
+func checkPath(ctx context.Context, dial contextDial, endpoints []pathProbeEndpoint, dns bool) pathCheck {
 	if dial == nil {
 		return pathCheck{Result: "unavailable"}
 	}
 	started := time.Now()
 	client := newPathProbeClient(dial)
 	defer client.CloseIdleConnections()
-	result := "unavailable"
+	result := pathCheck{Result: "unavailable"}
 	for _, endpoint := range endpoints {
 		if ctx.Err() != nil {
 			break
 		}
-		result = checkProbeEndpoint(ctx, client, endpoint, dns)
-		if result == "ok" {
+		attempt := checkProbeEndpoint(ctx, client, endpoint, dns)
+		result.attempts = append(result.attempts, attempt)
+		result.Result = attempt.Reason
+		if result.Result == "ok" {
 			break
 		}
 	}
-	return pathCheck{Result: result, DurationMS: time.Since(started).Milliseconds()}
+	result.DurationMS = time.Since(started).Milliseconds()
+	return result
 }
 
-func runPathHealthSample(ctx context.Context, viaProxy, viaDirect contextDial, proxyEndpoints, directEndpoints []string) pathHealth {
+func runPathHealthSample(ctx context.Context, viaProxy, viaDirect contextDial, proxyEndpoints, directEndpoints []pathProbeEndpoint) pathHealth {
 	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
 	proxyHTTPS, proxyDoH, directHTTPS := make(chan pathCheck, 1), make(chan pathCheck, 1), make(chan pathCheck, 1)
@@ -220,7 +286,7 @@ func monitorPathHealth(ctx context.Context, r routeRequest, original originalNet
 		return nil
 	}
 	directDial, directEndpoints := physicalProbeDial(original)
-	proxyEndpoints := append(append([]string{}, probeIPv4...), probeIPv6...)
+	proxyEndpoints := append(append([]pathProbeEndpoint{}, probeIPv4...), probeIPv6...)
 	go func() {
 		defer close(samples)
 		ticker := time.NewTicker(pathHealthInterval)

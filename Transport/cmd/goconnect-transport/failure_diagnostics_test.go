@@ -222,7 +222,7 @@ func TestDiagnosticSanitizationAndPriority(t *testing.T) {
 	l.record("process.heartbeat", 0)
 	l.record("process.heartbeat", 0)
 	code, index, bits, scoped := 9, 0, 32, true
-	d := diagnosticDetails{Stage: "SECRET_STAGE", Reason: "SECRET_REASON", Check: "https://SECRET", Command: "/private/customer/SECRET", Interface: "SECRET", ExpectedInterface: "en8", ActualInterface: "utun100", ExitCode: &code, RouteIndex: &index, PrefixBits: &bits, Scoped: &scoped,
+	d := diagnosticDetails{Stage: "SECRET_STAGE", Reason: "SECRET_REASON", Check: "https://SECRET", Command: "/private/customer/SECRET", ProbeTarget: "https://SECRET", Interface: "SECRET", ExpectedInterface: "en8", ActualInterface: "utun100", ExitCode: &code, RouteIndex: &index, PrefixBits: &bits, Scoped: &scoped,
 		Cleanup: []diagnosticDetails{{Reason: "SECRET", Cleanup: []diagnosticDetails{{Reason: "SECRET_NESTED"}}}}}
 	l.recordDetails("session.exit_first", 0, d)
 	l.recordDetails("session.exit_final", 0, d)

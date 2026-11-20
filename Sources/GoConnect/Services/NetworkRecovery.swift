@@ -1,6 +1,11 @@
 import Foundation
 import Network
 
+struct RecoveryNetworkPath: Decodable, Equatable, Sendable {
+    let interface: String
+    let gateway: String
+}
+
 /// The old worker must finish unwinding before this observes the new default path.
 @MainActor
 enum NetworkRecovery {
@@ -26,24 +31,35 @@ enum NetworkRecovery {
         return false
     }
 
-    static func waitForPhysicalPath(until deadline: ContinuousClock.Instant) async -> Bool {
-        let clock = ContinuousClock()
+    static func waitForPhysicalPath(until deadline: ContinuousClock.Instant, runtime: URL) async -> Bool {
         let monitor = NWPathMonitor()
         monitor.start(queue: DispatchQueue(label: "com.willhsu.GoConnect.network-recovery"))
         defer { monitor.cancel() }
-        var previous: NWPath?
+        let executable = runtime.appendingPathComponent("bin/GoConnectTransport")
+        return await waitForStablePath(until: deadline) { remaining in
+            guard monitor.currentPath.status == .satisfied else { return nil }
+            let route = await NetworkServiceClient.readRecoveryPath(executable, timeout: min(remaining, .seconds(2)))
+            return monitor.currentPath.status == .satisfied ? route : nil
+        }
+    }
+
+    static func waitForStablePath(until deadline: ContinuousClock.Instant,
+                                  stableFor: Duration = .seconds(2), interval: Duration = .milliseconds(500),
+                                  readPath: (Duration) async -> RecoveryNetworkPath?) async -> Bool {
+        let clock = ContinuousClock()
+        var previous: RecoveryNetworkPath?
         var stableSince = clock.now
         while !Task.isCancelled, clock.now < deadline {
-            let path = monitor.currentPath
-            if path.status == .satisfied && path.availableInterfaces.contains(where: { $0.name.range(of: #"^(en|bridge|bond|vnic|vmnet)[0-9]{1,5}$"#, options: .regularExpression) != nil }) {
-                if path != previous {
-                    previous = path
-                    stableSince = clock.now
-                } else if stableSince.duration(to: clock.now) >= .seconds(2) {
-                    return true
-                }
-            } else { previous = nil }
-            do { try await clock.sleep(until: min(deadline, clock.now.advanced(by: .milliseconds(500)))) }
+            let path = await readPath(clock.now.duration(to: deadline))
+            let now = clock.now
+            guard !Task.isCancelled, now < deadline else { return false }
+            if path != previous {
+                previous = path
+                stableSince = now
+            } else if path != nil, stableSince.duration(to: now) >= stableFor {
+                return true
+            }
+            do { try await clock.sleep(until: min(deadline, now.advanced(by: interval))) }
             catch { return false }
         }
         return false

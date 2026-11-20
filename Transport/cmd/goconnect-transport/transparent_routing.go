@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 )
 
 type originalNetwork struct{ Interface, Gateway string }
@@ -66,6 +67,22 @@ func readPhysicalDefault(ownDevice string, command func(string, ...string) ([]by
 
 func primaryPhysicalNetwork(ownDevice string) (originalNetwork, error) {
 	return primaryPhysicalNetworkWith(ownDevice, systemCommand)
+}
+
+// The app reads the same default route used by the worker, after it has
+// unwound the previous capture. This command needs no network service.
+func reportRecoveryPath(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	network, err := primaryPhysicalNetworkWith("", func(name string, args ...string) ([]byte, error) {
+		command := exec.CommandContext(ctx, name, args...)
+		command.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LANG=C"}
+		return command.Output()
+	})
+	if err == nil {
+		emit(map[string]string{"interface": network.Interface, "gateway": network.Gateway})
+	}
+	return err
 }
 
 func primaryPhysicalNetworkWith(ownDevice string, command func(string, ...string) ([]byte, error)) (originalNetwork, error) {
