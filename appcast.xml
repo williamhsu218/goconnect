@@ -6,16 +6,16 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/williamhsu218/goconnect/releases</link>
     <description>GoConnect signed updates</description>
     <item>
-      <title>GoConnect 1.0.17</title>
-      <pubDate>Tue, 17 Nov 2026 22:23:14 +0000</pubDate>
-      <sparkle:version>77</sparkle:version>
-      <sparkle:shortVersionString>1.0.17</sparkle:shortVersionString>
+      <title>GoConnect 1.0.18</title>
+      <pubDate>Fri, 20 Nov 2026 06:29:26 +0000</pubDate>
+      <sparkle:version>78</sparkle:version>
+      <sparkle:shortVersionString>1.0.18</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
-      <description>新增代理 HTTPS、代理 DoH 和原网络对照检测。检测到底层网络变化后，可限时恢复原线路。可保持 VPN 下载，确认安装重启时正常结束连接。</description>
-      <enclosure url="https://github.com/williamhsu218/goconnect/releases/download/v1.0.17/GoConnect-1.0.17-macos-arm64.zip" length="32415539" type="application/octet-stream" sparkle:edSignature="Wvq9Mcb3qglSYmxW1xozBDNvp1Z33c28w+F9WFGm+kwcoFfXkSHVYb/q6VGWCrUtMKD+SbpcxLdpHX+U2WVVAA=="></enclosure>
+      <description>修复多网卡条件下误断、地址池误拦、公司 DNS 与会话状态。检查和下载可保持 VPN 连接。</description>
+      <enclosure url="https://github.com/williamhsu218/goconnect/releases/download/v1.0.18/GoConnect-1.0.18-macos-arm64.zip" length="32420260" type="application/octet-stream" sparkle:edSignature="ElNmf9HUHlXXtm67zuF1eOUMW5q8M/J3dYm0XdTIbUzLbxyMWsdjgdLclny0MQsZWSbSWaBcXvLaemR9AoY2Ag=="></enclosure>
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: jM2iLOYxoXA9UfkvvZEMOmTjxIUOj55cXLIPRK+Sd1H952f2YVnoub2GiDDPN+A0oEEmNAgSoZ4ku7JKu1UvDg==
-length: 1393
+edSignature: 0JUjO9BqYUIcaZPedef2U41wy0U+ipYgAnM/r37P8VbW7qI4BghFhju9UsdE0JqnMHbffUKHKcJlF/rmNJj4AA==
+length: 1327
 -->
