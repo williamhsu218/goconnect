@@ -214,7 +214,6 @@ func directDomainRules(domains []domainRule) []string {
 
 type controlFiles struct {
 	directory   *os.File
-	status      *os.File
 	uid         uint32
 	request     routeRequest
 	started     unix.Timeval
@@ -311,16 +310,8 @@ func inspectControl(path string, createStatus bool) (*controlFiles, error) {
 		ok = true
 		return c, nil
 	}
-	statusFD, err := unix.Openat(fd, "status", unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
-	if err != nil {
+	if err = c.publishStatus("starting", true); err != nil {
 		return nil, err
-	}
-	c.status = os.NewFile(uintptr(statusFD), "status")
-	if os.Geteuid() == 0 {
-		if err = c.status.Chown(int(uid), -1); err != nil {
-			_ = c.status.Close()
-			return nil, err
-		}
 	}
 	ok = true
 	return c, nil
@@ -392,9 +383,6 @@ func (c *controlFiles) finishSession(result *error) {
 }
 
 func (c *controlFiles) close() {
-	if c.status != nil {
-		_ = c.status.Close()
-	}
 	_ = c.directory.Close()
 }
 

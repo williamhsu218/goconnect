@@ -19,7 +19,7 @@ import (
 // journal, readiness transitions, exit diagnostics and unwind remain real.
 type transparentRuntime struct {
 	command         func(string, ...string) ([]byte, error)
-	network         func(bool) (originalNetwork, error)
+	network         func(string) (originalNetwork, error)
 	readiness       func(*http.Client, uint16, string, string) (bool, diagnosticDetails)
 	startCore       func(string, string, string) (*exec.Cmd, error)
 	stopCore        func(*exec.Cmd, <-chan error) error
@@ -41,7 +41,7 @@ func managedTunEnvironment() []string {
 
 func defaultTransparentRuntime() transparentRuntime {
 	return transparentRuntime{
-		command: systemCommand, network: originalPhysicalNetwork, readiness: coreReadiness, stopCore: stopChild, now: time.Now,
+		command: systemCommand, network: primaryPhysicalNetwork, readiness: coreReadiness, stopCore: stopChild, now: time.Now,
 		removeDirectory: os.RemoveAll,
 		installDNS:      installManagedDNS,
 		checkDNS:        managedDNSReady,
@@ -277,7 +277,7 @@ func (connection *transparentConnection) run(ctx context.Context) (result error)
 				}
 				if !r.ProbeOnly {
 					exitLog.stage = "network"
-					current, e := ops.network(false)
+					current, e := ops.network("")
 					if e != nil {
 						return exitLog.fail("network_query_failed", fmt.Errorf("原网络检查失败: %w", e))
 					}
@@ -398,7 +398,7 @@ func (connection *transparentConnection) run(ctx context.Context) (result error)
 				if !r.ProbeOnly {
 					exitLog.stage = "health_network"
 					var now originalNetwork
-					now, networkErr = ops.network(true)
+					now, networkErr = ops.network(device)
 					if errors.Is(networkErr, errNoScopedPhysicalNetwork) {
 						exitLog.capture("network_unavailable", networkErr, diagnosticDetails{ExpectedInterface: original.Interface})
 						return errPhysicalNetworkChanged
@@ -420,7 +420,7 @@ func (connection *transparentConnection) run(ctx context.Context) (result error)
 						return exitLog.fail("network_query_failed", fmt.Errorf("原网络检查失败: %w", networkErr))
 					}
 					exitLog.stage = "health_gateway"
-					ok, e := transparentGatewayReadyWith(r.Gateway, outerOriginal, routeCommand)
+					ok, changed, e := inspectTransparentGateway(r.Gateway, outerOriginal, routeCommand)
 					if e != nil {
 						if deferTimeout(e, diagnosticDetails{}) {
 							continue
@@ -428,7 +428,10 @@ func (connection *transparentConnection) run(ctx context.Context) (result error)
 						return exitLog.fail("gateway_query_failed", fmt.Errorf("VPN 外层检查失败: %w", e))
 					}
 					if !ok {
-						exitLog.capture("gateway_changed", nil, diagnosticDetails{ExpectedInterface: outerOriginal.Interface})
+						exitLog.capture("gateway_changed", nil, diagnosticDetails{ExpectedInterface: outerOriginal.Interface, GatewayChanged: changed})
+						if changed {
+							return errPhysicalNetworkChanged
+						}
 						return errors.New("VPN 外层路径改变，已停止连接以避免回流")
 					}
 				}

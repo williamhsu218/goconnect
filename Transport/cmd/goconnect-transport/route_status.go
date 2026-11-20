@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 type appRouteStatus struct {
@@ -134,15 +137,41 @@ func (c *controlFiles) refreshConnections(client *http.Client, port uint16) erro
 	return nil
 }
 func (c *controlFiles) write(state string) {
+	if err := c.publishStatus(state, false); err != nil {
+		traceDetails("transparent.status_write_failed", 1, diagnosticError(err))
+	}
+}
+
+// Stage a complete private snapshot relative to the already-verified directory.
+// Replacing the name leaves existing readers on the previous, complete inode.
+func (c *controlFiles) publishStatus(state string, initial bool) error {
 	c.snapshot.State = state
 	c.snapshot.UpdatedAt = time.Now().UnixMilli()
 	data, err := json.Marshal(c.snapshot)
 	if err != nil {
-		return
+		return err
 	}
-	_, _ = c.status.WriteAt(data, 0)
-	_ = c.status.Truncate(int64(len(data)))
+	dir := int(c.directory.Fd())
+	name := ".status-" + rand.Text()
+	fd, err := unix.Openat(dir, name, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
+	if err != nil {
+		return err
+	}
+	defer unix.Unlinkat(dir, name, 0)
+	file := os.NewFile(uintptr(fd), name)
+	if _, err = file.Write(data); err == nil && os.Geteuid() == 0 {
+		err = file.Chown(int(c.uid), -1)
+	}
+	closeErr := file.Close()
+	if err != nil || closeErr != nil {
+		return errors.Join(err, closeErr)
+	}
+	if initial {
+		return unix.RenameatxNp(dir, name, dir, "status", unix.RENAME_EXCL)
+	}
+	return unix.Renameat(dir, name, dir, "status")
 }
+
 func readRouteSnapshot(path string) (routeSnapshot, error) {
 	var snapshot routeSnapshot
 	file, err := os.Open(path)

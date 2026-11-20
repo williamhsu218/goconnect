@@ -23,6 +23,8 @@ const (
 	synthesizedAnswerTTL = 5
 )
 
+var errDNSNegativeAnswer = errors.New("negative company DNS answer")
+
 // Dialer abstracts connection establishment so company DNS resolution uses only injected TCP transport.
 type Dialer interface {
 	DialContext(ctx context.Context, network, address string) (net.Conn, error)
@@ -51,35 +53,47 @@ func (p *Policy) Resolve(ctx context.Context, d Dialer, host string) ([]netip.Ad
 	ctx, cancel := context.WithTimeout(ctx, maxResolveTimeout)
 	defer cancel()
 
-	resolverAddr := p.dnsAddrs[0]
-	if !resolverAddr.IsValid() || !resolverAddr.Is4() {
-		return nil, errors.New("invalid configured DNS server address")
-	}
-
-	currentName := qname
-	visited := map[string]bool{
-		currentName: true,
-	}
-	cnameHops := 0
-
-	for {
-		resp, err := queryTCPDNS(ctx, d, resolverAddr, currentName)
-		if err != nil {
+	deadline, _ := ctx.Deadline()
+	var lastErr error
+	for i, server := range p.dnsAddrs {
+		if err := ctx.Err(); err != nil {
 			return nil, err
+		}
+		// A stalled primary must leave time for the other approved resolvers.
+		// Keep a complete CNAME chain on the same resolver.
+		budget := time.Until(deadline) / time.Duration(len(p.dnsAddrs)-i)
+		attempt, stop := context.WithTimeout(ctx, budget)
+		addrs, retry, err := p.resolveOnServer(attempt, d, server, qname)
+		stop()
+		if !retry {
+			return addrs, err
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
+func (p *Policy) resolveOnServer(ctx context.Context, d Dialer, server netip.Addr, host string) ([]netip.Addr, bool, error) {
+	currentName := host
+	visited := map[string]bool{host: true}
+	cnameHops := 0
+	for {
+		resp, err := queryTCPDNS(ctx, d, server, currentName)
+		if err != nil {
+			return nil, !errors.Is(err, errDNSNegativeAnswer), err
 		}
 
 		addrs, nextName, hops, err := p.evaluateAnswerChain(currentName, resp.Answers, visited, cnameHops)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
-		cnameHops = hops
-
 		if len(addrs) > 0 {
-			return addrs, nil
+			return addrs, false, nil
 		}
 		if nextName == "" || nextName == currentName {
-			return nil, errors.New("empty DNS answer")
+			return nil, false, errors.New("empty DNS answer")
 		}
+		cnameHops = hops
 		currentName = nextName
 	}
 }
@@ -241,9 +255,6 @@ func queryTCPDNS(ctx context.Context, d Dialer, dnsAddr netip.Addr, qname string
 	if resp.Header.ID != reqID {
 		return nil, fmt.Errorf("mismatched DNS response ID: got %d, want %d", resp.Header.ID, reqID)
 	}
-	if resp.Header.RCode != dnsmessage.RCodeSuccess {
-		return nil, fmt.Errorf("DNS response rcode %v", resp.Header.RCode)
-	}
 	if len(resp.Questions) != 1 {
 		return nil, fmt.Errorf("DNS response must contain exactly 1 question, got %d", len(resp.Questions))
 	}
@@ -257,8 +268,14 @@ func queryTCPDNS(ctx context.Context, d Dialer, dnsAddr netip.Addr, qname string
 		return nil, fmt.Errorf("mismatched DNS response question name %q, want %q", rq.Name.String(), qname)
 	}
 
+	if resp.Header.RCode == dnsmessage.RCodeNameError {
+		return nil, fmt.Errorf("%w: %v", errDNSNegativeAnswer, resp.Header.RCode)
+	}
+	if resp.Header.RCode != dnsmessage.RCodeSuccess {
+		return nil, fmt.Errorf("DNS response rcode %v", resp.Header.RCode)
+	}
 	if len(resp.Answers) == 0 {
-		return nil, errors.New("empty DNS answer section")
+		return nil, fmt.Errorf("%w: empty DNS answer section", errDNSNegativeAnswer)
 	}
 
 	return &resp, nil

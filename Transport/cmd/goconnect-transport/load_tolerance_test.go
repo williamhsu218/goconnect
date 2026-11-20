@@ -201,7 +201,7 @@ func TestTransparentHighLoadTimeouts(t *testing.T) {
 				}
 				return n.command(name, args...)
 			}
-			ops.network = func(bool) (originalNetwork, error) {
+			ops.network = func(string) (originalNetwork, error) {
 				if active {
 					attempt++
 				}

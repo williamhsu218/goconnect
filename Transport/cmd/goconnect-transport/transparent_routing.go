@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -38,31 +39,61 @@ type transparentState struct {
 func originalPhysicalNetwork(probe bool) (originalNetwork, error) {
 	return originalPhysicalNetworkWith(probe, net.Interfaces, systemCommand)
 }
-func originalPhysicalNetworkWith(probe bool, interfaces func() ([]net.Interface, error), command func(string, ...string) ([]byte, error)) (originalNetwork, error) {
-	read := func(args ...string) (originalNetwork, error) {
-		b, e := command("/sbin/route", args...)
-		if e != nil {
-			return originalNetwork{}, e
-		}
-		n := originalNetwork{Interface: companyRouteInterface(b)}
-		for _, line := range strings.Split(string(b), "\n") {
-			f := strings.Fields(line)
-			if len(f) == 2 && f[0] == "gateway:" {
-				n.Gateway = f[1]
-			}
-		}
-		ip, e := netip.ParseAddr(n.Gateway)
-		if !physicalInterface.MatchString(n.Interface) || e != nil || ip.IsUnspecified() || (ip.Zone() != "" && ip.Zone() != n.Interface) {
-			return originalNetwork{}, errPhysicalNetwork
-		}
-		return n, nil
+func readPhysicalDefault(ownDevice string, command func(string, ...string) ([]byte, error), args ...string) (originalNetwork, error) {
+	data, err := command("/sbin/route", args...)
+	if err != nil {
+		return originalNetwork{}, err
 	}
-	if !probe {
-		n, err := read("-n", "get", "-inet", "default")
-		if err == nil || errors.Is(err, errPhysicalNetwork) || diagnosticError(err).Reason == "system_timeout" {
-			return n, err
+	device := companyRouteInterface(data)
+	// Darwin can return our split default when a family has no native default.
+	// Only the current session's TUN may be ignored.
+	if ownDevice != "" && device == ownDevice {
+		return originalNetwork{}, errNoScopedPhysicalNetwork
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 || fields[0] != "gateway:" {
+			continue
 		}
-		return read("-n", "get", "-inet6", "default")
+		gateway, err := netip.ParseAddr(fields[1])
+		if physicalInterface.MatchString(device) && err == nil && !gateway.IsUnspecified() && (gateway.Zone() == "" || gateway.Zone() == device) {
+			return originalNetwork{Interface: device, Gateway: gateway.String()}, nil
+		}
+		break
+	}
+	return originalNetwork{}, errPhysicalNetwork
+}
+
+func primaryPhysicalNetwork(ownDevice string) (originalNetwork, error) {
+	return primaryPhysicalNetworkWith(ownDevice, systemCommand)
+}
+
+func primaryPhysicalNetworkWith(ownDevice string, command func(string, ...string) ([]byte, error)) (originalNetwork, error) {
+	network, ipv4Err := readPhysicalDefault(ownDevice, command, "-n", "get", "-inet", "default")
+	if ipv4Err == nil || errors.Is(ipv4Err, errPhysicalNetwork) || readOnlyProbeTimeout(ipv4Err) {
+		return network, ipv4Err
+	}
+	network, ipv6Err := readPhysicalDefault(ownDevice, command, "-n", "get", "-inet6", "default")
+	if ownDevice != "" && missingPhysicalDefault(ipv4Err) && missingPhysicalDefault(ipv6Err) {
+		return originalNetwork{}, errors.Join(errNoScopedPhysicalNetwork, ipv4Err, ipv6Err)
+	}
+	if errors.Is(ipv6Err, errNoScopedPhysicalNetwork) {
+		// The IPv4 error was inconclusive. Preserve it for the caller.
+		return originalNetwork{}, ipv4Err
+	}
+	return network, ipv6Err
+}
+
+func missingPhysicalDefault(err error) bool {
+	var exit *exec.ExitError
+	// route(8) reports a missing lookup as EX_NOHOST (68).
+	return errors.Is(err, errNoScopedPhysicalNetwork) || errors.Is(err, syscall.ESRCH) ||
+		(errors.As(err, &exit) && exit.ExitCode() == 68)
+}
+
+func originalPhysicalNetworkWith(probe bool, interfaces func() ([]net.Interface, error), command func(string, ...string) ([]byte, error)) (originalNetwork, error) {
+	if !probe {
+		return primaryPhysicalNetworkWith("", command)
 	}
 	// Isolated validation only: no default routes will be installed.
 	ifaces, e := interfaces()
@@ -72,7 +103,7 @@ func originalPhysicalNetworkWith(probe bool, interfaces func() ([]net.Interface,
 	var lastFailure error
 	for _, i := range ifaces {
 		if physicalInterface.MatchString(i.Name) && i.Flags&net.FlagUp != 0 {
-			if n, e := read("-n", "get", "-inet", "-ifscope", i.Name, "default"); e == nil {
+			if n, e := readPhysicalDefault("", command, "-n", "get", "-inet", "-ifscope", i.Name, "default"); e == nil {
 				return n, nil
 			} else if diagnosticError(lastFailure).Reason != "system_timeout" {
 				lastFailure = e
@@ -84,7 +115,7 @@ func originalPhysicalNetworkWith(probe bool, interfaces func() ([]net.Interface,
 	if diagnosticError(lastFailure).Reason != "system_timeout" {
 		for _, i := range ifaces {
 			if physicalInterface.MatchString(i.Name) && i.Flags&net.FlagUp != 0 {
-				if n, e := read("-n", "get", "-inet6", "-ifscope", i.Name, "default"); e == nil {
+				if n, e := readPhysicalDefault("", command, "-n", "get", "-inet6", "-ifscope", i.Name, "default"); e == nil {
 					return n, nil
 				} else {
 					lastFailure = e
@@ -298,12 +329,27 @@ func transparentGatewayReady(gateway string, original originalNetwork) (bool, er
 }
 
 func transparentGatewayReadyWith(gateway string, original originalNetwork, command func(string, ...string) ([]byte, error)) (bool, error) {
-	table, err := command("/usr/sbin/netstat", "-rn", "-f", gatewayTableFamily(gateway))
-	if err != nil || !staticGatewayInTable(table, gateway, original) || !physicalDefaultGatewayInTable(table, original) {
-		return false, err
+	ready, _, err := inspectTransparentGateway(gateway, original, command)
+	return ready, err
+}
+
+func inspectTransparentGateway(gateway string, original originalNetwork, command func(string, ...string) ([]byte, error)) (ready, changed bool, err error) {
+	family := gatewayTableFamily(gateway)
+	table, err := command("/usr/sbin/netstat", "-rn", "-f", family)
+	if err != nil {
+		return false, false, err
+	}
+	if !physicalDefaultGatewayInTable(table, original) {
+		// The primary IPv4 default can remain unchanged when only the IPv6
+		// next hop moves. An alternate native router is positive evidence;
+		// a missing pin or scoped route on its own is not.
+		return false, family == "inet6" && nativeIPv6Gateway(table, original.Interface) != "", nil
+	}
+	if !staticGatewayInTable(table, gateway, original) {
+		return false, false, nil
 	}
 	actual, err := gatewayRouteInterfaceWith(gateway, command)
-	return err == nil && actual == original.Interface, err
+	return err == nil && actual == original.Interface, false, err
 }
 func pinTransparentGateway(path string, s *transparentState, gateway string, original originalNetwork) error {
 	return pinTransparentGatewayWith(path, s, gateway, original, systemCommand)
@@ -399,6 +445,10 @@ func originalIPv6Gateway(iface string, command func(string, ...string) ([]byte, 
 	if err != nil {
 		return "", err
 	}
+	return nativeIPv6Gateway(table, iface), nil
+}
+
+func nativeIPv6Gateway(table []byte, iface string) string {
 	for _, line := range strings.Split(string(table), "\n") {
 		f := strings.Fields(line)
 		if len(f) < 4 || f[0] != "default" || f[3] != iface || !strings.Contains(f[2], "U") || !strings.Contains(f[2], "G") || strings.ContainsAny(f[2], "IWLY") {
@@ -406,10 +456,10 @@ func originalIPv6Gateway(iface string, command func(string, ...string) ([]byte, 
 		}
 		a, e := netip.ParseAddr(f[1])
 		if e == nil && a.Is6() && (a.Zone() == "" || a.Zone() == iface) {
-			return f[1], nil
+			return a.String()
 		}
 	}
-	return "", nil
+	return ""
 }
 func ensureTransparentDirectRoutes(path string, state *transparentState, original originalNetwork) error {
 	return ensureTransparentDirectRoutesWith(path, state, original, systemCommand)

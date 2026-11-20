@@ -13,6 +13,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -743,8 +744,15 @@ func (g *companyGate) configure(config map[string]any) {
 	sniff["skip-domain"] = skipped
 	dns := config["dns"].(map[string]any)
 	policies := dns["nameserver-policy"].(map[string]any)
-	for _, d := range g.reservation.Domains {
-		policies["+."+d] = []string{fmt.Sprintf("tcp://127.0.0.1:%d", g.dnsPort)}
+	filters, fakeIP := dns["fake-ip-filter"].([]string)
+	for _, suffix := range skipped {
+		policies[suffix] = []string{fmt.Sprintf("tcp://127.0.0.1:%d", g.dnsPort)}
+		if fakeIP && !slices.Contains(filters, suffix) {
+			filters = append(filters, suffix)
+		}
+	}
+	if fakeIP {
+		dns["fake-ip-filter"] = filters
 	}
 }
 func companyGatewayDNS(value string) (string, uint16, error) {

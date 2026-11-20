@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"sync"
 	"testing"
+	"time"
 
 	"golang.org/x/net/dns/dnsmessage"
 )
@@ -605,5 +606,64 @@ func TestAnswerLocalDNSListenerSemantics(t *testing.T) {
 	}
 	if failResp.Header.ID != 0x3456 || failResp.Header.RCode != dnsmessage.RCodeServerFailure {
 		t.Fatalf("expected SERVFAIL with ID 0x3456, got %+v", failResp.Header)
+	}
+}
+
+func TestResolveCompanyDNSUsesConfiguredBackup(t *testing.T) {
+	policy, err := NewPolicy(Policy{
+		Networks:   []string{"10.20.0.0/16"},
+		Domains:    []string{"corp.example"},
+		DNSServers: []string{"192.0.2.53", "192.0.2.54"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, outcome := range []string{"unreachable", "stalled", "server failure", "name error", "outside approved networks"} {
+		t.Run(outcome, func(t *testing.T) {
+			release := make(chan struct{})
+			defer close(release)
+			server := &memoryDNSServer{
+				handler: func(index int, req *dnsmessage.Message, _ []byte) ([]byte, error) {
+					resp := dnsmessage.Message{Header: dnsmessage.Header{ID: req.ID, Response: true}, Questions: req.Questions}
+					address := [4]byte{10, 20, 0, 7}
+					if index == 0 {
+						switch outcome {
+						case "unreachable":
+							return nil, errors.New("first resolver unavailable")
+						case "stalled":
+							<-release
+							return nil, errors.New("closed stalled resolver")
+						case "server failure":
+							resp.RCode = dnsmessage.RCodeServerFailure
+							return frameDNSMessage(t, resp), nil
+						case "name error":
+							resp.RCode = dnsmessage.RCodeNameError
+							return frameDNSMessage(t, resp), nil
+						case "outside approved networks":
+							address = [4]byte{10, 30, 0, 7}
+						}
+					}
+					resp.Answers = []dnsmessage.Resource{{
+						Header: dnsmessage.ResourceHeader{Name: req.Questions[0].Name, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET},
+						Body:   &dnsmessage.AResource{A: address},
+					}}
+					return frameDNSMessage(t, resp), nil
+				},
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			addrs, err := policy.Resolve(ctx, server, "app.corp.example")
+			calls := server.recordedCalls()
+			if outcome == "name error" || outcome == "outside approved networks" {
+				if err == nil || len(calls) != 1 || len(addrs) != 0 {
+					t.Fatalf("must honor the first validated negative answer or scope rejection: %v, %v, %v", addrs, calls, err)
+				}
+				return
+			}
+			if err != nil || len(addrs) != 1 || addrs[0] != netip.MustParseAddr("10.20.0.7") ||
+				len(calls) != 2 || calls[0] != (dialCall{"tcp", "192.0.2.53:53"}) || calls[1] != (dialCall{"tcp", "192.0.2.54:53"}) {
+				t.Fatalf("backup did not answer within company DNS scope: %v, %v, %v", addrs, calls, err)
+			}
+		})
 	}
 }

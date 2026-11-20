@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"goconnect.local/transport/internal/bridge"
+	"golang.org/x/net/dns/dnsmessage"
 	"golang.org/x/net/proxy"
 	"io"
 	"net"
@@ -133,5 +135,78 @@ func TestLiveCompanyGateStableCore(t *testing.T) {
 	}
 	if companyFixture.business.Load() != beforeBusiness+1 {
 		t.Fatal("company literal leaked into primary")
+	}
+}
+
+// The bundled core must return an actual company address for a reserved name
+// that would otherwise enter the public fake-IP pool.
+func TestLiveCompanyDNSRealRecordsInWhitelist(t *testing.T) {
+	if os.Getenv("GOCONNECT_TEST_RUNTIME") == "" {
+		t.Skip("packaged runtime required")
+	}
+	scope := fmt.Sprintf("qa-%d.goconnect-company.invalid", time.Now().UnixNano())
+	gate, claim, backend := fixtureCompanyGateWithDomain(t, scope)
+	activateCompanyGate(t, gate, claim, companyTestGeneration)
+
+	port, err := freePort()
+	if err != nil {
+		t.Fatal(err)
+	}
+	api, err := freePort()
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := routeRequest{
+		RoutingMode: modeWhitelist, Token: gate.token, SOCKSPort: gate.port, Company: &gate.reservation,
+		managedDNS: &managedDNSPlan{port: port, resolvers: []nativeResolver{{servers: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, port: 53}}},
+	}
+	config := makeTransparentConfig(request, "utun999", api, originalNetwork{Interface: "lo0"}, nil, tailscaleBypass{})
+	gate.configure(config)
+	startManagedDNSCore(t, config, port)
+	want := [4]byte{10, 201, 0, 9}
+	for _, network := range []string{"udp", "tcp"} {
+		reply, err := queryManagedDNS(port, network+"."+scope, network)
+		if err != nil || reply.RCode != dnsmessage.RCodeSuccess || len(reply.Answers) != 1 {
+			t.Fatalf("company DNS through the packaged core (%s): %v, %v", network, reply.RCode, err)
+		}
+		a, ok := reply.Answers[0].Body.(*dnsmessage.AResource)
+		if !ok || a.A != want {
+			t.Fatalf("company hostname did not get its approved real address: %v", reply.Answers)
+		}
+	}
+	before := backend.dns.Load()
+	unrelated, err := queryManagedDNS(port, "unrelated.goconnect-test.invalid", "udp")
+	if err != nil || len(unrelated.Answers) != 1 {
+		t.Fatalf("unrelated name did not retain its fake-IP mapping: %v", err)
+	}
+	a, ok := unrelated.Answers[0].Body.(*dnsmessage.AResource)
+	if !ok || a.A[0] != 198 || a.A[1] != 18 || backend.dns.Load() != before {
+		t.Fatal("company exception covered an unrelated name")
+	}
+	if os.Getenv("GOCONNECT_TEST_NATIVE_DNS") == "1" {
+		lease, err := acquireManagedDNS(port, scope)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer lease.close()
+		if err = waitManagedDNS(port, scope, true); err != nil {
+			t.Fatal(err)
+		}
+		lookup, err := exec.Command("/usr/bin/dscacheutil", "-q", "host", "-a", "name", "native."+scope).CombinedOutput()
+		if err != nil || !strings.Contains(string(lookup), netip.AddrFrom4(want).String()) {
+			t.Fatalf("native lookup did not receive the approved company address: %v %s", err, lookup)
+		}
+		if err = lease.close(); err != nil {
+			t.Fatal(err)
+		}
+		t.Log("the system used the isolated company resolver and released its temporary rule")
+	}
+	if err = gate.command(context.Background(), companyCommand{ExpectedRevision: gate.snapshot().Revision, Generation: companyTestGeneration, Action: "block"}); err != nil {
+		t.Fatal(err)
+	}
+	before = backend.dns.Load()
+	reply, err := queryManagedDNS(port, "blocked."+scope, "udp")
+	if err != nil || len(reply.Answers) != 0 || reply.RCode == dnsmessage.RCodeSuccess || backend.dns.Load() != before {
+		t.Fatalf("a disconnected company suffix became resolvable: %v %v", reply.RCode, err)
 	}
 }

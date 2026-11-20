@@ -30,18 +30,20 @@ func TestTransparentConnectionSnapshot(t *testing.T) {
 		 {"metadata":{"processPath":""},"chains":["REJECT"]}]}`))
 	}))
 	defer server.Close()
-	file, err := os.Create(filepath.Join(t.TempDir(), "status"))
+	directory := t.TempDir()
+	status := filepath.Join(directory, "status")
+	dir, err := os.Open(directory)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer file.Close()
-	control := controlFiles{status: file, request: routeRequest{Token: "fixture-token", AppPaths: []string{"/Applications/Example.app"}},
+	defer dir.Close()
+	control := controlFiles{directory: dir, uid: uint32(os.Getuid()), request: routeRequest{Token: "fixture-token", AppPaths: []string{"/Applications/Example.app"}},
 		snapshot: routeSnapshot{CaptureMode: "transparent-routes", RoutingMode: "whitelist"}}
 	port := uint16(server.Listener.Addr().(*net.TCPAddr).Port)
 	if err := control.refreshConnections(server.Client(), port); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(file.Name())
+	data, err := os.ReadFile(status)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +61,7 @@ func TestTransparentConnectionSnapshot(t *testing.T) {
 	if err := control.refreshConnections(server.Client(), port); err == nil {
 		t.Fatal("controller failure must not masquerade as a zero-connection sample")
 	}
-	after, _ := os.ReadFile(file.Name())
+	after, _ := os.ReadFile(status)
 	if string(after) != string(data) {
 		t.Fatal("failed sample must preserve the previous sample and its timestamp")
 	}
@@ -75,5 +77,42 @@ func TestTransparentDirectChainNames(t *testing.T) {
 		if isDirectChain(name) {
 			t.Errorf("non-direct chain misclassified: %s", name)
 		}
+	}
+}
+
+func TestRouteStatusPublishesCompleteSnapshots(t *testing.T) {
+	directory := controlFixture(t)
+	control, err := openControl(filepath.Join(directory, "session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.close()
+
+	path := filepath.Join(directory, "status")
+	control.snapshot.Apps = []appRouteStatus{{Path: "/Applications/Example.app", VPN: 3}}
+	control.write("ready")
+	reader, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+
+	control.snapshot.Apps = nil
+	control.snapshot.FailureCode = "physical_network_changed"
+	control.write("failed")
+	var previous routeSnapshot
+	if err := json.NewDecoder(reader).Decode(&previous); err != nil || previous.State != "ready" || len(previous.Apps) != 1 {
+		t.Fatalf("reader lost its original complete snapshot: %q, %v", previous.State, err)
+	}
+	latest, err := readRouteSnapshot(path)
+	if err != nil || latest.State != "failed" || latest.FailureCode != "physical_network_changed" {
+		t.Fatalf("new reader missed the terminal status: %+v, %v", latest, err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("status is not private: %v", info.Mode().Perm())
 	}
 }

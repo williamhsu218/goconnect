@@ -196,3 +196,39 @@ func TestIPv4GatewayReadinessRemainsValid(t *testing.T) {
 		t.Fatal(ok, err)
 	}
 }
+
+func TestPrimaryPhysicalNetworkAfterInstallingSplitDefaults(t *testing.T) {
+	const captured = "destination: ::\nmask: 8000::\ninterface: utun100\n"
+	v6 := originalNetwork{Interface: "en7", Gateway: "fe80::1%en7"}
+	for _, tc := range []struct {
+		name, ipv4, ipv6 string
+		want             originalNetwork
+		wantError        error
+	}{
+		{"same system default despite standby interface", "gateway: 192.168.8.1\ninterface: en8\n", "", originalNetwork{Interface: "en8", Gateway: "192.168.8.1"}, nil},
+		{"live IPv6-only network", captured, "gateway: fe80:0:0:0:0:0:0:1%en7\ninterface: en7\n", v6, nil},
+		{"no physical default in either family", captured, captured, originalNetwork{}, errNoScopedPhysicalNetwork},
+		{"other VPN still blocks", "interface: utun13\n", "", originalNetwork{}, errPhysicalNetwork},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := primaryPhysicalNetworkWith("utun100", func(name string, args ...string) ([]byte, error) {
+				if name != "/sbin/route" || len(args) != 4 || args[0] != "-n" || args[1] != "get" || args[3] != "default" {
+					t.Fatal("unexpected primary default lookup", name, args)
+				}
+				switch args[2] {
+				case "-inet":
+					return []byte(tc.ipv4), nil
+				case "-inet6":
+					if tc.ipv6 != "" {
+						return []byte(tc.ipv6), nil
+					}
+				}
+				t.Fatal("unexpected lookup for address family", args)
+				return nil, nil
+			})
+			if result != tc.want || !errors.Is(err, tc.wantError) {
+				t.Fatalf("unexpected primary network: %+v, %v", result, err)
+			}
+		})
+	}
+}

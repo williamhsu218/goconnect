@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/williamhsu218/goconnect/v1.0.17/Packaging/GoConnect.png" alt="GoConnect Logo" width="96" height="96" />
+  <img src="https://raw.githubusercontent.com/williamhsu218/goconnect/v1.0.18/Packaging/GoConnect.png" alt="GoConnect Logo" width="96" height="96" />
 </p>
 
 <h1 align="center">GoConnect</h1>
 
 <p align="center">
   面向 Apple Silicon Mac 的原生网络代理与 AnyConnect 客户端<br />
-  <strong>当前版本：v1.0.17 (Build 77)</strong>
+  <strong>当前版本：v1.0.18 (Build 78)</strong>
 </p>
 
 ---
@@ -45,7 +45,7 @@ GoConnect 是一款使用原生 SwiftUI 构建的 macOS 网络连接与分流工
 
 ### 获取应用
 
-- **最新发布包**：[GoConnect-1.0.17-macos-arm64.zip](https://github.com/williamhsu218/goconnect/releases/download/v1.0.17/GoConnect-1.0.17-macos-arm64.zip)
+- **最新发布包**：[GoConnect-1.0.18-macos-arm64.zip](https://github.com/williamhsu218/goconnect/releases/download/v1.0.18/GoConnect-1.0.18-macos-arm64.zip)
 - **完整发布页**：[GitHub Releases / Latest](https://github.com/williamhsu218/goconnect/releases/latest)
 
 ### 首次安装与权限

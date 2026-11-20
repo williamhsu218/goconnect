@@ -107,7 +107,7 @@ func (l *fixtureDNSLease) intact() bool { return l.installed && !l.removed && !l
 func (l *fixtureDNSLease) close() error { l.removed = true; return nil }
 
 func TestTransparentProductionLifecycleFaults(t *testing.T) {
-	for _, outcome := range []string{"disconnect", "lease-revoked", "cancel-during-route", "lease-revoked-during-route", "network-changed-before-ready", "network-changed-after-ready", "network-lost-after-ready", "network-changed-cleanup-failed", "ipv6-next-hop-changed", "capture-missing", "borrowed-direct-missing", "core-exit", "core-health-failed", "intermittent-health", "startup-timeout", "core-start-failed", "config-write-failed", "cleanup-no-effect", "cleanup-query-timeout", "directory-remove-failed", "core-stop-failed", "panic-after-ready", "dns-install-failed", "dns-owner-lost", "dns-listener-failed"} {
+	for _, outcome := range []string{"disconnect", "secondary-interface-still-up", "lease-revoked", "cancel-during-route", "lease-revoked-during-route", "network-changed-before-ready", "network-changed-after-ready", "network-lost-after-ready", "network-changed-cleanup-failed", "ipv6-next-hop-changed", "capture-missing", "borrowed-direct-missing", "core-exit", "core-health-failed", "intermittent-health", "startup-timeout", "core-start-failed", "config-write-failed", "cleanup-no-effect", "cleanup-query-timeout", "directory-remove-failed", "core-stop-failed", "panic-after-ready", "dns-install-failed", "dns-owner-lost", "dns-listener-failed"} {
 		t.Run(outcome, func(t *testing.T) {
 			controlDir := controlFixture(t)
 			control, err := openControl(filepath.Join(controlDir, "session.json"))
@@ -174,7 +174,18 @@ func TestTransparentProductionLifecycleFaults(t *testing.T) {
 				tick := time.NewTicker(2 * time.Millisecond)
 				return tick.C, tick.Stop
 			}
-			ops.network = func(bool) (originalNetwork, error) {
+			ops.network = func(ownDevice string) (originalNetwork, error) {
+				if outcome == "secondary-interface-still-up" {
+					if polls > 0 && ownDevice != "utun100" {
+						t.Fatal("active lookup has no capture interface")
+					}
+					return primaryPhysicalNetworkWith(ownDevice, func(_ string, args ...string) ([]byte, error) {
+						if strings.Contains(strings.Join(args, " "), "-ifscope") {
+							return []byte("gateway: 192.168.2.1\ninterface: en1\n"), nil
+						}
+						return []byte("gateway: 192.168.1.1\ninterface: en0\n"), nil
+					})
+				}
 				if outcome == "network-lost-after-ready" && polls > 0 {
 					return originalNetwork{}, errNoScopedPhysicalNetwork
 				}
@@ -221,6 +232,9 @@ func TestTransparentProductionLifecycleFaults(t *testing.T) {
 				polls++
 				c.write("ready")
 				if polls > 1 {
+					if outcome == "secondary-interface-still-up" {
+						cancel()
+					}
 					return nil
 				}
 				switch outcome {
@@ -321,7 +335,7 @@ func TestTransparentProductionLifecycleFaults(t *testing.T) {
 				t.Fatal("wrong terminal status", snapshot.State, wantState, snapshotErr)
 			}
 			wantCode := ""
-			if outcome == "network-changed-after-ready" || outcome == "network-lost-after-ready" {
+			if outcome == "network-changed-after-ready" || outcome == "network-lost-after-ready" || outcome == "ipv6-next-hop-changed" {
 				wantCode = "physical_network_changed"
 			}
 			if snapshot.FailureCode != wantCode {

@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -66,6 +67,11 @@ func (f *companyFixtureDialer) DialContext(ctx context.Context, network, address
 }
 func fixtureCompanyGate(t *testing.T) (*companyGate, companyBackendClaim, *companyFixtureDialer) {
 	t.Helper()
+	return fixtureCompanyGateWithDomain(t, "corp.example.invalid")
+}
+
+func fixtureCompanyGateWithDomain(t *testing.T, domain string) (*companyGate, companyBackendClaim, *companyFixtureDialer) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	dir, err := os.MkdirTemp("/private/tmp", "gcc-t-")
 	if err != nil {
@@ -86,7 +92,7 @@ func fixtureCompanyGate(t *testing.T) (*companyGate, companyBackendClaim, *compa
 		t.Fatal(err)
 	}
 	claim := companyBackendClaim{SocketPath: filepath.Join(dir, "company.sock"), PID: os.Getpid(), StartTime: started, Token: token, DNSServers: []string{"10.201.0.53"}, RemoteNetworks: []string{"10.201.0.0/16"}}
-	gate := &companyGate{ctx: ctx, cancel: cancel, directory: dir, uid: uint32(os.Getuid()), token: strings.Repeat("g", 64), reservation: companyReservation{Networks: []string{"10.201.0.0/16"}, Domains: []string{"corp.example.invalid"}}, state: companyRouteState{State: "blocked"}}
+	gate := &companyGate{ctx: ctx, cancel: cancel, directory: dir, uid: uint32(os.Getuid()), token: strings.Repeat("g", 64), reservation: companyReservation{Networks: []string{"10.201.0.0/16"}, Domains: []string{domain}}, state: companyRouteState{State: "blocked"}}
 	// Tests use the kernel's UID/PID/start time. Exact signed helper CDHash is an
 	// additional production check; this fixture does not claim its acceptance.
 	gate.verify = gate.verifyBackend
@@ -285,5 +291,25 @@ func TestCompanyGateRejectsServerExclusionsAndRestrictedIncludes(t *testing.T) {
 		if g.snapshot().State != "failed" {
 			t.Fatal("rejected scope should stay blocked")
 		}
+	}
+}
+
+func TestCompanyDNSBypassesFakeIPForReservedSuffix(t *testing.T) {
+	g := &companyGate{reservation: companyReservation{Domains: []string{"corp.example.invalid"}}, dnsPort: 15353}
+	r := routeRequest{RoutingMode: modeWhitelist, managedDNS: &managedDNSPlan{
+		port: 15400, resolvers: []nativeResolver{{servers: []netip.Addr{netip.MustParseAddr("192.0.2.53")}, port: 53}},
+	}}
+	config := makeTransparentConfig(r, "utun100", 15500, originalNetwork{Interface: "en0"}, nil, tailscaleBypass{})
+	g.configure(config)
+
+	dns := config["dns"].(map[string]any)
+	policy := dns["nameserver-policy"].(map[string]any)
+	upstreams := policy["+.corp.example.invalid"].([]string)
+	if len(upstreams) != 1 || upstreams[0] != "tcp://127.0.0.1:15353" {
+		t.Fatalf("wrong resolver for the reserved suffix: %v", upstreams)
+	}
+	filters := dns["fake-ip-filter"].([]string)
+	if !slices.Contains(filters, "+.corp.example.invalid") || slices.Contains(filters, "+.example.invalid") {
+		t.Fatalf("company filter must match only the reserved suffix: %v", filters)
 	}
 }
