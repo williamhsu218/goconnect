@@ -17,6 +17,9 @@ var tailnetIPv4 = netip.MustParsePrefix("100.64.0.0/10")
 var tailnetIPv6 = netip.MustParsePrefix("fd7a:115c:a1e0::/48")
 var safeTunInterface = regexp.MustCompile(`^(utun|tun)[0-9]{1,5}$`)
 
+// Mihomo reserves the first address in the pool for its mapping gateway.
+var managedDNSGatewayHost = netip.PrefixFrom(netip.MustParsePrefix(managedDNSFakeIPRange).Masked().Addr().Next(), 32)
+
 type tailscaleBypass struct {
 	Interfaces []string
 	Prefixes   []netip.Prefix
@@ -104,18 +107,46 @@ func parseRoutePrefix(value string) (netip.Prefix, bool) {
 	return prefix, true
 }
 
+func scopedCloningDefaults(lines []string) map[[2]string]bool {
+	defaults := map[[2]string]bool{}
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) < 4 || fields[0] != "default" || !strings.HasPrefix(fields[1], "link#") {
+			continue
+		}
+		flags := fields[2]
+		if strings.Contains(flags, "U") && strings.Contains(flags, "C") && strings.Contains(flags, "I") && !strings.ContainsAny(flags, "BR") {
+			defaults[[2]string{fields[3], fields[1]}] = true
+		}
+	}
+	return defaults
+}
+
+// A scoped default can leave a cloned host route for the reserved gateway
+// across reconnects. Both conflict scans must recognize the same cached route.
+func isManagedDNSGatewayCache(prefix netip.Prefix, fields []string, defaults map[[2]string]bool) bool {
+	if prefix != managedDNSGatewayHost || !defaults[[2]string{fields[3], fields[1]}] {
+		return false
+	}
+	flags := fields[2]
+	return strings.Contains(flags, "U") && strings.Contains(flags, "H") && strings.Contains(flags, "I") &&
+		strings.Contains(flags, "W") && !strings.ContainsAny(flags, "SBRGLY")
+}
+
 func tailscaleRoutePrefixes(table string, interfaces []string) []netip.Prefix {
 	allowed := map[string]bool{}
 	for _, name := range interfaces {
 		allowed[name] = true
 	}
+	lines := strings.Split(table, "\n")
+	defaults := scopedCloningDefaults(lines)
 	var prefixes []netip.Prefix
-	for _, line := range strings.Split(table, "\n") {
+	for _, line := range lines {
 		fields := strings.Fields(line)
 		if len(fields) < 4 || !allowed[fields[3]] {
 			continue
 		}
-		if prefix, ok := parseRoutePrefix(fields[0]); ok {
+		if prefix, ok := parseRoutePrefix(fields[0]); ok && !isManagedDNSGatewayCache(prefix, fields, defaults) {
 			prefixes = append(prefixes, prefix)
 		}
 	}

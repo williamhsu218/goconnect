@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/netip"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -264,8 +265,15 @@ func TestTransparentFakeIPExistingKernelRoutes(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			attached := []localNetworkRoute{{Interface: "en0", Prefix: netip.MustParsePrefix("192.0.2.0/24")}}
-			table := "Routing tables\nInternet:\nDestination Gateway Flags Netif Expire\ndefault 192.0.2.1 UGScg en0\n" + tc.entry + "\n"
-			space := transparentAddressSpace{local: append(attached, localRoutedNetworks(table, attached)...)}
+			table := "Routing tables\nInternet:\nDestination Gateway Flags Netif Expire\ndefault 192.0.2.1 UGScg en0\n" + tc.entry + "\n100.64/10 link#42 UCS utun13\n"
+			tailnet := tailscaleRoutePrefixes(table, []string{"utun13"})
+			if !slices.Contains(tailnet, netip.MustParsePrefix("100.64.0.0/10")) {
+				t.Fatal("Tailscale's real route must remain reserved", tailnet)
+			}
+			space := transparentAddressSpace{
+				local:     append(attached, localRoutedNetworks(table, attached)...),
+				tailscale: tailscaleBypass{Prefixes: tailnet},
+			}
 			if tc.name == "static-non-private" && len(space.local) != 1 {
 				t.Fatal("fixture must expose the non-RFC1918 gap in DIRECT discovery")
 			}

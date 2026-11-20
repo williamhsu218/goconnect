@@ -672,21 +672,7 @@ func transparentIPv4Routes() ([]netip.Prefix, error) {
 // Default routes are expected and are excluded by parseRoutePrefix.
 func transparentIPv4RoutePrefixes(table string) []netip.Prefix {
 	lines := strings.Split(table, "\n")
-	scopedDefaults := map[[2]string]bool{}
-	for _, line := range lines {
-		fields := strings.Fields(line)
-		if len(fields) >= 4 && fields[0] == "default" && strings.HasPrefix(fields[1], "link#") {
-			flags := fields[2]
-			if strings.Contains(flags, "U") && strings.Contains(flags, "C") && strings.Contains(flags, "I") && !strings.ContainsAny(flags, "BR") {
-				scopedDefaults[[2]string{fields[3], fields[1]}] = true
-			}
-		}
-	}
-	// Mihomo reserves the first IP for the mapping gateway. A cloned link
-	// host route from a scoped default can outlive a reconnect and is
-	// only a lookup cache, not a competing owner of the mapping pool.
-	gateway := netip.MustParsePrefix(managedDNSFakeIPRange).Masked().Addr().Next()
-	gatewayHost := netip.PrefixFrom(gateway, 32)
+	defaults := scopedCloningDefaults(lines)
 	var prefixes []netip.Prefix
 	for _, line := range lines {
 		fields := strings.Fields(line)
@@ -694,13 +680,7 @@ func transparentIPv4RoutePrefixes(table string) []netip.Prefix {
 			continue
 		}
 		prefix, ok := parseRoutePrefix(fields[0])
-		if !ok || !prefix.Addr().Is4() {
-			continue
-		}
-		flags := fields[2]
-		if prefix == gatewayHost && scopedDefaults[[2]string{fields[3], fields[1]}] &&
-			strings.Contains(flags, "U") && strings.Contains(flags, "H") && strings.Contains(flags, "I") &&
-			strings.Contains(flags, "W") && !strings.ContainsAny(flags, "SBRGLY") {
+		if !ok || !prefix.Addr().Is4() || isManagedDNSGatewayCache(prefix, fields, defaults) {
 			continue
 		}
 		prefixes = append(prefixes, prefix)
