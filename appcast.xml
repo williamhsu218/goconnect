@@ -6,16 +6,16 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/williamhsu218/goconnect/releases</link>
     <description>GoConnect signed updates</description>
     <item>
-      <title>GoConnect 2.0.1</title>
-      <pubDate>Sat, 21 Nov 2026 11:34:21 +0000</pubDate>
-      <sparkle:version>81</sparkle:version>
-      <sparkle:shortVersionString>2.0.1</sparkle:shortVersionString>
+      <title>GoConnect 2.0.2</title>
+      <pubDate>Sat, 21 Nov 2026 13:17:11 +0000</pubDate>
+      <sparkle:version>82</sparkle:version>
+      <sparkle:shortVersionString>2.0.2</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
-      <description>修复「原网络 HTTPS」诊断因旧探测地址不可达而超时的问题。可保持 VPN 连接下载，确认安装重启时才正常断开。</description>
-      <enclosure url="https://github.com/williamhsu218/goconnect/releases/download/v2.0.1/GoConnect-2.0.1-macos-arm64.zip" length="32556003" type="application/octet-stream" sparkle:edSignature="j2LRhVseo64S84udr5ALK1tW7iNfFo1ADH8SfmNW6iaHpTOP6vMyKixkpkHFrDmfec3Bzd64fpcccuQCf2zhDw=="></enclosure>
+      <description>减少菜单栏实时网速重复重绘，降低后台刷新开销。可保持 VPN 连接下载，确认安装重启时才正常断开。</description>
+      <enclosure url="https://github.com/williamhsu218/goconnect/releases/download/v2.0.2/GoConnect-2.0.2-macos-arm64.zip" length="32556825" type="application/octet-stream" sparkle:edSignature="VBpLgsQKvBzwkJV2/0QXVkRNTYBm95YjAxGcxFugOCrDk51ZX1kqSyI8k/Ly3IyhWTDmOQ6JZ0ybdCa5nodoDw=="></enclosure>
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: V8pTJMk8DsvqRrmKyoGV5wK8IazwWeRpYACb2CA2EbB9XqoEpmcjO9kzaYitG//dBLd4jtn/1ZjkDy0LI8HTCQ==
-length: 1354
+edSignature: mTkfdmTT3bzWrHz58eoH/3xQQ4YxTT+c0THwkt5XXOK0/e7lwNAR8HXLUYfXGXw05w8TiLNurcvY8rrUjlV3Dw==
+length: 1342
 -->
