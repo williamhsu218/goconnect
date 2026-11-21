@@ -4,8 +4,10 @@ import GoConnectCore
 
 struct TrafficHistoryView: View {
     @Bindable var store: AppStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var granularity: TrafficGranularity = .daily
     @State private var anchor = Date()
+    @State private var showingDetails = false
 
     private var history: ProfileTrafficStore { store.trafficHistory }
 
@@ -45,7 +47,7 @@ struct TrafficHistoryView: View {
         let profileID = selectedProfileID
         let hasHistory = history.totals(profileID: profileID).hasData
         ScrollView {
-            VStack(alignment: .leading, spacing: AppTheme.sectionSpacing) {
+            VStack(alignment: .leading, spacing: 14) {
                 PageHeading(title: "流量统计", subtitle: "按线路查看这台 Mac 上的本地流量记录。")
                 VStack(alignment: .leading, spacing: 10) {
                     selectionControls(profileID: profileID)
@@ -68,7 +70,8 @@ struct TrafficHistoryView: View {
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(AppTheme.pagePadding)
+            .padding(.horizontal, AppTheme.pagePadding)
+            .padding(.vertical, 18)
             .frame(maxWidth: AppTheme.contentWidth, alignment: .topLeading)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
@@ -92,14 +95,10 @@ struct TrafficHistoryView: View {
             .pickerStyle(.menu)
             .frame(maxWidth: 300, alignment: .leading)
             Spacer(minLength: 12)
-            Picker("统计粒度", selection: $granularity) {
-                ForEach(TrafficGranularity.allCases) { item in
-                    Text(item.title).tag(item)
-                }
+            SlidingTabs(items: TrafficGranularity.allCases, selection: granularity, accessibilityTitle: "统计粒度",
+                        compact: true, titleForItem: \.title) { item in
+                granularity = item
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize()
         }
     }
 
@@ -148,13 +147,13 @@ struct TrafficHistoryView: View {
         anchor = min(target, now)
     }
 
-    @ViewBuilder
     private func periodContent(profileID: UUID, now: Date) -> some View {
         let periodAnchor = granularity == .yearly ? now : anchor
         let totals = history.totals(profileID: profileID, interval: history.interval(granularity: granularity, anchor: periodAnchor, profileID: profileID))
         let buckets = makeBuckets(profileID: profileID, anchor: periodAnchor, now: now)
-        Surface {
-            VStack(alignment: .leading, spacing: 14) {
+        let allowsMotion = !reduceMotion
+        return Surface {
+            VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .top, spacing: 16) {
                     periodAmount("下载", totals: totals, bytes: totals.received)
                     periodAmount("上传", totals: totals, bytes: totals.sent)
@@ -164,15 +163,28 @@ struct TrafficHistoryView: View {
                 Divider()
                 if totals.hasData {
                     TrafficChartLegend()
-                    TrafficChart(buckets: buckets, granularity: granularity)
+                    TrafficChart(buckets: buckets, granularity: granularity, profileID: profileID)
+                        .keyframeAnimator(initialValue: 1.0, trigger: granularity) { chart, progress in
+                            let appearance = allowsMotion ? progress : 1
+                            chart
+                                .opacity(0.72 + 0.28 * appearance)
+                                .offset(y: 4 * (1 - appearance))
+                        } keyframes: { _ in
+                            MoveKeyframe(0.0)
+                            CubicKeyframe(1.0, duration: 0.26)
+                        }
+                    Divider()
+                    FullRowDisclosure("流量明细", isExpanded: $showingDetails) {
+                        TrafficBucketTable(buckets: buckets.filter { $0.elapsed || $0.totals.hasData })
+                    } label: {
+                        Label("流量明细", systemImage: "list.bullet")
+                            .font(.callout.weight(.medium))
+                    }
                 } else {
                     Text("这段时间暂无记录，不代表流量为 0。")
                         .font(.callout).foregroundStyle(.secondary)
                 }
             }
-        }
-        if totals.hasData {
-            TrafficBucketTable(buckets: buckets.filter { $0.elapsed || $0.totals.hasData })
         }
     }
 
@@ -202,7 +214,7 @@ struct TrafficHistoryView: View {
                         description: Text("读取恢复前，不会把未知流量显示为 0。"))
                 }
             }
-            .frame(maxWidth: .infinity, minHeight: 240)
+            .frame(maxWidth: .infinity, minHeight: 160)
         }
     }
 
@@ -286,8 +298,15 @@ private struct TrafficChartLegend: View {
 private struct TrafficChart: View {
     let buckets: [TrafficBucket]
     let granularity: TrafficGranularity
+    let profileID: UUID
 
     private let barWidth = MarkDimension.ratio(0.62)
+
+    private struct HoverIdentity: Hashable {
+        let profileID: UUID
+        let granularity: TrafficGranularity
+        let firstBucket: Date?
+    }
 
     private var largestBytes: Double {
         buckets.map { Double($0.totals.received) + Double($0.totals.sent) }.max() ?? 0
@@ -352,10 +371,18 @@ private struct TrafficChart: View {
                 }
             }
         }
-        .frame(height: 220)
+        .chartOverlay { proxy in
+            GeometryReader { geometry in
+                if let frame = proxy.plotFrame {
+                    TrafficChartHover(buckets: buckets, proxy: proxy, plot: geometry[frame])
+                        .id(HoverIdentity(profileID: profileID, granularity: granularity, firstBucket: buckets.first?.id))
+                }
+            }
+        }
+        .frame(height: 180)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("下载与上传流量堆叠柱状图")
-        .accessibilityValue("\(buckets.filter(\.totals.hasData).count) 个时段有记录，单位 \(unit)，具体数值见下方明细")
+        .accessibilityValue("\(buckets.filter(\.totals.hasData).count) 个时段有记录，单位 \(unit)，展开流量明细可查看具体数值")
     }
 
     @ChartContentBuilder
@@ -379,25 +406,112 @@ private struct TrafficChart: View {
     }
 }
 
+private struct TrafficChartHover: View {
+    let buckets: [TrafficBucket]
+    let proxy: ChartProxy
+    let plot: CGRect
+    @State private var hoveredLabel: String?
+
+    var body: some View {
+        Color.clear
+            .contentShape(Rectangle())
+            .onContinuousHover { phase in
+                let label: String?
+                if case .active(let location) = phase, plot.contains(location) {
+                    label = proxy.value(atX: location.x - plot.minX)
+                } else {
+                    label = nil
+                }
+                if label != hoveredLabel { hoveredLabel = label }
+            }
+            .overlay(alignment: .topLeading) {
+                if let hoveredLabel,
+                   let bucket = buckets.first(where: { $0.axisLabel == hoveredLabel }),
+                   bucket.elapsed || bucket.totals.hasData,
+                   let center = proxy.position(forX: hoveredLabel) {
+                    ZStack(alignment: .topLeading) {
+                        Path { line in
+                            let x = plot.minX + center
+                            line.move(to: CGPoint(x: x, y: plot.minY))
+                            line.addLine(to: CGPoint(x: x, y: plot.maxY))
+                        }
+                        .stroke(.secondary.opacity(0.42), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+
+                        TrafficChartTooltip(bucket: bucket)
+                            .offset(x: tooltipX(for: hoveredLabel, center: center), y: plot.minY + 6)
+                    }
+                    .allowsHitTesting(false)
+                }
+            }
+            .accessibilityHidden(true)
+    }
+
+    private func tooltipX(for label: String, center: CGFloat) -> CGFloat {
+        let range = proxy.positionRange(forX: label) ?? center...center
+        let inset: CGFloat = 8
+        let minX = plot.minX + inset
+        let maxX = max(minX, plot.maxX - TrafficChartTooltip.width - inset)
+        let besideRight = plot.minX + range.upperBound + inset
+        if besideRight <= maxX { return besideRight }
+        let besideLeft = plot.minX + range.lowerBound - inset - TrafficChartTooltip.width
+        return min(max(besideLeft, minX), maxX)
+    }
+}
+
+private struct TrafficChartTooltip: View {
+    static let width: CGFloat = 176
+    let bucket: TrafficBucket
+
+    var body: some View {
+        let totals = bucket.totals
+        VStack(alignment: .leading, spacing: 5) {
+            Text(bucket.rowLabel)
+                .font(.callout.weight(.semibold))
+            if totals.hasData {
+                amount("下载", value: totals.amountText(totals.received), color: TrafficChartStyle.download)
+                amount("上传", value: totals.amountText(totals.sent), color: TrafficChartStyle.upload)
+                Divider()
+                amount("合计", value: totals.amountText(totals.total), color: .clear)
+                    .fontWeight(.semibold)
+            } else {
+                Text("未记录").foregroundStyle(.secondary)
+            }
+        }
+        .font(.caption)
+        .padding(10)
+        .frame(width: Self.width, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
+        .cardSurface()
+        .shadow(color: .black.opacity(0.16), radius: 7, y: 3)
+    }
+
+    private func amount(_ title: String, value: String, color: Color) -> some View {
+        HStack(spacing: 6) {
+            Circle().fill(color).frame(width: 6, height: 6)
+            Text(title).foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Text(value).monospacedDigit().lineLimit(1).minimumScaleFactor(0.85)
+        }
+    }
+}
+
 private struct TrafficBucketTable: View {
     let buckets: [TrafficBucket]
 
     var body: some View {
-        Surface {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 8) {
-                    Text("时段").frame(maxWidth: .infinity, alignment: .leading)
-                    amountCell("下载")
-                    amountCell("上传")
-                    amountCell("合计")
-                }
-                .font(.caption.weight(.medium)).foregroundStyle(.secondary)
-                .padding(.bottom, 8)
-                .accessibilityHidden(true)
-                ForEach(buckets) { bucket in
-                    Divider()
-                    row(for: bucket)
-                }
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Text("时段").frame(maxWidth: .infinity, alignment: .leading)
+                amountCell("下载")
+                amountCell("上传")
+                amountCell("合计")
+            }
+            .font(.caption.weight(.medium)).foregroundStyle(.secondary)
+            .padding(.bottom, 8)
+            .accessibilityHidden(true)
+            ForEach(buckets) { bucket in
+                Divider()
+                row(for: bucket)
             }
         }
     }

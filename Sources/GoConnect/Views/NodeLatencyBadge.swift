@@ -52,7 +52,7 @@ struct NodeLatencyBadge: View {
     }
 
     var body: some View {
-        VStack(alignment: .trailing, spacing: 3) {
+        VStack(alignment: .leading, spacing: 3) {
             if let pending {
                 HStack(spacing: 6) {
                     if pending == .testing {
@@ -117,7 +117,6 @@ struct NodeLatencyBadge: View {
                 .background(Color.secondary.opacity(0.08), in: Capsule())
             }
         }
-        .frame(minWidth: 96, alignment: .trailing)
         .help(result?.detail ?? "HTTPS 响应延迟，非下载速度。每次测试的网络状况可能不同。")
     }
 }

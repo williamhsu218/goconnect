@@ -102,68 +102,42 @@ struct NodeFlagIcon: View {
 
 struct SubscriptionsView: View {
     @Bindable var store: AppStore
-    @State private var path: [UUID] = []
+    @State private var selectedSubscriptionID: UUID?
     @State private var adding = false
     @State private var name = ""
     @State private var address = ""
     @State private var deleting: Subscription?
     @FocusState private var nameFocused: Bool
 
+    private var selectedSubscription: Subscription? {
+        if let selected = store.subscriptions.first(where: { $0.id == selectedSubscriptionID }) {
+            return selected
+        }
+        let activeID = store.configuration.activeConnection.subscription?.subscriptionID
+        return store.subscriptions.first { $0.id == activeID } ?? store.subscriptions.first
+    }
+
     var body: some View {
-        NavigationStack(path: $path) {
-            VStack(alignment: .leading, spacing: AppTheme.sectionSpacing) {
-                PageHeading(title: "订阅管理", subtitle: "导入订阅，选择适合当前网络的节点。")
-                if store.subscriptions.isEmpty {
-                    ContentUnavailableView("还没有订阅", systemImage: "square.stack.3d.up",
-                        description: Text("导入本机 Clash Verge 订阅，或添加 HTTPS 订阅地址。"))
-                } else {
-                    List(store.subscriptions) { item in
-                        HStack(spacing: 12) {
-                            NavigationLink(value: item.id) {
-                                HStack(spacing: 12) {
-                                    CardIcon(symbol: "square.stack.3d.up")
-                                    VStack(alignment: .leading, spacing: 6) {
-                                        Text(item.payload.name).font(.headline)
-                                        Text("\(item.payload.nodes.count) 个节点 · 更新于 " + Date(timeIntervalSince1970: Double(item.payload.updated)).formatted(date: .abbreviated, time: .shortened))
-                                            .font(.caption).foregroundStyle(.secondary)
-                                    }
-                                    Spacer()
-                                    if store.configuration.activeConnection.subscription?.subscriptionID == item.id {
-                                        StatusPill(title: "当前使用", symbol: "checkmark", color: AppTheme.accent)
-                                    }
-                                    Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                                }
-                            }
-                            MoreActionsMenu(title: "管理 \(item.payload.name)") {
-                                Button("更新订阅", systemImage: "arrow.clockwise") { store.updateSubscription(item) }.disabled(store.subscriptionWorking)
-                                Button("删除订阅…", systemImage: "trash", role: .destructive) { deleting = item }.disabled(store.subscriptionWorking)
-                            }
-                        }.padding(.vertical, 8)
+        Group {
+            if let selectedSubscription {
+                HSplitView {
+                    subscriptionList
+                        .frame(minWidth: 200, idealWidth: 224, maxWidth: 240)
+                    SubscriptionNodesView(store: store, item: selectedSubscription)
+                        .frame(minWidth: 412, maxWidth: .infinity, maxHeight: .infinity)
+                }
+            } else {
+                VStack(spacing: 12) {
+                    ContentUnavailableView {
+                        Label("还没有订阅", systemImage: "square.stack.3d.up")
+                    } description: {
+                        Text("导入本机 Clash Verge 订阅，或添加 HTTPS 订阅地址。")
+                    } actions: {
+                        subscriptionActions
                     }
-                    .listStyle(.inset).scrollContentBackground(.hidden)
+                    subscriptionProgress
                 }
-                subscriptionProgress
-            }
-            .padding(AppTheme.pagePadding)
-            .navigationDestination(for: UUID.self) { id in
-                if let item = store.subscriptions.first(where: { $0.id == id }) {
-                    SubscriptionNodesView(store: store, subscriptionID: item.id)
-                } else {
-                    ContentUnavailableView("订阅已不存在", systemImage: "square.stack.3d.up")
-                }
-            }
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Menu("导入订阅", systemImage: "square.and.arrow.down") {
-                        Button("导入 YAML 文件…", systemImage: "doc.badge.plus") { store.importSubscriptionFile() }
-                        Button("从 Clash Verge 导入", systemImage: "square.and.arrow.down") { store.importSubscriptions() }
-                    }
-                    .disabled(store.subscriptionWorking)
-                }
-                ToolbarItem(placement: .primaryAction) {
-                    Button("添加订阅", systemImage: "plus") { adding = true }
-                        .disabled(store.subscriptionWorking)
-                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .sheet(isPresented: $adding) {
@@ -207,6 +181,62 @@ struct SubscriptionsView: View {
         } message: { _ in Text("仅删除 GoConnect 中的副本。") }
     }
 
+    private var subscriptionList: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("订阅").font(.headline)
+                    Spacer()
+                    subscriptionActions
+                        .labelStyle(.iconOnly)
+                }
+                subscriptionProgress
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 16)
+
+            List(selection: Binding(get: { selectedSubscription?.id }, set: { selectedSubscriptionID = $0 })) {
+                ForEach(store.subscriptions) { item in
+                    let active = store.configuration.activeConnection.subscription?.subscriptionID == item.id
+                    HStack(spacing: 8) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(item.payload.name).font(.callout.weight(.semibold)).lineLimit(1)
+                            Text(active ? "\(item.payload.nodes.count) 个节点 · 当前使用" : "\(item.payload.nodes.count) 个节点")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .help(item.payload.name)
+                        MoreActionsMenu(title: "管理 \(item.payload.name)") {
+                            Button("更新订阅", systemImage: "arrow.clockwise") { store.updateSubscription(item) }.disabled(store.subscriptionWorking)
+                            Button("删除订阅…", systemImage: "trash", role: .destructive) { deleting = item }.disabled(store.subscriptionWorking)
+                        }
+                    }
+                    .padding(.vertical, 6)
+                    .tag(item.id)
+                }
+            }
+            .listStyle(.inset)
+            .scrollContentBackground(.hidden)
+        }
+    }
+
+    private var subscriptionActions: some View {
+        HStack(spacing: 8) {
+            Menu("导入订阅", systemImage: "square.and.arrow.down") {
+                Button("导入 YAML 文件…", systemImage: "doc.badge.plus") { store.importSubscriptionFile() }
+                Button("从 Clash Verge 导入", systemImage: "square.and.arrow.down") { store.importSubscriptions() }
+            }
+            .menuStyle(.borderedButton)
+            .fixedSize()
+            .help("导入订阅")
+
+            Button("添加订阅", systemImage: "plus") { adding = true }
+                .appActionStyle()
+                .help("添加订阅")
+        }
+        .disabled(store.subscriptionWorking)
+    }
+
     @ViewBuilder private var subscriptionProgress: some View {
         if store.subscriptionWorking {
             HStack { ProgressView().controlSize(.small); Text("正在读取订阅…").font(.callout).foregroundStyle(.secondary) }
@@ -220,10 +250,11 @@ struct SubscriptionsView: View {
 
 private struct SubscriptionNodesView: View {
     @Bindable var store: AppStore
-    let subscriptionID: UUID
+    let item: Subscription
     @State private var search = ""
     @State private var sortByLatency = false
-    private var item: Subscription? { store.subscriptions.first { $0.id == subscriptionID } }
+    private let columns = [GridItem(.adaptive(minimum: 210), spacing: 12, alignment: .topLeading)]
+
     private var testingUnavailableReason: String? {
         if !store.localReady { return "运行组件未就绪，请在诊断页检查环境。" }
         if store.nodeLatency.isRunning { return "节点测试正在进行。" }
@@ -243,76 +274,114 @@ private struct SubscriptionNodesView: View {
     }
 
     var body: some View {
-        if let item {
-            VStack(alignment: .leading, spacing: 16) {
-                PageHeading(title: item.payload.name, subtitle: "\(item.payload.nodes.count) 个节点 · 选择后在连接页开启")
-                if let count = item.payload.unsupportedCount, count > 0 {
-                    Label("另有 \(count) 个节点的协议或传输暂不支持，未导入。", systemImage: "info.circle").font(.caption).foregroundStyle(.secondary)
-                }
-                HStack(spacing: 12) {
-                    if store.nodeLatency.isRunning {
-                        ProgressView().controlSize(.small)
-                        Text("测试中 \(store.nodeLatency.completed) / \(store.nodeLatency.total)").font(.callout).monospacedDigit()
-                        Button("停止测试") { store.nodeLatency.stop() }.appActionStyle()
-                    } else {
-                        Button("测试全部", systemImage: "bolt.horizontal.circle") { store.testNodes(item.payload.nodes, in: item) }
-                            .appActionStyle().disabled(!store.canTestNodes)
-                            .help(testingUnavailableReason ?? "测试全部节点的 HTTPS 响应延迟")
-                    }
-                    Spacer()
-                    Toggle("按延迟排序", isOn: $sortByLatency).toggleStyle(.checkbox)
-                }
-                Text("HTTPS 响应延迟 · gstatic.com · 单次最长 8 秒。开启排序后，测试完成时按延迟排列；结果代表测试时的网络状况。")
-                    .font(.caption).foregroundStyle(.secondary)
-                if store.busy && store.usesCompanyRoutes {
-                    Label("公司内网已开启，请结束本次连接后再测试节点。", systemImage: "info.circle").font(.caption).foregroundStyle(.secondary)
-                } else if !store.canTestNodes, let reason = testingUnavailableReason {
-                    Label(reason, systemImage: "info.circle").font(.caption).foregroundStyle(.secondary)
-                }
-                if let error = store.nodeLatency.storageError { Text(error).font(.caption).foregroundStyle(.red) }
-                let nodes = visibleNodes(in: item)
-                if nodes.isEmpty {
-                    ContentUnavailableView.search(text: search)
+        let updated = Date(timeIntervalSince1970: Double(item.payload.updated)).formatted(date: .abbreviated, time: .shortened)
+        VStack(alignment: .leading, spacing: 12) {
+            PageHeading(title: item.payload.name, subtitle: "\(item.payload.nodes.count) 个节点 · 更新于 \(updated)")
+            HStack(spacing: 10) {
+                InlineSearchField(prompt: "搜索节点名称或协议", text: $search)
+                    .frame(maxWidth: 230)
+                Spacer(minLength: 0)
+                Button("更新订阅", systemImage: "arrow.clockwise") { store.updateSubscription(item) }
+                    .appActionStyle()
+                    .disabled(store.subscriptionWorking)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            if let count = item.payload.unsupportedCount, count > 0 {
+                Label("另有 \(count) 个节点的协议或传输暂不支持，未导入。", systemImage: "info.circle").font(.caption).foregroundStyle(.secondary)
+            }
+            HStack(spacing: 12) {
+                if store.nodeLatency.isRunning {
+                    ProgressView().controlSize(.small)
+                    Text("测试中 \(store.nodeLatency.completed) / \(store.nodeLatency.total)").font(.callout).monospacedDigit()
+                    Button("停止测试") { store.nodeLatency.stop() }.appActionStyle()
                 } else {
-                    List(nodes) { node in nodeRow(node, in: item) }
-                        .listStyle(.inset).scrollContentBackground(.hidden)
+                    Button("测试全部", systemImage: "bolt.horizontal.circle") { store.testNodes(item.payload.nodes, in: item) }
+                        .appActionStyle().disabled(!store.canTestNodes)
+                        .help(testingUnavailableReason ?? "测试全部节点的 HTTPS 响应延迟")
                 }
-                if store.subscriptionWorking {
-                    HStack { ProgressView().controlSize(.small); Text("正在更新订阅…").font(.caption).foregroundStyle(.secondary) }
-                }
+                Spacer(minLength: 8)
+                Toggle("按延迟排序", isOn: $sortByLatency).toggleStyle(.checkbox)
             }
-            .padding(AppTheme.pagePadding)
-            .searchable(text: $search, prompt: "搜索节点名称或协议")
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button("更新订阅", systemImage: "arrow.clockwise") { store.updateSubscription(item) }.disabled(store.subscriptionWorking)
-                }
+            Text("HTTPS 响应延迟 · gstatic.com · 单次最长 8 秒。开启排序后，测试完成时按延迟排列；结果代表测试时的网络状况。")
+                .font(.caption).foregroundStyle(.secondary)
+            if store.busy && store.usesCompanyRoutes {
+                Label("公司内网已开启，请结束本次连接后再测试节点。", systemImage: "info.circle").font(.caption).foregroundStyle(.secondary)
+            } else if !store.canTestNodes, let reason = testingUnavailableReason {
+                Label(reason, systemImage: "info.circle").font(.caption).foregroundStyle(.secondary)
             }
+            if let error = store.nodeLatency.storageError { Text(error).font(.caption).foregroundStyle(.red) }
+            let nodes = visibleNodes(in: item)
+            if nodes.isEmpty {
+                ContentUnavailableView.search(text: search)
+            } else {
+                ScrollView {
+                    LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
+                        ForEach(nodes) { node in nodeCard(node) }
+                    }
+                    .padding(2)
+                }
+                .id(item.id)
+            }
+            if store.subscriptionWorking {
+                HStack { ProgressView().controlSize(.small); Text("正在更新订阅…").font(.caption).foregroundStyle(.secondary) }
+            }
+        }
+        .padding(AppTheme.pagePadding)
+        .onChange(of: item.id) {
+            search = ""
+            sortByLatency = false
         }
     }
 
-    private func nodeRow(_ node: SubscriptionNode, in item: Subscription) -> some View {
+    private func nodeCard(_ node: SubscriptionNode) -> some View {
         let selected = store.configuration.activeConnection.subscription == SubscriptionSelection(subscriptionID: item.id, nodeName: node.name)
-        return HStack(spacing: 12) {
-            NodeFlagIcon(flag: RegionFlagHelper.detectFlag(in: node.name))
-                .help("按节点名称识别的地区提示，不代表已验证的实际位置")
-            VStack(alignment: .leading, spacing: 4) {
-                Text(node.name).font(.body.weight(.medium)).lineLimit(2).textSelection(.enabled)
-                Text(node.type.uppercased()).font(.caption).foregroundStyle(.secondary)
-            }.frame(maxWidth: .infinity, alignment: .leading)
-            NodeLatencyBadge(result: store.nodeLatency.result(node, in: item.id), pending: store.nodeLatency.state(node, in: item.id))
-            Button { store.testNodes([node], in: item) } label: { Image(systemName: "bolt.circle").frame(width: 28, height: 28) }
-                .buttonStyle(.borderless).disabled(!store.canTestNodes)
-                .accessibilityLabel("测试节点 \(node.name)").help(testingUnavailableReason ?? "测试 HTTPS 响应延迟")
-            if selected {
-                Label("当前选用", systemImage: "checkmark").font(.callout).foregroundStyle(AppTheme.accent).frame(minWidth: 82)
-            } else {
-                Button("使用节点") { store.useNode(node, in: item) }
-                    .appActionStyle().disabled(store.busy || store.subscriptionWorking)
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
+                NodeFlagIcon(flag: RegionFlagHelper.detectFlag(in: node.name))
+                    .help("按节点名称识别的地区提示，不代表已验证的实际位置")
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(node.name).font(.headline).lineLimit(2, reservesSpace: true).textSelection(.enabled).help(node.name)
+                    Text(node.type.uppercased()).font(.caption).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(minHeight: 46, alignment: .topLeading)
+
+            HStack(spacing: 8) {
+                NodeLatencyBadge(
+                    result: store.nodeLatency.result(node, in: item.id),
+                    pending: store.nodeLatency.state(node, in: item.id)
+                )
+                Spacer(minLength: 0)
+                Button("测试", systemImage: "bolt.circle") { store.testNodes([node], in: item) }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(!store.canTestNodes)
+                    .accessibilityLabel("测试节点 \(node.name)")
+                    .help(testingUnavailableReason ?? "测试 HTTPS 响应延迟")
+            }
+            .frame(minHeight: 44)
+
+            Group {
+                if selected {
+                    Label("当前选用", systemImage: "checkmark.circle.fill")
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(AppTheme.accent)
+                } else {
+                    Button { store.useNode(node, in: item) } label: {
+                        Text("使用节点").frame(maxWidth: .infinity)
+                    }
+                    .appActionStyle()
+                    .disabled(store.busy || store.subscriptionWorking)
                     .help(store.busy ? "断开 VPN 后可切换节点" : "使用此节点作为当前线路")
                     .accessibilityLabel("使用节点 \(node.name)")
+                }
             }
+            .frame(maxWidth: .infinity, minHeight: AppTheme.actionHeight)
         }
-        .padding(.vertical, 8)
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .cardSurface(emphasized: selected)
+        .accessibilityElement(children: .contain)
     }
 }

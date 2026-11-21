@@ -38,9 +38,7 @@ extension Configuration {
         edited.profile.username = edited.profile.username.trimmingCharacters(in: .whitespacesAndNewlines)
         edited.profile.group = edited.profile.group.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !edited.profile.name.isEmpty else { throw ConfigurationError.invalidName }
-        guard edited.directDomains.count <= 256 else { throw ConfigurationError.invalidDomainRules }
-        edited.directDomains = try edited.directDomains.map { try DomainRule($0.domain, includeSubdomains: $0.includeSubdomains) }
-        guard Set(edited.directDomains.map(\.domain)).count == edited.directDomains.count else { throw ConfigurationError.invalidDomainRules }
+        edited.directDomains = try DomainRule.validated(edited.directDomains)
         edited.remoteNetworks = try RemoteNetwork.validated(edited.remoteNetworks)
         if edited.companyRoutesEnabled && (edited.subscription != nil || edited.remoteNetworks.isEmpty) {
             throw ConfigurationError.invalidCompanyMode

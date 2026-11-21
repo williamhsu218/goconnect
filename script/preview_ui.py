@@ -28,9 +28,10 @@ def prepare(work: Path) -> Path:
     # Every override below applies only to the disposable copy.
     core = source / "Sources/GoConnectCore/Configuration.swift"
     core_text = core.read_text()
-    if core_text.count('"com.willhsu.GoConnect"') != 1:
+    identity = 'isTestBuild ? "com.willhsu.GoConnect.DualVPNTest" : "com.willhsu.GoConnect"'
+    if core_text.count(identity) != 1:
         raise RuntimeError("Cannot prove preview bundle identity isolation; refusing to build.")
-    core.write_text(core_text.replace('"com.willhsu.GoConnect"', json.dumps(BUNDLE_ID)))
+    core.write_text(core_text.replace(identity, json.dumps(BUNDLE_ID)))
     app = source / "Sources/GoConnect"
     for path in app.rglob("*.swift"):
         text = path.read_text()
@@ -53,7 +54,7 @@ struct KeychainStore {
     service = app / "Services/NetworkServiceClient.swift"
     text = service.read_text()
     start = text.index("    private func authorize(arguments:")
-    end = text.index("    nonisolated private static func readStatus", start)
+    end = text.index("\n    }\n", start) + len("\n    }\n")
     service.write_text(text[:start] + '''    private func authorize(arguments: [String]) async throws {
         throw ServiceError("隔离界面测试不操作本机网络服务。")
     }
@@ -66,7 +67,34 @@ struct KeychainStore {
     text = text.replace("    var connectionControlState: VPNControlState {\n        VPNControlState(", '''    var connectionControlState: VPNControlState {
         if let raw = ProcessInfo.processInfo.environment["GOCONNECT_PREVIEW_CONTROL_STATE"], let state = VPNControlState(rawValue: raw) { return state }
         return VPNControlState(''')
-    control.write_text("import Foundation\n" + text)
+    connection_action = """    func setConnectionEnabled(_ enabled: Bool) {
+        guard connectionControlState.canToggle else { return }
+        if enabled {
+            guard !connectionControlState.isOn else { return }
+            connect()
+        } else {
+            guard connectionControlState.isOn else { return }
+            disconnect()
+        }
+    }
+"""
+    if text.count(connection_action) != 1:
+        raise RuntimeError("Cannot replace the real connection button action in the preview.")
+    control.write_text("import Foundation\n" + text.replace(connection_action, ""))
+
+    company = app / "Stores/CompanyConnectionStore.swift"
+    with company.open("a") as file:
+        file.write("""
+extension CompanyConnectionStore {
+    func setPreviewPhase(_ state: String) {
+        phase = state
+        message = state == "failed" ? "示例：公司网关未响应。" : nil
+        received = state == "idle" ? 0 : 50_541_363
+        sent = state == "idle" ? 0 : 6_396_314
+        routeDNSServers = state == "connected" || state == "reconnecting" ? ["192.0.2.53"] : []
+    }
+}
+""")
     return source
 
 
@@ -83,7 +111,10 @@ def main():
         work = Path(temporary)
         source = prepare(work)
         sdk = subprocess.check_output(["xcrun", "--sdk", "macosx", "--show-sdk-path"], text=True).strip()
-        build = ["swift", "build", "--build-system", "native", "--sdk", sdk, "--scratch-path", str(work / "swift")]
+        build = [
+            "swift", "build", "--build-system", "native", "--sdk", sdk,
+            "--scratch-path", str(work / "swift"), "-Xswiftc", "-DGOCONNECT_ISOLATED_TEST",
+        ]
         with (evidence / "preview-build.log").open("w") as log:
             subprocess.run(build, cwd=source, stdout=log, stderr=subprocess.STDOUT, check=True)
         binary = Path(subprocess.check_output([*build, "--show-bin-path"], cwd=source, text=True).strip()) / "GoConnect"
@@ -92,18 +123,25 @@ def main():
         (contents / "MacOS").mkdir(parents=True)
         (contents / "Resources").mkdir()
         shutil.copy2(binary, contents / "MacOS/GoConnect")
+        subprocess.run(["swift", str(ROOT / "script/make_icon.swift"), str(contents / "Resources/GoConnect.icns")], check=True)
         # The UI target links Sparkle even though updates are disabled in this
         # isolated app. Keep its signed framework and symlinks intact.
         sparkle = work / "swift/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
         (contents / "Frameworks").mkdir()
         shutil.copytree(sparkle, contents / "Frameworks/Sparkle.framework", symlinks=True)
         with (contents / "Info.plist").open("wb") as stream:
-            plistlib.dump({"CFBundleIdentifier": BUNDLE_ID, "CFBundleExecutable": "GoConnect", "CFBundleName": "GoConnect UI Preview", "CFBundlePackageType": "APPL", "LSMinimumSystemVersion": "14.0", "NSPrincipalClass": "NSApplication", "CFBundleDevelopmentRegion": "zh_CN", "CFBundleLocalizations": ["zh-Hans"]}, stream)
+            plistlib.dump({
+                "CFBundleIdentifier": BUNDLE_ID, "CFBundleExecutable": "GoConnect",
+                "CFBundleName": "GoConnect UI Preview", "CFBundleDisplayName": "GoConnect QA",
+                "CFBundleIconFile": "GoConnect.icns", "CFBundlePackageType": "APPL",
+                "LSMinimumSystemVersion": "14.0", "NSPrincipalClass": "NSApplication",
+                "CFBundleDevelopmentRegion": "zh_CN", "CFBundleLocalizations": ["zh-Hans"],
+            }, stream)
         subprocess.run(["codesign", "--force", "--sign", "-", str(bundle)], check=True)
         subprocess.run(["codesign", "--verify", "--deep", "--strict", str(bundle)], check=True)
         command = evidence / "preview-command.json"
-        command.write_text(json.dumps({"sequence": time.time(), "scenario": "connected", "page": "connection", "theme": "light", "width": 980, "height": 700}))
-        metadata = {"bundleID": BUNDLE_ID, "app": str(bundle), "data": str(work / "data"), "source": str(source), "command": str(command), "runtimeIncluded": False, "keychain": "stub", "webStorage": "nonPersistent", "privilegedAuthorization": "blocked in disposable source"}
+        command.write_text(json.dumps({"sequence": time.time(), "scenario": "connected", "page": "connection", "theme": "light"}))
+        metadata = {"bundleID": BUNDLE_ID, "app": str(bundle), "data": str(work / "data"), "source": str(source), "command": str(command), "runtimeIncluded": False, "networkTakeover": "disabled at compile time", "keychain": "stub", "webStorage": "nonPersistent", "privilegedAuthorization": "blocked in disposable source"}
         metadata["sourceViewHashes"] = json.loads((source / "original-view-hashes.json").read_text())
         (evidence / "preview-session.json").write_text(json.dumps(metadata, indent=2))
         print(json.dumps({key: value for key, value in metadata.items() if key != "sourceViewHashes"}), flush=True)

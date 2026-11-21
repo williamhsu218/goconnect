@@ -35,7 +35,11 @@ struct ProfileEditorView: View {
                 credentialsSection
                 routingModeSection
                 companySubnetsSection
-                DomainRulesEditor(rules: $draft.connection.directDomains, readOnly: readOnly)
+                DomainRulesEditor(
+                    readRules: { draft.connection.directDomains },
+                    writeRules: { draft.connection.directDomains = $0 },
+                    readOnly: readOnly
+                )
             }
             .formStyle(.grouped)
         }
@@ -59,6 +63,11 @@ struct ProfileEditorView: View {
 
     private var profileActions: some View {
         HStack(spacing: 8) {
+            Button("查看线路流量", systemImage: "chart.bar.xaxis") { store.showTraffic(for: draft.id) }
+                .labelStyle(.iconOnly)
+                .appActionStyle()
+                .disabled(draft.isNew)
+                .help(draft.isNew ? "保存线路后可查看流量" : "查看这条线路的流量统计")
             Button("放弃更改") { store.cancelProfileEditing() }
                 .appActionStyle().disabled(!store.profileDraftHasChanges)
             Button("保存线路", systemImage: "checkmark") { store.saveProfileDraft() }
@@ -100,19 +109,27 @@ struct ProfileEditorView: View {
     }
 
     private var routingModeSection: some View {
-        Section("分流模式") {
+        let connection = store.configuration.connections.first { $0.id == draft.id } ?? draft.connection
+        return Section("分流模式") {
             Picker("应用分流", selection: $draft.connection.routingMode) {
                 ForEach(RoutingMode.allCases) { mode in Text(mode.title).tag(mode) }
             }
             .pickerStyle(.segmented).disabled(readOnly)
             Text(draft.connection.routingMode.explanation).font(.callout).foregroundStyle(.secondary)
-            LabeledContent("代理应用与服务", value: "\(draft.connection.applications.count) 个")
-            LabeledContent("直连 App / 服务", value: "\(draft.connection.excludedApplications.count) 个")
-            Button("管理应用名单", systemImage: "arrow.up.forward") {
-                store.navigate(to: draft.connection.routingMode == .global ? .exclusions : .applications)
-            }.appInlineActionStyle()
-            if !draft.connection.conflictingApplications.isEmpty {
-                Label("直连名单优先：" + draft.connection.conflictingApplications.map(\.name).joined(separator: "、"),
+            LabeledContent("代理应用与服务", value: "\(connection.applications.count) 个")
+            LabeledContent("直连 App / 服务", value: "\(connection.excludedApplications.count) 个")
+            if draft.id == store.configuration.activeProfileID {
+                Button("管理应用名单", systemImage: "arrow.up.forward") {
+                    store.navigate(to: draft.connection.routingMode == .global ? .exclusions : .applications)
+                }
+                .appInlineActionStyle()
+            } else {
+                Text(draft.isNew ? "保存并切换到此线路后可管理名单。" : "切换到此线路后可管理名单。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if !connection.conflictingApplications.isEmpty {
+                Label("直连名单优先：" + connection.conflictingApplications.map(\.name).joined(separator: "、"),
                       systemImage: "exclamationmark.circle")
                     .font(.caption).foregroundStyle(.primary)
             }

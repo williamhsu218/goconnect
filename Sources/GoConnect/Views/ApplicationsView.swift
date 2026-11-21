@@ -15,8 +15,18 @@ struct ApplicationsView: View {
     @Bindable var store: AppStore
     var excluded = false
 
-    @State private var filter: ApplicationFilter = .all
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isDropTargeted = false
+
+    private var searchText: Binding<String> {
+        excluded ? $store.excludedApplicationSearch : $store.applicationSearch
+    }
+
+    private var typeSelection: Binding<ApplicationFilter> {
+        excluded ? $store.excludedApplicationFilter : $store.applicationFilter
+    }
+
+    private var filter: ApplicationFilter { typeSelection.wrappedValue }
 
     private var apps: [AllowedApplication] {
         let list = store.filteredApps(excluded: excluded)
@@ -32,10 +42,15 @@ struct ApplicationsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: AppTheme.sectionSpacing) {
-            PageHeading(
-                title: excluded ? "直连 App / 服务" : "代理应用与服务",
-                subtitle: excluded ? "这些 App 和服务使用原网络，直连规则优先。" : "按名单代理模式仅让名单中的应用与服务走所选线路。"
-            )
+            VStack(alignment: .leading, spacing: 4) {
+                PageHeading(
+                    title: excluded ? "直连 App / 服务" : "代理应用与服务",
+                    subtitle: "当前线路 · \(store.configuration.activeConnection.displayName)"
+                )
+                Text(excluded ? "这些 App 和服务使用原网络，直连规则优先。" : "按名单代理模式仅让名单中的应用与服务走所选线路。")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
 
             if store.busy {
                 Label("连接期间名单为只读；断开后修改，下次连接生效。", systemImage: "lock")
@@ -48,26 +63,19 @@ struct ApplicationsView: View {
                     .font(.callout).foregroundStyle(.secondary)
             }
 
-            HStack(spacing: 12) {
-                if #available(macOS 26.0, *) {
-                    filterBar.padding(.leading, 12)
-                } else {
-                    filterBar
-                }
-
-                Spacer()
-
-            }
+            listControls
 
             ZStack {
                 if apps.isEmpty {
                     emptyStateView
+                        .transition(.opacity)
                 } else {
                     List(apps) { app in
                         applicationRow(app)
                     }
                     .listStyle(.inset)
                     .scrollContentBackground(.hidden)
+                    .transition(.opacity)
                 }
 
                 if isDropTargeted {
@@ -86,24 +94,39 @@ struct ApplicationsView: View {
         }
         .padding(AppTheme.pagePadding)
         .frame(maxWidth: AppTheme.contentWidth, maxHeight: .infinity, alignment: .topLeading)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .searchable(text: $store.search, prompt: "搜索名称或路径")
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button("刷新应用", systemImage: "arrow.clockwise") { store.scanApplications() }
-                    .disabled(store.scanning)
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Menu("添加…", systemImage: "plus") {
-                    Button("添加 App…", systemImage: "app.badge") { store.addApplication(excluded: excluded) }
-                    Button("添加可执行服务…", systemImage: "terminal") { store.addExecutableService(excluded: excluded) }
-                }.disabled(!store.canEditApplications)
-            }
-        }
+        .frame(maxWidth: .infinity, alignment: .top)
         .onAppear {
             if store.catalog.isEmpty {
                 store.scanApplications()
             }
+        }
+    }
+
+    private var listControls: some View {
+        HStack(spacing: 12) {
+            InlineSearchField(prompt: "搜索名称或路径", text: searchText)
+                .frame(maxWidth: 190)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            filterBar
+
+            HStack(spacing: 8) {
+                Button("刷新", systemImage: "arrow.clockwise") { store.scanApplications() }
+                    .appActionStyle()
+                    .disabled(store.scanning)
+                    .accessibilityLabel("刷新应用")
+                    .help("重新扫描已安装应用")
+
+                Menu("添加", systemImage: "plus") {
+                    Button("添加 App…", systemImage: "app.badge") { store.addApplication(excluded: excluded) }
+                    Button("添加可执行服务…", systemImage: "terminal") { store.addExecutableService(excluded: excluded) }
+                }
+                .menuStyle(.borderedButton)
+                .disabled(!store.canEditApplications)
+                .help(excluded ? "添加到直连名单" : "添加到代理名单")
+            }
+            .fixedSize()
+            .frame(maxWidth: .infinity, alignment: .trailing)
         }
     }
 
@@ -203,15 +226,12 @@ struct ApplicationsView: View {
     }
 
     private var filterBar: some View {
-        Picker("目标类型", selection: $filter) {
-            ForEach(ApplicationFilter.allCases) { item in
-                Text(item.rawValue).tag(item)
+        SlidingTabs(items: ApplicationFilter.allCases, selection: filter, accessibilityTitle: "目标类型", compact: true) { item in
+            guard item != filter else { return }
+            withAnimation(reduceMotion ? nil : .smooth(duration: 0.26)) {
+                typeSelection.wrappedValue = item
             }
         }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .frame(maxWidth: 340)
-        .accessibilityLabel("目标类型")
     }
 
     private var cliIconView: some View {
@@ -238,7 +258,7 @@ struct ApplicationsView: View {
 
     private var emptyIcon: String {
         if store.scanning { return "hourglass" }
-        if !store.search.isEmpty { return "magnifyingglass" }
+        if !searchText.wrappedValue.isEmpty { return "magnifyingglass" }
         switch filter {
         case .all: return "square.dashed"
         case .apps: return "app.badge"
@@ -248,7 +268,8 @@ struct ApplicationsView: View {
 
     private var emptyTitle: String {
         if store.scanning { return "正在扫描已安装应用…" }
-        if !store.search.isEmpty { return "未找到匹配「\(store.search)」的目标" }
+        let query = searchText.wrappedValue
+        if !query.isEmpty { return "未找到匹配「\(query)」的目标" }
         switch filter {
         case .all: return "暂无应用或服务目标"
         case .apps: return "暂无 .app 应用"

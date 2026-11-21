@@ -2,6 +2,10 @@ import AppKit
 
 @MainActor
 enum AppBranding {
+    static var displayName: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "GoConnect"
+    }
+
     static let icon: NSImage = {
         let name = Bundle.main.object(forInfoDictionaryKey: "CFBundleIconFile") as? String ?? "GoConnect"
         let filename = (name as NSString).pathExtension.isEmpty ? name + ".icns" : name

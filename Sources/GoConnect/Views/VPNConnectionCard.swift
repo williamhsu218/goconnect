@@ -1,13 +1,14 @@
 import SwiftUI
-import Combine
 import GoConnectCore
 
 struct VPNConnectionCard: View {
     @Bindable var store: AppStore
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.appearsActive) private var appearsActive
 
+    @State private var showingDetails = false
     @State private var currentTime = Date()
-
-    private let timer = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()
 
     private var state: VPNControlState {
         store.connectionControlState
@@ -19,6 +20,8 @@ struct VPNConnectionCard: View {
 
     private var metricsActive: Bool { state == .connected || (state == .diagnostic && store.phase == "testing") }
     private var hasSession: Bool { metricsActive || state == .reconnecting }
+    private var connectionPageActive: Bool { appearsActive && store.page == .connection }
+    private var updatesSessionClock: Bool { connectionPageActive && hasSession }
     private var trafficFresh: Bool {
         store.trafficAvailable && store.trafficUpdatedAt.map { currentTime.timeIntervalSince($0) < 5 } == true
     }
@@ -27,6 +30,7 @@ struct VPNConnectionCard: View {
     private var lineName: String { store.configuration.activeConnection.displayName }
 
     private var degraded: Bool { state == .connected && store.pathHealth?.state == "degraded" }
+    private var isHealthyConnection: Bool { state == .connected && !degraded }
 
     private var statusColor: Color {
         if state.needsAttention || degraded { return AppTheme.warning }
@@ -47,12 +51,10 @@ struct VPNConnectionCard: View {
         }
     }
 
-    /// Transitional and failed states keep the store's explanation. A healthy connection's
-    /// routing explanation is shown by ApplicationRoutingCard on the same page.
     private var stateExplanation: String? {
         switch state {
         case .connected: degraded ? store.connectionControlSubtitle : nil
-        case .off: canStart && !store.busy ? store.statusSubtitle : nil
+        case .off: nil
         default: store.connectionControlSubtitle
         }
     }
@@ -79,17 +81,16 @@ struct VPNConnectionCard: View {
 
     /// Totals survive in the store until the next connect resets them, so anything shown
     /// outside a session is labelled as belonging to the previous one.
-    private func trafficDetail(_ verb: String, bytes: UInt64) -> String {
-        let total = "\(verb) \(NetworkFormatters.formatBytes(bytes))"
+    private var trafficDetail: (showsTotals: Bool, note: String?) {
         let sampled = store.trafficUpdatedAt != nil
         if metricsActive {
-            if trafficFresh { return total }
-            return sampled ? "统计待更新 · \(total)" : "暂无统计数据"
+            if trafficFresh { return (true, nil) }
+            return sampled ? (true, "统计待更新") : (false, "暂无统计数据")
         }
         switch state {
-        case .reconnecting: return sampled ? "恢复中 · \(total)" : "暂无统计数据"
-        case .authorizing, .interrupted, .needsRestart: return sampled ? total : "暂无统计数据"
-        default: return store.received > 0 || store.sent > 0 ? "上次会话 · \(total)" : "连接后统计"
+        case .reconnecting: return sampled ? (true, "恢复中") : (false, "暂无统计数据")
+        case .authorizing, .interrupted, .needsRestart: return sampled ? (true, nil) : (false, "暂无统计数据")
+        default: return store.received > 0 || store.sent > 0 ? (true, "上次会话") : (false, "连接后统计")
         }
     }
 
@@ -117,295 +118,366 @@ struct VPNConnectionCard: View {
     }
 
     var body: some View {
-        Surface {
-            VStack(alignment: .leading, spacing: 14) {
-                // Status, the single line presentation and controls share one header.
-                header
+        VStack(spacing: 12) {
+            Surface {
+                VStack(spacing: 12) {
+                    powerControl
+                        .background {
+                            if isHealthyConnection && !reduceMotion {
+                                breathingRing
+                            }
+                        }
+                    VStack(spacing: 5) {
+                        HStack(spacing: 7) {
+                            if let statusBadge {
+                                Image(systemName: statusBadge)
+                                    .font(.callout.weight(.semibold))
+                                    .foregroundStyle(statusColor)
+                                    .accessibilityHidden(true)
+                            }
+                            Text(store.connectionDisplayTitle)
+                                .font(.system(size: 28, weight: .semibold))
+                            if state.isWorking {
+                                ProgressView().controlSize(.small)
+                            }
+                        }
+                        Text(store.accessTitle)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel("分流模式：\(store.accessTitle)")
+                        if let stateExplanation {
+                            Text(stateExplanation)
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
 
-                metricsGrid
+                    if hasSession { sessionMetrics }
+                    if state == .diagnostic {
+                        Button("停止诊断", systemImage: "stop.circle") { store.disconnect() }
+                            .appActionStyle()
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+            }
 
-                Divider()
-
-                publicIPRow
-
-                if !isProxyLine {
+            Surface {
+                VStack(alignment: .leading, spacing: 10) {
+                    lineRow
                     Divider()
-                    tunnelAddressRow
+                    connectionDetails
                 }
             }
         }
-        .onAppear { currentTime = Date() }
-        .onReceive(timer) { now in
-            currentTime = now
+        .task(id: updatesSessionClock) {
+            guard updatesSessionClock else { return }
+            while !Task.isCancelled {
+                currentTime = Date()
+                do { try await Task.sleep(for: .seconds(1)) }
+                catch { break }
+            }
         }
     }
 
-    private var header: some View {
-        HStack(alignment: .top, spacing: 16) {
-            statusIcon
+    @ViewBuilder
+    private var powerControl: some View {
+        if #available(macOS 26.0, *) {
+            powerButton
+                .buttonStyle(.glassProminent)
+                .buttonBorderShape(.circle)
+        } else {
+            powerButton
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.capsule)
+        }
+    }
+
+    private var breathingRing: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 60, paused: !connectionPageActive)) { timeline in
+            // Only the phase changes each frame. Layout stays tied to the power button.
+            let angle = timeline.date.timeIntervalSinceReferenceDate
+                .truncatingRemainder(dividingBy: 3) * 2 * Double.pi / 3
+            let expansion = (1 - cos(angle)) / 2
+            Circle()
+                .strokeBorder(AppTheme.success, lineWidth: 2)
+                .scaleEffect(1.08 + 0.24 * expansion)
+                .opacity(0.36 - 0.26 * expansion)
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    private var powerButton: some View {
+        let actionTitle = state.isOn ? "断开主线路" : "连接主线路"
+        return Button {
+            store.setConnectionEnabled(!state.isOn)
+        } label: {
+            Image(systemName: "power")
+                .font(.system(size: 25, weight: .medium))
+                .frame(width: 48, height: 48)
+        }
+        .tint(isHealthyConnection ? AppTheme.success : AppTheme.accent)
+        .disabled(!state.canToggle || (!canStart && !state.isOn))
+        .accessibilityLabel(actionTitle)
+        .accessibilityValue(store.connectionDisplayTitle)
+        .help(actionTitle)
+    }
+
+    private var lineRow: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "server.rack")
+                .font(.body.weight(.medium))
+                .foregroundStyle(AppTheme.accent)
+                .frame(width: 34, height: 34)
+                .background(AppTheme.selectedBackground, in: RoundedRectangle(cornerRadius: AppTheme.itemRadius))
+                .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
-                    Text(store.connectionDisplayTitle)
-                        .font(.system(size: 28, weight: .semibold))
+                Text("当前线路").font(.caption).foregroundStyle(.secondary)
+                if lineLocked {
+                    Text(lineName)
+                        .font(.headline)
                         .fixedSize(horizontal: false, vertical: true)
-                    if state.isWorking {
-                        ProgressView()
-                            .controlSize(.small)
-                    }
-                }
-                lineSummary
-                if let stateExplanation {
-                    Text(stateExplanation)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .help("结束连接或诊断后可切换线路")
+                        .accessibilityLabel("当前线路：\(lineName)")
+                } else {
+                    SavedConnectionsView(store: store)
+                        .labelsHidden()
+                        .controlSize(.regular)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            controls
+            Button("线路设置", systemImage: "slider.horizontal.3") {
+                store.beginEditingProfile(store.configuration.activeProfileID)
+            }
+            .appActionStyle()
+            .fixedSize()
         }
     }
 
-    private var lineSummary: some View {
-        HStack(spacing: 6) {
-            if lineLocked {
-                Text(lineName)
-                    .font(.title3)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .help("当前线路：\(lineName)")
-                    .accessibilityLabel("当前线路：\(lineName)")
-            } else {
-                SavedConnectionsView(store: store)
-                    .labelsHidden().controlSize(.regular)
-                    .frame(maxWidth: 280).help("选择已保存的线路")
-            }
-            Text(lineLocked ? "· \(store.accessTitle)" : store.accessTitle)
-                .font(lineLocked ? .title3 : .callout)
-                .foregroundStyle(.secondary)
-                .fixedSize()
-                .accessibilityLabel("分流模式：\(store.accessTitle)")
-        }
-    }
-
-    private var controls: some View {
-        VStack(alignment: .trailing, spacing: 10) {
-            connectionToggle
-
-            HStack(spacing: 8) {
-                if state == .diagnostic {
-                    Button("停止诊断") {
-                        store.disconnect()
-                    }
-                    .appActionStyle()
-                }
-
-                Button {
-                    store.beginEditingProfile(store.configuration.activeProfileID)
-                } label: {
-                    Label("线路设置", systemImage: "slider.horizontal.3")
-                }
-                .appActionStyle()
-                .help("当前分流模式：\(store.accessTitle)")
-            }
-
-            if lineLocked {
-                Text("结束连接或诊断后可切换线路").font(.subheadline).foregroundStyle(.secondary)
-            }
-        }
-        .fixedSize(horizontal: true, vertical: false)
-    }
-
-    private var publicIPRow: some View {
-        NetworkInfoRow(title: "公网出口 IP", symbol: "globe") {
-            Text(!hasSession ? "连接后检测" : store.publicIPChecking ? "检测中…" : store.publicIP ?? (store.publicIPFailed ? "检测失败" : "待检测"))
-                .font(.system(.callout, design: .monospaced))
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-        } trailing: {
-            if let checked = store.publicIPCheckedAt, hasSession {
-                Text("检测于 \(Text(checked, style: .time))").font(.subheadline).monospacedDigit().foregroundStyle(.secondary)
-                    .help("上次出口 IP 检测时间")
-            }
-            Button("刷新出口 IP", systemImage: "arrow.clockwise") { store.refreshPublicIP() }
-                .labelStyle(.iconOnly).buttonStyle(.borderless)
-                .disabled(!metricsActive || store.publicIPChecking)
-                .help("通过当前线路检测公网出口 IP")
-        }
-        .help("通过所选线路的代理检测；这是该线路的公网出口 IP，不是隧道虚拟地址。")
-    }
-
-    private var tunnelAddressRow: some View {
-        NetworkInfoRow(title: "隧道虚拟地址", symbol: "network") {
-            Text(addressSummary)
-                .font(.system(.callout, design: .monospaced))
-                .fixedSize(horizontal: false, vertical: true)
-        } trailing: {
-            if let addressDetail {
-                Text(addressDetail).font(.subheadline).monospacedDigit().foregroundStyle(.secondary)
-            }
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("隧道虚拟地址，非公网出口 IP")
-        .accessibilityValue(addressAccessibilityValue)
-        .help(addressHelp)
-    }
-
-    private var statusIcon: some View {
-        Image(systemName: "network")
-            .font(.system(size: 28, weight: .regular))
-            .foregroundStyle(state == .off || state.needsAttention ? Color.secondary : AppTheme.accent)
-            .frame(width: 56, height: 56)
-            .background(statusColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(alignment: .bottomTrailing) {
-                if let statusBadge {
-                    Image(systemName: statusBadge)
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(statusColor)
-                        .background(AppTheme.controlBackground, in: Circle())
-                        .offset(x: 4, y: 4)
-                }
-            }
-            .accessibilityHidden(true)
-    }
-
-    private var connectionToggle: some View {
-        HStack(spacing: 12) {
-            Text("VPN 连接").font(.body.weight(.medium)).foregroundStyle(.primary)
-                .accessibilityHidden(true)
-
-            Toggle("VPN 连接", isOn: Binding(
-                get: { state.isOn },
-                set: { enabled in
-                    if enabled != state.isOn {
-                        store.setConnectionEnabled(enabled)
-                    }
-                }
-            ))
-            .labelsHidden()
-            .toggleStyle(.switch)
-            .controlSize(.regular)
-            .tint(AppTheme.accent)
-            .disabled(!state.canToggle || (!canStart && !state.isOn))
-            .accessibilityLabel("VPN 连接开关")
-            .accessibilityHint(state.isOn ? "关闭以断开连接" : "开启所选线路")
-            .help(state.isOn ? "关闭 VPN 连接" : "开启 VPN 连接")
-        }
-    }
-
-    private var metricsGrid: some View {
+    private var sessionMetrics: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(alignment: .top, spacing: 16) {
+            HStack(spacing: 16) {
                 downloadMetric
-                Divider()
                 uploadMetric
-                Divider()
                 durationMetric
             }
-            .fixedSize(horizontal: false, vertical: true)
+            .fixedSize(horizontal: true, vertical: false)
 
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(spacing: 4) {
                 downloadMetric
-                Divider()
                 uploadMetric
-                Divider()
                 durationMetric
             }
         }
+        .font(.callout)
+        .monospacedDigit()
     }
 
     private var downloadMetric: some View {
-        MetricColumn(
-            title: "下行速率",
+        sessionMetric(
+            "下行速率", icon: "arrow.down",
             value: metricsActive && trafficFresh ? NetworkFormatters.formatRate(store.downloadRate) : "—",
-            detail: trafficDetail("已接收", bytes: store.received),
-            symbol: "arrow.down"
+            color: downloadColor
         )
     }
 
     private var uploadMetric: some View {
-        MetricColumn(
-            title: "上行速率",
+        sessionMetric(
+            "上行速率", icon: "arrow.up",
             value: metricsActive && trafficFresh ? NetworkFormatters.formatRate(store.uploadRate) : "—",
-            detail: trafficDetail("已发送", bytes: store.sent),
-            symbol: "arrow.up"
+            color: uploadColor
         )
+    }
+
+    private var downloadColor: Color {
+        AppTheme.downloadTint(for: colorScheme)
+    }
+
+    private var uploadColor: Color {
+        AppTheme.uploadTint(for: colorScheme)
+    }
+
+    private var durationColor: Color {
+        colorScheme == .dark ? Color(nsColor: .systemBlue) : Color(red: 0.08, green: 0.34, blue: 0.70)
     }
 
     private var durationMetric: some View {
-        MetricColumn(
-            title: "连接时长",
-            value: durationString,
-            detail: durationDetail,
-            symbol: "clock"
-        )
-    }
-}
-
-private struct MetricColumn: View {
-    let title: String
-    let value: String
-    let detail: String
-    let symbol: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Label(title, systemImage: symbol)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-            MetricValueText(value: value)
-            Text(detail)
-                .font(.subheadline)
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(minWidth: 150, idealWidth: 160, maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(title)，\(value)，\(detail)")
-        .help("\(title): \(value)")
-    }
-}
-
-/// Keeps a long value such as an IPv6 address readable by moving it to its own line.
-private struct NetworkInfoRow<Value: View, Trailing: View>: View {
-    let title: String
-    let symbol: String
-    let value: Value
-    let trailing: Trailing
-
-    init(title: String, symbol: String, @ViewBuilder value: () -> Value, @ViewBuilder trailing: () -> Trailing) {
-        self.title = title; self.symbol = symbol
-        self.value = value(); self.trailing = trailing()
+        sessionMetric("连接时长", icon: "clock", value: durationString, color: durationColor)
     }
 
-    private var label: some View {
-        Label(title, systemImage: symbol)
-            .foregroundStyle(.secondary)
-            .frame(minWidth: 104, alignment: .leading)
+    private func sessionMetric(_ title: String, icon: String, value: String, color: Color) -> some View {
+        Label(value, systemImage: icon)
+            .foregroundStyle(value == "—" ? Color.secondary : color)
+            .accessibilityLabel(title)
+            .accessibilityValue(value)
+            .help(title)
     }
 
-    var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 12) {
-                label
-                value
+    private var publicIPValue: String {
+        guard hasSession else { return "连接后检测" }
+        if store.publicIPChecking { return "检测中…" }
+        return store.publicIP ?? (store.publicIPFailed ? "检测失败" : "待检测")
+    }
+
+    private var connectionDetails: some View {
+        FullRowDisclosure("连接详情", isExpanded: $showingDetails, summary: hasSession ? "公网出口 IP：\(publicIPValue)" : nil) {
+            detailsGrid
+        } label: {
+            HStack(spacing: 10) {
+                Label("连接详情", systemImage: "info.circle")
+                    .font(.callout.weight(.medium))
                 Spacer(minLength: 8)
-                HStack(spacing: 8) { trailing }
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 12) {
-                    label
-                    Spacer(minLength: 8)
-                    HStack(spacing: 8) { trailing }
+                if hasSession && !showingDetails {
+                    Text(publicIPValue)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
-                value
+            }
+        }
+    }
+
+    private var detailsGrid: some View {
+        Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 0) {
+            publicIPRow
+            detailsDivider
+            if !isProxyLine {
+                tunnelAddressRow
+                detailsDivider
+            }
+            trafficRow
+            detailsDivider
+            GridRow {
+                detailLabel("连接时长", symbol: "clock")
+                Text(durationString)
+                    .foregroundStyle(durationString == "—" ? Color.secondary : durationColor)
+                    .monospacedDigit()
+                detailNote(durationDetail)
             }
         }
         .font(.callout)
+        .padding(.horizontal, 10)
+        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: AppTheme.itemRadius))
+    }
+
+    private var detailsDivider: some View {
+        Divider().gridCellUnsizedAxes(.horizontal)
+    }
+
+    private func detailLabel(_ title: String, symbol: String) -> some View {
+        HStack(spacing: 7) {
+            Image(systemName: symbol)
+                .frame(width: 16)
+                .accessibilityHidden(true)
+            Text(title)
+        }
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: true, vertical: false)
+        .frame(minHeight: 34)
+    }
+
+    private func detailNote(_ text: String?) -> some View {
+        Text(text ?? "")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var publicIPRow: some View {
+        GridRow {
+            detailLabel("公网出口 IP", symbol: "globe")
+            Text(publicIPValue)
+                .font(.system(.callout, design: .monospaced))
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .help("通过所选线路的代理检测公网出口地址")
+            HStack(spacing: 6) {
+                if let checked = store.publicIPCheckedAt, hasSession {
+                    Text("检测于 \(Text(checked, style: .time))")
+                        .font(.caption)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .fixedSize()
+                        .help("上次出口 IP 检测时间")
+                }
+                Button {
+                    store.refreshPublicIP()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .disabled(!metricsActive || store.publicIPChecking)
+                .accessibilityLabel("刷新出口 IP")
+                .help("通过当前线路检测公网出口 IP")
+            }
+            .gridColumnAlignment(.trailing)
+        }
+    }
+
+    private var tunnelAddressRow: some View {
+        GridRow {
+            detailLabel("隧道虚拟地址", symbol: "network")
+                .accessibilityHidden(true)
+            Text(addressSummary)
+                .font(.system(.callout, design: .monospaced))
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityLabel("隧道虚拟地址")
+                .accessibilityValue(addressAccessibilityValue)
+                .help(addressHelp)
+            detailNote(addressDetail)
+                .accessibilityHidden(true)
+        }
+    }
+
+    private var trafficRow: some View {
+        let detail = trafficDetail
+        return GridRow {
+            detailLabel("会话流量", symbol: "arrow.up.arrow.down")
+            if detail.showsTotals {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 14) {
+                        receivedTotal
+                        sentTotal
+                    }
+                    .fixedSize(horizontal: true, vertical: false)
+                    VStack(alignment: .leading, spacing: 3) {
+                        receivedTotal
+                        sentTotal
+                    }
+                    .padding(.vertical, 5)
+                }
+            } else {
+                Text(detail.note ?? "—")
+                    .foregroundStyle(.secondary)
+            }
+            detailNote(detail.showsTotals ? detail.note : nil)
+        }
+    }
+
+    private var receivedTotal: some View {
+        trafficTotal("已接收", bytes: store.received, color: downloadColor)
+    }
+
+    private var sentTotal: some View {
+        trafficTotal("已发送", bytes: store.sent, color: uploadColor)
+    }
+
+    private func trafficTotal(_ title: String, bytes: UInt64, color: Color) -> some View {
+        HStack(spacing: 5) {
+            Text(title).foregroundStyle(.secondary)
+            Text(NetworkFormatters.formatBytes(bytes))
+                .foregroundStyle(color)
+                .monospacedDigit()
+        }
+        .accessibilityElement(children: .combine)
     }
 }

@@ -18,22 +18,25 @@ struct DiagnosticsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: AppTheme.sectionSpacing) {
-                PageHeading(title: "连接诊断", subtitle: "查看本地环境和本次运行状态。")
+                HStack(spacing: 16) {
+                    PageHeading(title: "连接诊断", subtitle: "查看本地环境和本次运行状态。")
+                    Button("导出摘要", systemImage: "square.and.arrow.up") { store.exportDiagnostics() }
+                        .appActionStyle()
+                        .fixedSize()
+                }
 
-                    DisclosureGroup(isExpanded: $showingServiceDetails) {
-                        NetworkServiceCard(store: store)
-                            .padding(.top, 12)
-                    } label: {
-                        HStack(spacing: 10) {
-                            Label("本机网络服务", systemImage: "gearshape.2")
-                                .font(.headline)
-                            Spacer()
-                            Text(store.networkService.status.title)
-                                .font(.callout)
-                                .foregroundStyle(.secondary)
-                        }
+                FullRowDisclosure("本机网络服务", isExpanded: $showingServiceDetails, summary: store.networkService.status.title) {
+                    NetworkServiceCard(store: store)
+                } label: {
+                    HStack(spacing: 10) {
+                        Label("本机网络服务", systemImage: "gearshape.2")
+                            .font(.headline)
+                        Spacer()
+                        Text(store.networkService.status.title)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
                     }
-                    .padding(.vertical, 6)
+                }
 
                 if store.companyConfiguration.enabled {
                     GroupBox("公司副连接") {
@@ -45,7 +48,7 @@ struct DiagnosticsView: View {
                         }.font(.callout).frame(maxWidth: .infinity, alignment: .leading).padding(8).textSelection(.enabled)
                     }
                 }
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 280), spacing: AppTheme.sectionSpacing, alignment: .topLeading)], alignment: .leading, spacing: AppTheme.sectionSpacing) {
+                HStack(alignment: .top, spacing: AppTheme.sectionSpacing) {
                     Surface {
                         HStack {
                             Text("运行环境").font(.headline)
@@ -157,6 +160,8 @@ struct DiagnosticsView: View {
                         }
                     }
                 }
+                .fixedSize(horizontal: false, vertical: true)
+                .environment(\.surfaceFillsHeight, true)
 
                 Surface {
                     HStack {
@@ -188,7 +193,9 @@ struct DiagnosticsView: View {
                                     Text(entry.date.formatted(date: .omitted, time: .standard))
                                         .font(.system(.caption, design: .monospaced))
                                         .foregroundStyle(.secondary)
-                                        .frame(width: 68, alignment: .leading)
+                                        .lineLimit(1)
+                                        .fixedSize(horizontal: true, vertical: false)
+                                        .frame(minWidth: 68, alignment: .leading)
 
                                     Image(systemName: entry.isError ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
                                         .font(.system(size: 11, weight: .semibold))
@@ -221,11 +228,6 @@ struct DiagnosticsView: View {
             .padding(AppTheme.pagePadding)
             .frame(maxWidth: AppTheme.contentWidth, alignment: .topLeading)
             .frame(maxWidth: .infinity, alignment: .topLeading)
-        }
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button("导出摘要", systemImage: "square.and.arrow.up") { store.exportDiagnostics() }
-            }
         }
         .confirmationDialog("清空本次运行记录？", isPresented: $clearingLogs) {
             Button("清空记录", role: .destructive) { store.activity.removeAll() }

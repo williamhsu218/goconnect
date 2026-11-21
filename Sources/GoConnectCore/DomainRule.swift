@@ -20,6 +20,15 @@ public struct DomainRule: Codable, Equatable, Identifiable, Sendable {
               }), !labels.allSatisfy({ Int($0) != nil }) else { throw DomainRuleError.invalid }
         domain = value; self.includeSubdomains = includeSubdomains
     }
+
+    public static func validated(_ rules: [DomainRule]) throws -> [DomainRule] {
+        guard rules.count <= 256 else { throw ConfigurationError.invalidDomainRules }
+        let normalized = try rules.map { try DomainRule($0.domain, includeSubdomains: $0.includeSubdomains) }
+        guard Set(normalized.map(\.domain)).count == normalized.count else {
+            throw ConfigurationError.invalidDomainRules
+        }
+        return normalized
+    }
 }
 public enum DomainRuleError: LocalizedError {
     case invalid

@@ -109,7 +109,7 @@ final class NetworkServiceClientTests: XCTestCase {
         let helper = root.appendingPathComponent("status-helper"), marker = root.appendingPathComponent("pid")
         // exec keeps exactly one owned child; ignore TERM to exercise the bounded
         // kill fallback, without grandchildren retaining the output pipe.
-        let script = "#!/bin/sh\nprintf '%s' \"$$\" > \(ShellQuote.argument(marker.path))\ntrap '' TERM\nexec /bin/sleep 60\n"
+        let script = "#!/bin/sh\ntrap '' TERM\nprintf '%s' \"$$\" > \(ShellQuote.argument(marker.path))\nexec /bin/sleep 60\n"
         try script.write(to: helper, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: helper.path)
         addTeardownBlock {
@@ -123,9 +123,11 @@ final class NetworkServiceClientTests: XCTestCase {
         return (helper, marker)
     }
     private func helperPID(_ marker: URL) async throws -> Int32 {
-        for _ in 0..<500 {
+        let clock = ContinuousClock()
+        let deadline = clock.now + .seconds(5)
+        while clock.now < deadline {
             if let text = try? String(contentsOf: marker, encoding: .utf8), let pid = Int32(text) { return pid }
-            try await Task.sleep(for: .milliseconds(2))
+            try await Task.sleep(for: .milliseconds(10))
         }
         throw CocoaError(.fileReadUnknown)
     }
@@ -139,11 +141,20 @@ final class NetworkServiceClientTests: XCTestCase {
 
     func testProductionStatusReaderTerminatesTimedOutChild() async throws {
         let (helper, marker) = try stalledHelper()
-        let client = NetworkServiceClient(statusReader: { _ in try await NetworkServiceClient.readStatus(helper) })
-        client.requireIdleConfirmation()
-        let read = Task { await client.refreshStatus(timeout: .milliseconds(300)) }
+        // Start the real reader before measuring timeout behavior. Cold process
+        // launch time depends on the host and is covered by a separate deadline.
+        let processRead = Task { try await NetworkServiceClient.readStatus(helper) }
+        defer { processRead.cancel() }
         let pid = try await helperPID(marker)
-        let status = await read.value
+        let client = NetworkServiceClient(statusReader: { _ in
+            try await withTaskCancellationHandler {
+                try await processRead.value
+            } onCancel: {
+                processRead.cancel()
+            }
+        })
+        client.requireIdleConfirmation()
+        let status = await client.refreshStatus(timeout: .milliseconds(300))
         XCTAssertEqual(status?.state, "unavailable")
         XCTAssertTrue(client.blocksUpdateInstallation)
         try await assertHelperExited(pid)

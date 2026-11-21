@@ -4,9 +4,10 @@ import GoConnectCore
 import UniformTypeIdentifiers
 
 enum Page: String, CaseIterable, Identifiable {
-    case connection = "连接", profiles = "线路配置", subscriptions = "订阅管理", traffic = "流量统计", applications = "代理应用与服务", exclusions = "直连 App", diagnostics = "诊断"
+    case connection = "连接", profiles = "线路配置", subscriptions = "订阅管理", traffic = "流量统计"
+    case applications = "代理应用与服务", exclusions = "直连 App", directRules = "直连域名与 IP", diagnostics = "诊断"
     var id: String { rawValue }
-    var icon: String { switch self { case .connection: "network"; case .profiles: "server.rack"; case .subscriptions: "square.stack.3d.up"; case .traffic: "chart.bar.xaxis"; case .applications: "square.grid.2x2"; case .exclusions: "arrow.triangle.branch"; case .diagnostics: "waveform.path.ecg" } }
+    var icon: String { switch self { case .connection: "network"; case .profiles: "server.rack"; case .subscriptions: "square.stack.3d.up"; case .traffic: "chart.bar.xaxis"; case .applications: "square.grid.2x2"; case .exclusions: "arrow.triangle.branch"; case .directRules: "globe"; case .diagnostics: "waveform.path.ecg" } }
 }
 
 struct ActivityEntry: Identifiable {
@@ -39,10 +40,14 @@ final class AppStore {
     var canEditApplications: Bool {
         configurationReadable && !busy
     }
-    var search = ""
+    var applicationSearch = ""
+    var excludedApplicationSearch = ""
+    var applicationFilter = ApplicationFilter.all
+    var excludedApplicationFilter = ApplicationFilter.all
     var phase = "idle" { didSet { if phase != oldValue, let event = FaultEvent(rawValue: "phase." + phase) { diagnostics.record(event) } } }
     var testOnly = false
     var message: String?
+    private(set) var messageID = UUID()
     var isError = false
     var activity: [ActivityEntry] = []
     var addresses: [String] = []
@@ -285,8 +290,9 @@ final class AppStore {
         }
     }
     func show(_ text: String, error: Bool = false) {
-        message = text; isError = error
-        activity.insert(ActivityEntry(message: text, isError: error), at: 0)
+        let entry = ActivityEntry(message: text, isError: error)
+        message = text; messageID = entry.id; isError = error
+        activity.insert(entry, at: 0)
         if activity.count > 100 { activity.removeLast(activity.count - 100) }
     }
     func save() -> Bool {
@@ -302,7 +308,14 @@ final class AppStore {
     func selectProfile(_ id: UUID) {
         guard !company.isRunning, !company.busy, !busy, id != configuration.activeProfileID, save() else { return }
         let previous = configuration
-        do { try configuration.select(id); try file.save(configuration); password = ""; phase = "idle"; search = ""; show("已切换连接配置。") }
+        do {
+            try configuration.select(id)
+            try file.save(configuration)
+            password = ""
+            phase = "idle"
+            resetApplicationListFilters()
+            show("已切换连接配置。")
+        }
         catch { configuration = previous; show(error.localizedDescription, error: true) }
     }
     func quickConnect(_ id: UUID) {
@@ -346,12 +359,19 @@ final class AppStore {
         }
     }
     func filteredApps(excluded: Bool) -> [AllowedApplication] {
+        let search = excluded ? excludedApplicationSearch : applicationSearch
         let all = Dictionary((catalog + (excluded ? configuration.excludedApplications : configuration.applications)).map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first }).values
         return all.filter { search.isEmpty || $0.name.localizedCaseInsensitiveContains(search) || $0.bundleID.localizedCaseInsensitiveContains(search) || $0.path.localizedCaseInsensitiveContains(search) }
             .sorted { a, b in
                 if selected(a, excluded: excluded) != selected(b, excluded: excluded) { return selected(a, excluded: excluded) }
                 return a.name.localizedStandardCompare(b.name) == .orderedAscending
             }
+    }
+    func resetApplicationListFilters() {
+        applicationSearch = ""
+        excludedApplicationSearch = ""
+        applicationFilter = .all
+        excludedApplicationFilter = .all
     }
     func scanApplications() {
         guard !scanning else { return }; scanning = true

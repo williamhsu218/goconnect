@@ -3,61 +3,100 @@ import GoConnectCore
 
 struct CompanyConnectionCard: View {
     @Bindable var store: AppStore
+    @Environment(\.colorScheme) private var colorScheme
     @State private var editing = false
+    @State private var showingDetails = false
     private var company: CompanyConnectionStore { store.company }
-    private var title: String {
+    private var connectionStatus: String {
+        if company.phase == "idle" && store.companyConfiguration.enabled {
+            return store.phase == "connected" ? "待连接" : "等待主线路就绪"
+        }
+        return company.statusTitle
+    }
+
+    private var statusColor: Color {
         switch company.phase {
-        case "authenticating": "正在验证公司身份"
-        case "preparing": "正在验证公司路由与 DNS"
-        case "connected": "公司内网已连接"
-        case "reconnecting": "公司线路恢复中"
-        case "stopping": "正在结束公司连接"
-        case "quarantined": "公司连接已隔离"
-        case "failed": "公司连接未完成"
-        default: store.companyConfiguration.enabled ? "公司内网待连接" : "公司内网未启用"
+        case "connected": AppTheme.success
+        case "reconnecting", "quarantined", "failed": AppTheme.warning
+        default: .secondary
         }
     }
+
     var body: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 10) {
-                    Image(systemName: "building.2.crop.circle").font(.title2).foregroundStyle(.secondary)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(title).font(.headline)
-                        Text(store.companyConfiguration.enabled ? "保留主线路，仅将已批准的公司地址送入副线路。" : "可在 HY2 主线路之上连接一条 AnyConnect 公司线路。")
-                            .font(.callout).foregroundStyle(.secondary)
+        Surface {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 12) {
+                    Image(systemName: "building.2")
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 34, height: 34)
+                        .background(AppTheme.windowBackground, in: RoundedRectangle(cornerRadius: AppTheme.itemRadius))
+                        .accessibilityHidden(true)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("公司副连接").font(.headline)
+                        Text(connectionStatus)
+                            .font(.callout)
+                            .foregroundStyle(statusColor)
                     }
                     Spacer(minLength: 8)
-                    Button("配置…") { editing = true }.disabled(!store.canEditCompanyConnectionSettings)
+                    Button("配置公司连接", systemImage: "gearshape") { editing = true }
+                        .labelStyle(.iconOnly)
+                        .appActionStyle()
+                        .disabled(!store.canEditCompanyConnectionSettings)
+                        .help("配置公司连接")
                     if company.isRunning || company.busy {
-                        Button("断开公司连接") { company.disconnect() }.disabled(company.phase == "quarantined" || company.phase == "stopping")
+                        Button("断开公司连接") { company.disconnect() }
+                            .appActionStyle()
+                            .disabled(company.phase == "quarantined" || company.phase == "stopping")
                     } else {
                         Button("连接公司内网") { store.connectCompany() }
+                            .appActionStyle()
                             .disabled(Product.isIsolatedTestApp || store.phase != "connected" || !store.companyConfiguration.enabled || store.companyConfigurationIssue != nil || store.updateOperationBlocked)
                     }
                 }
-                Text("默认关闭 · 仅接管已配置的公司地址").font(.caption).foregroundStyle(.secondary)
                 if store.companyConfiguration.enabled {
-                    HStack(spacing: 18) {
-                        Label("\(store.companyConfiguration.networks.count) 个公司网段", systemImage: "point.3.connected.trianglepath.dotted")
-                        Label(store.companyConfiguration.dnsServers.isEmpty ? "DNS 自动获取" : "DNS 手动指定", systemImage: "network")
-                        Text("IPv4 · TCP").monospacedDigit()
-                    }.font(.caption).foregroundStyle(.secondary)
+                    FullRowDisclosure("公司连接范围与详情", isExpanded: $showingDetails) {
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text("仅将已配置的公司地址送入副线路。")
+                            Text("\(store.companyConfiguration.networks.count) 个公司网段 · IPv4 / TCP")
+                            if company.activeDNSServers.isEmpty {
+                                Text(store.companyConfiguration.dnsServers.isEmpty ? "DNS 自动获取" : "DNS 手动指定")
+                            } else {
+                                Text("本次公司 DNS：\(company.activeDNSServers.joined(separator: "、"))")
+                                    .textSelection(.enabled)
+                            }
+                            if company.phase == "connected" || company.phase == "reconnecting" {
+                                HStack(spacing: 10) {
+                                    Text("公司会话")
+                                    Label(NetworkFormatters.formatBytes(company.received), systemImage: "arrow.down")
+                                        .foregroundStyle(AppTheme.downloadTint(for: colorScheme))
+                                        .accessibilityLabel("公司会话已接收 \(NetworkFormatters.formatBytes(company.received))")
+                                    Label(NetworkFormatters.formatBytes(company.sent), systemImage: "arrow.up")
+                                        .foregroundStyle(AppTheme.uploadTint(for: colorScheme))
+                                        .accessibilityLabel("公司会话已发送 \(NetworkFormatters.formatBytes(company.sent))")
+                                }
+                                .monospacedDigit()
+                            }
+                        }
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 6)
+                    }
+                    .font(.callout)
                 }
-                if let issue = store.companyConfigurationIssue { Text(issue).font(.callout).foregroundStyle(.orange) }
-                if !company.activeDNSServers.isEmpty {
-                    Text("本次公司 DNS：" + company.activeDNSServers.joined(separator: "、")).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                if let issue = store.companyConfigurationIssue { InlineNotice(text: issue) }
+                if let message = company.message {
+                    Text(message)
+                        .font(.callout)
+                        .foregroundStyle(statusColor)
+                        .textSelection(.enabled)
                 }
-                if company.phase == "connected" || company.phase == "reconnecting" {
-                    Text("公司会话  ↓ \(ByteCountFormatter.string(fromByteCount: Int64(clamping: company.received), countStyle: .binary))    ↑ \(ByteCountFormatter.string(fromByteCount: Int64(clamping: company.sent), countStyle: .binary))")
-                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                }
-                if let message = company.message { Text(message).font(.callout).foregroundStyle(company.phase == "failed" || company.phase == "quarantined" ? .orange : .secondary).textSelection(.enabled) }
                 if Product.isIsolatedTestApp {
                     Label("隔离测试包：可检查界面和配置；网络接管与服务维护已停用。", systemImage: "testtube.2")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-            }.padding(8)
+            }
         }
         .sheet(isPresented: $editing) { CompanyConnectionSettings(store: store) }
         .sheet(isPresented: Binding(get: { company.passwordRequested }, set: { if !$0 { company.cancelAuthentication() } })) {

@@ -20,6 +20,14 @@ enum AppTheme {
     static let subtleBorder = Color(nsColor: .separatorColor).opacity(0.4)
     static let surfaceBorder = Color(nsColor: .separatorColor).opacity(0.6)
     static let selectedBackground = Color.accentColor.opacity(0.08)
+
+    static func downloadTint(for colorScheme: ColorScheme) -> Color {
+        colorScheme == .dark ? Color(nsColor: .systemGreen) : Color(red: 0.08, green: 0.45, blue: 0.23)
+    }
+
+    static func uploadTint(for colorScheme: ColorScheme) -> Color {
+        colorScheme == .dark ? Color(red: 1, green: 0.42, blue: 0.39) : Color(red: 0.71, green: 0.13, blue: 0.18)
+    }
 }
 
 enum NetworkFormatters {
@@ -272,6 +280,51 @@ struct PageHeading: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .layoutPriority(1)
+    }
+}
+
+struct InlineSearchField: View {
+    let prompt: String
+    @Binding var text: String
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        let isEmpty = text.isEmpty
+        HStack(spacing: 7) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            TextField(prompt, text: $text)
+                .textFieldStyle(.plain)
+                .focused($focused)
+                .onExitCommand {
+                    if isEmpty { focused = false }
+                    else { text = "" }
+                }
+            Button {
+                text = ""
+                focused = true
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 16, height: 20)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("清空搜索")
+            .opacity(isEmpty ? 0 : 1)
+            .disabled(isEmpty)
+            .accessibilityHidden(isEmpty)
+        }
+        .font(.callout)
+        .padding(.horizontal, 9)
+        .frame(height: AppTheme.actionHeight)
+        .background(AppTheme.controlBackground, in: RoundedRectangle(cornerRadius: AppTheme.buttonRadius))
+        .overlay {
+            RoundedRectangle(cornerRadius: AppTheme.buttonRadius)
+                .strokeBorder(focused ? AppTheme.accent : AppTheme.subtleBorder)
+                .allowsHitTesting(false)
+        }
     }
 }
 

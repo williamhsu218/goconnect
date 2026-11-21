@@ -27,12 +27,6 @@ struct ProfilesView: View {
         return draft.id
     }
 
-    /// The saved line being viewed; an unsaved new draft has no history yet.
-    private var trafficTargetID: UUID? {
-        if let draft = store.profileDraft { return draft.isNew ? nil : draft.id }
-        return selectedProfileID ?? store.configuration.activeProfileID
-    }
-
     var body: some View {
         HSplitView {
             masterPane
@@ -40,20 +34,6 @@ struct ProfilesView: View {
             detailPane
                 .frame(minWidth: 380, maxWidth: .infinity, maxHeight: .infinity)
         }
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button("查看线路流量", systemImage: "chart.bar.xaxis") {
-                    if let trafficTargetID { store.showTraffic(for: trafficTargetID) }
-                }
-                .disabled(trafficTargetID == nil)
-                .help(trafficTargetID == nil ? "保存线路后可查看流量" : "查看这条线路的流量统计")
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button("新建线路", systemImage: "plus") { createNewProfile() }
-                    .disabled(!store.configurationReadable || store.configuration.connections.count >= 64)
-            }
-        }
-        .searchable(text: $searchText, prompt: "搜索线路")
         .onAppear {
             ensureProfileSelected()
         }
@@ -81,10 +61,6 @@ struct ProfilesView: View {
             presenting: deleting
         ) { connection in
             Button("删除线路", role: .destructive) {
-                if store.profileDraft?.id == connection.id {
-                    selectedProfileID = nil
-                }
-                store.closeProfileEditor()
                 store.deleteProfile(connection.id)
                 deleting = nil
             }
@@ -92,7 +68,8 @@ struct ProfilesView: View {
                 deleting = nil
             }
         } message: { connection in
-            Text("将删除“\(connection.displayName)”及其保存的密码。")
+            let discardsDraft = store.profileDraft?.id == connection.id && store.profileDraftHasChanges
+            Text("将删除“\(connection.displayName)”及其保存的密码。" + (discardsDraft ? "这条线路未保存的更改也会丢弃。" : ""))
         }
     }
 
@@ -109,9 +86,14 @@ struct ProfilesView: View {
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
-
+                    Button("新建线路", systemImage: "plus") { createNewProfile() }
+                        .labelStyle(.iconOnly)
+                        .appActionStyle()
+                        .disabled(!store.canCreateProfile)
+                        .help("新建线路")
                 }
 
+                InlineSearchField(prompt: "搜索线路", text: $searchText)
 
                 if store.busy {
                     HStack(spacing: 6) {
@@ -246,6 +228,7 @@ struct ProfilesView: View {
     }
 
     private func ensureProfileSelected() {
+        guard store.page == .profiles else { return }
         guard store.profileDraft == nil else {
             selectedProfileID = store.profileDraft?.id
             return
@@ -261,10 +244,11 @@ struct ProfilesView: View {
             return
         }
         selectedProfileID = targetID
-        store.beginEditingProfile(targetID)
+        store.beginEditingProfile(targetID, preservingMessage: true)
     }
 
     private func handleDraftBecameNil() {
+        guard store.page == .profiles else { return }
         if let switchID = pendingProfileSwitch {
             pendingProfileSwitch = nil
             selectedProfileID = switchID
@@ -305,12 +289,11 @@ struct ProfilesView: View {
     }
 
     private func createNewProfile() {
-        guard store.configurationReadable, store.configuration.connections.count < 64 else { return }
+        guard store.canCreateProfile else { return }
         if store.profileDraftHasChanges {
             pendingNewProfile = true
             store.cancelProfileEditing()
         } else {
-            store.closeProfileEditor()
             store.beginNewProfile()
             selectedProfileID = store.profileDraft?.id
         }
@@ -329,12 +312,11 @@ struct ProfilesView: View {
     }
 
     private func duplicateProfile(_ id: UUID) {
-        guard store.configurationReadable, store.configuration.connections.count < 64 else { return }
+        guard store.canCreateProfile else { return }
         if store.profileDraftHasChanges {
             pendingDuplicateProfile = id
             store.cancelProfileEditing()
         } else {
-            store.closeProfileEditor()
             store.beginNewProfile(copying: id)
             selectedProfileID = store.profileDraft?.id
         }

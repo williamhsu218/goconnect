@@ -16,49 +16,26 @@ struct TrafficUsageCard: View {
         let history = store.trafficHistory
         let profileID = store.configuration.activeProfileID
         let _ = history.revision
-        Surface {
-            VStack(alignment: .leading, spacing: 10) {
-                SectionHeader("当前线路流量", symbol: "chart.bar.xaxis") {
-                    Button("查看统计") { store.showTraffic(for: profileID) }.appInlineActionStyle()
+        VStack(alignment: .leading, spacing: 7) {
+            TimelineView(.everyMinute) { context in
+                ConnectionSummaryLink(title: "本机流量", symbol: "chart.bar.xaxis",
+                                      detail: summary(for: profileID, at: context.date)) {
+                    store.showTraffic(for: profileID)
                 }
-                // The tick rolls 今日 and 本月 over while no new samples arrive.
-                TimelineView(.everyMinute) { context in
-                    HStack(alignment: .top, spacing: 12) {
-                        usage("今日消耗", period: .hourly, profileID: profileID, at: context.date)
-                        usage("本月消耗", period: .daily, profileID: profileID, at: context.date)
-                    }
-                }
-                if let error = history.storageError { InlineNotice(text: error) }
-                Text("仅统计这台 Mac 上 GoConnect 的本地记录，不代表服务商计费。")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                .help("查看这条线路在本机的流量统计")
             }
+            if let error = history.storageError { InlineNotice(text: error) }
         }
     }
 
-    /// An hourly series spans its anchor day, and a daily series its anchor month.
-    private func usage(_ title: String, period: TrafficGranularity, profileID: UUID, at date: Date) -> some View {
+    private func summary(for profileID: UUID, at date: Date) -> String {
         let history = store.trafficHistory
-        let totals = history.totals(profileID: profileID, interval: history.interval(granularity: period, anchor: date))
-        let placeholder = history.readable ? "暂无记录" : "无法读取"
-        return VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.callout).foregroundStyle(.secondary)
-            MetricValueText(value: totals.hasData ? totals.amountText(totals.total) : "—", size: 24)
-            Group {
-                if totals.hasData {
-                    Text("下载 \(totals.amountText(totals.received))")
-                    Text("上传 \(totals.amountText(totals.sent))")
-                } else {
-                    Text(placeholder)
-                }
-            }
-            .font(.caption).monospacedDigit().foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(title)
-        .accessibilityValue(totals.hasData
-            ? "合计 \(totals.amountText(totals.total))，下载 \(totals.amountText(totals.received))，上传 \(totals.amountText(totals.sent))"
-            : placeholder)
+        guard history.readable else { return "无法读取" }
+        let today = history.totals(profileID: profileID, interval: history.interval(granularity: .hourly, anchor: date))
+        let month = history.totals(profileID: profileID, interval: history.interval(granularity: .daily, anchor: date))
+        guard today.hasData || month.hasData else { return "暂无记录" }
+        let dayAmount = today.hasData ? today.amountText(today.total) : "—"
+        let monthAmount = month.hasData ? month.amountText(month.total) : "—"
+        return "今日 \(dayAmount) · 本月 \(monthAmount)"
     }
 }

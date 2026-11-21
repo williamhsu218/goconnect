@@ -9,21 +9,17 @@ struct GoConnectApp: App {
     var body: some Scene {
         WindowGroup("GoConnect", id: "main") {
             MainWindowContent(store: store, delegate: delegate)
-                .frame(minWidth: 940, minHeight: 640)
         }
-        .defaultSize(width: 980, height: 700)
+        .defaultSize(AppDelegate.isUpdateQA
+            ? CGSize(width: 980, height: 648)
+            : MainWindowSizing.preferredSize)
         .windowResizability(.contentMinSize)
         .windowStyle(.titleBar)
+        .windowToolbarStyle(.unified(showsTitle: AppDelegate.isUpdateQA))
         .commands {
             AppUpdateCommands(updater: delegate.updater)
             if !AppDelegate.isUpdateQA {
-            SidebarCommands()
-            CommandGroup(replacing: .newItem) {
-                Button("新建线路") { store.beginNewProfile() }.keyboardShortcut("n")
-                    .disabled(store.profileDraft != nil || !store.configurationReadable || store.configuration.connections.count >= 64)
-                Button("保存线路") { store.saveProfileDraft() }.keyboardShortcut("s").disabled(!store.canSaveProfileDraft)
-                Button("添加代理应用…") { store.addApplication() }.keyboardShortcut("o").disabled(store.busy || store.profileDraft != nil)
-            }
+            WorkspaceCommands(store: store)
             CommandMenu("VPN") {
                 Button(store.menuBarControlPolicy.actionTitle) {
                     delegate.menuBar?.toggleConnection()
@@ -158,8 +154,12 @@ private struct MainWindowContent: View {
 
     var body: some View {
         Group {
-            if AppDelegate.isUpdateQA { AppUpdateQAHarness(store: store, updater: delegate.updater) }
-            else { ContentView(store: store) }
+            if AppDelegate.isUpdateQA {
+                AppUpdateQAHarness(store: store, updater: delegate.updater)
+                    .frame(minWidth: 940, minHeight: 640)
+            } else {
+                ContentView(store: store)
+            }
         }
             .onAppear {
                 delegate.registerMainWindowOpener { openWindow(id: "main") }

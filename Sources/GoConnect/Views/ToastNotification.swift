@@ -4,6 +4,7 @@ import GoConnectCore
 
 struct ToastBanner: View {
     let message: String
+    let messageID: UUID
     let isError: Bool
     let onDismiss: () -> Void
 
@@ -22,7 +23,6 @@ struct ToastBanner: View {
             // A flexible ViewThatFits/maxHeight expanded even a one-line toast.
             if isError {
                 messageText
-                    .frame(maxWidth: .infinity, alignment: .leading)
                     .hidden()
                     .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { messageHeight = $0 }
                     .frame(maxHeight: 120, alignment: .top)
@@ -34,11 +34,11 @@ struct ToastBanner: View {
                             }
                             .scrollBounceBehavior(.basedOnSize)
                         } else {
-                            messageText.frame(maxWidth: .infinity, alignment: .leading)
+                            messageText
                         }
                     }
             } else {
-                messageText.frame(maxWidth: .infinity, alignment: .leading)
+                messageText
             }
 
             if isError {
@@ -65,10 +65,11 @@ struct ToastBanner: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-        .frame(width: 540)
         .fixedSize(horizontal: false, vertical: true)
         .appFloatingSurface()
-        .task(id: message + (isError ? "error" : "success")) {
+        .frame(maxWidth: 540)
+        .task(id: messageID) {
+            copied = false
             if #available(macOS 14.0, *) {
                 AccessibilityNotification.Announcement(message).post()
             }
@@ -106,16 +107,12 @@ struct ToastBanner: View {
 
 struct ToastNotificationView: View {
     let message: String
+    let messageID: UUID
     let isError: Bool
     let onDismiss: () -> Void
-    init(message: String, isError: Bool = false, onDismiss: @escaping () -> Void) {
-        self.message = message
-        self.isError = isError
-        self.onDismiss = onDismiss
-    }
 
     var body: some View {
-        ToastBanner(message: message, isError: isError, onDismiss: onDismiss)
+        ToastBanner(message: message, messageID: messageID, isError: isError, onDismiss: onDismiss)
             .padding(.bottom, 20)
             .padding(.horizontal, 20)
             .padding(.top, 8)
