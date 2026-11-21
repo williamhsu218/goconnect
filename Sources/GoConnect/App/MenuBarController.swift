@@ -7,6 +7,14 @@ import GoConnectCore
 /// Own only the native status item. AppStore remains the source of connection state.
 @MainActor
 final class MenuBarController: NSObject, NSMenuDelegate {
+    private struct RenderedStatus {
+        let showsRates: Bool
+        let icon: VPNControlState
+        let rateLines: [String]
+        let toolTip: String
+        let accessibilityValue: String
+    }
+
     private static let itemName = Product.isNetworkTestApp ? "GoConnectDualVPNTestStatusItem" : "GoConnectStatusItem"
     private func icon(for state: VPNControlState) -> NSImage {
         guard Product.isNetworkTestApp, let image = NSImage(systemSymbolName: "testtube.2", accessibilityDescription: "GoConnect 双 VPN 测试版") else { return MenuBarStatusIcon.image(for: state) }
@@ -22,7 +30,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var expiryTimer: Timer?
     private var observationGeneration: UInt64 = 0
     private var active = true
-    private var renderedRateKey: String?
+    private var renderedStatus: RenderedStatus?
     private let menu = NSMenu()
     private let logger = Logger(subsystem: Product.bundleID, category: "MenuBar")
 
@@ -46,7 +54,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private func install() {
         guard statusItem == nil else { return }
-        renderedRateKey = nil
+        renderedStatus = nil
         // A stable, named position replaces SwiftUI's anonymous Item-0 preference.
         // The first insertion starts near the right edge, avoiding the old hidden position.
         UserDefaults.standard.register(defaults: ["NSStatusItem Preferred Position \(Self.itemName)": 0])
@@ -54,8 +62,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         item.autosaveName = Self.itemName
         item.behavior = []
         item.menu = menu
-        item.button?.image = icon(for: store.connectionControlState)
-        item.button?.imageScaling = .scaleProportionallyDown
+        item.button?.title = ""
+        item.button?.imagePosition = .imageOnly
         item.button?.setAccessibilityIdentifier(Product.isNetworkTestApp ? "GoConnectDualVPNTestMenuBar" : "GoConnectMenuBar")
         item.button?.setAccessibilityLabel(Product.isNetworkTestApp ? "GoConnect 双 VPN 测试版快捷操作" : "GoConnect 菜单栏快捷操作")
         item.isVisible = true
@@ -123,23 +131,25 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             sampledAt: enabled ? store.trafficUpdatedAt : nil,
             download: enabled ? store.downloadRate : 0,
             upload: enabled ? store.uploadRate : 0)
-        button.title = ""
-        button.imagePosition = .imageOnly
-        button.imageScaling = enabled ? .scaleNone : .scaleProportionallyDown
-        item.length = enabled ? MenuBarRateImage.statusItemWidth : NSStatusItem.squareLength
-        if enabled {
-            let key = iconState.rawValue + "|" + presentation.title
-            if key != renderedRateKey {
-                button.image = MenuBarRateImage.image(icon: icon(for: iconState), lines: presentation.lines)
-                renderedRateKey = key
-            }
-        } else {
-            renderedRateKey = nil
-            button.image = icon(for: iconState)
+        let description = presentation.accessibilityDescription
+        let name = Product.isNetworkTestApp ? "GoConnect 双 VPN 测试版" : "GoConnect"
+        let next = RenderedStatus(
+            showsRates: enabled, icon: iconState, rateLines: presentation.lines,
+            toolTip: "\(name) · \(displayTitle)\n\(line) · \(store.accessTitle)" + (description.map { "\n当前线路 · " + $0 } ?? ""),
+            accessibilityValue: displayTitle + (description.map { "，" + $0 } ?? ""))
+        let layoutChanged = renderedStatus?.showsRates != next.showsRates
+        // Reassigning unchanged button properties still invalidates AppKit layout and drawing.
+        if layoutChanged {
+            button.imageScaling = enabled ? .scaleNone : .scaleProportionallyDown
+            item.length = enabled ? MenuBarRateImage.statusItemWidth : NSStatusItem.squareLength
         }
-        let rates = presentation.accessibilityDescription.map { "\n当前线路 · " + $0 } ?? ""
-        button.toolTip = (Product.isNetworkTestApp ? "GoConnect 双 VPN 测试版 ·" : "GoConnect ·") + " \(displayTitle)\n\(line) · \(store.accessTitle)" + rates
-        button.setAccessibilityValue(displayTitle + (presentation.accessibilityDescription.map { "，" + $0 } ?? ""))
+        if layoutChanged || renderedStatus?.icon != next.icon || renderedStatus?.rateLines != next.rateLines {
+            let baseImage = icon(for: next.icon)
+            button.image = enabled ? MenuBarRateImage.image(icon: baseImage, lines: next.rateLines) : baseImage
+        }
+        if renderedStatus?.toolTip != next.toolTip { button.toolTip = next.toolTip }
+        if renderedStatus?.accessibilityValue != next.accessibilityValue { button.setAccessibilityValue(next.accessibilityValue) }
+        renderedStatus = next
         expiryTimer?.invalidate()
         expiryTimer = nil
         if let deadline = presentation.expiresAt {
