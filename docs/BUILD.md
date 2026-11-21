@@ -1,8 +1,8 @@
 # 从源码构建
 
-本说明面向熟悉终端的 macOS 用户，适用于已集成更新器的源码。复核正式版时先检出对应的 tag，再执行本文命令。项目由 SwiftUI 界面和 Go 网络组件组成。 [v2.0.1 tag](https://github.com/williamhsu218/goconnect/tree/v2.0.1)
+本说明面向熟悉终端的 macOS 用户，适用于已集成更新器的源码。复核正式版时先检出对应的 tag，再执行本文命令。项目由 SwiftUI 界面和 Go 网络组件组成。 [v2.0.2 tag](https://github.com/williamhsu218/goconnect/tree/v2.0.2)
 
-本版源码为 **2.0.1 / build 81**。安装和发布结果见对应发布记录，正式和回滚包以 `dist/releases.json` 为准。 [2.0.1 发布说明](RELEASE_2.0.1.md)
+本版源码为 **2.0.2 / build 82**。安装和发布结果见对应发布记录，正式和回滚包以 `dist/releases.json` 为准。 [2.0.2 发布说明](RELEASE_2.0.2.md)
 
 ## 准备工具
 
