@@ -97,6 +97,41 @@ func TestPathHealthActualHTTPSAndValidatedDoH(t *testing.T) {
 	}
 }
 
+func TestPathHealthExpectedEmptyHTTPSResponse(t *testing.T) {
+	for _, tc := range []struct {
+		name                   string
+		status, additionalCode int
+		dns, untrusted         bool
+		want                   string
+	}{
+		{"original-https", http.StatusBadRequest, http.StatusBadRequest, false, false, "ok"},
+		{"original-server-error", http.StatusServiceUnavailable, http.StatusBadRequest, false, false, "http_status"},
+		{"ordinary-https", http.StatusBadRequest, 0, false, false, "http_status"},
+		{"doh", http.StatusBadRequest, http.StatusBadRequest, true, false, "http_status"},
+		{"untrusted-certificate", http.StatusBadRequest, http.StatusBadRequest, false, true, "tls"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if !tc.dns && (r.Method != http.MethodHead || r.ContentLength != 0 || r.URL.RawQuery != "") {
+					t.Error("HTTPS reachability probe must send an empty HEAD request")
+				}
+				w.WriteHeader(tc.status)
+			}))
+			defer server.Close()
+			client := server.Client()
+			if tc.untrusted {
+				var dialer net.Dialer
+				client = newPathProbeClient(dialer.DialContext)
+			}
+			defer client.CloseIdleConnections()
+			endpoint := pathProbeEndpoint{url: server.URL, provider: "alidns", family: 4, additionalHTTPSStatus: tc.additionalCode}
+			if attempt := checkProbeEndpoint(context.Background(), client, endpoint, tc.dns); attempt.Reason != tc.want {
+				t.Fatalf("probe got %+v, want %s", attempt, tc.want)
+			}
+		})
+	}
+}
+
 func TestPathHealthRecordsEachAttemptAndOnlyReachedStages(t *testing.T) {
 	peer := make(chan net.Conn, 1)
 	dial := func(_ context.Context, _, address string) (net.Conn, error) {

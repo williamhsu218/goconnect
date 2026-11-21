@@ -60,7 +60,7 @@ func sanitizeDiagnosticDetails(d diagnosticDetails) diagnosticDetails {
 	reasons := "unknown operation_failed panic context_canceled lease_missing lease_unreadable lease_token_mismatch lease_expired lease_future owner_missing owner_changed core_exited core_start_timeout network_changed network_unavailable network_query_failed gateway_changed gateway_query_failed core_unresponsive dns_install_failed dns_unavailable dns_restore_failed read_failed delete_failed recheck_failed delete_still_present invalid_route route_missing route_add_incomplete journal_write_failed directory_remove_failed core_stop_failed system_timeout command_failed command_slow command_late success tun_missing tun_down controller_timeout controller_connect_failed controller_http_failed controller_decode_failed tun_disabled ok connect tls response http_status dns_response unavailable request"
 	d.Reason = allowedDiagnosticLabel(d.Reason, reasons)
 	d.Check = allowedDiagnosticLabel(d.Check, reasons)
-	d.ProbeTarget = allowedDiagnosticLabel(d.ProbeTarget, "cloudflare google")
+	d.ProbeTarget = allowedDiagnosticLabel(d.ProbeTarget, "cloudflare google alidns")
 	for _, field := range []**int64{&d.ConnectMS, &d.TLSMS, &d.ResponseMS} {
 		if *field != nil {
 			n := **field

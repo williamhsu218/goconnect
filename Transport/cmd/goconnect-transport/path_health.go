@@ -54,12 +54,21 @@ func (s *pathHealthTracker) observe(sample pathHealth) pathHealth {
 type contextDial func(context.Context, string, string) (net.Conn, error)
 
 type pathProbeEndpoint struct {
-	url, provider string
-	family        int
+	url, provider         string
+	family                int
+	additionalHTTPSStatus int
 }
 
-var probeIPv4 = []pathProbeEndpoint{{"https://1.1.1.1", "cloudflare", 4}, {"https://8.8.8.8", "google", 4}}
-var probeIPv6 = []pathProbeEndpoint{{"https://[2606:4700:4700::1111]", "cloudflare", 6}, {"https://[2001:4860:4860::8888]", "google", 6}}
+var probeIPv4 = []pathProbeEndpoint{
+	{url: "https://1.1.1.1", provider: "cloudflare", family: 4},
+	{url: "https://8.8.8.8", provider: "google", family: 4},
+}
+var probeIPv6 = []pathProbeEndpoint{
+	{url: "https://[2606:4700:4700::1111]", provider: "cloudflare", family: 6},
+	{url: "https://[2001:4860:4860::8888]", provider: "google", family: 6},
+}
+
+const aliDNSProbeHost = "dns.alidns.com"
 
 var pathProbeQuestion = dnsmessage.Question{Name: dnsmessage.MustNewName("example.com."), Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}
 
@@ -98,8 +107,15 @@ func physicalProbeDial(network originalNetwork) (contextDial, []pathProbeEndpoin
 		return nil, nil
 	}
 	family, level, option, endpoints := "tcp4", unix.IPPROTO_IP, unix.IP_BOUND_IF, probeIPv4
+	aliDNSIP, ipVersion := "223.5.5.5", 4
 	if gateway.Is6() {
 		family, level, option, endpoints = "tcp6", unix.IPPROTO_IPV6, unix.IPV6_BOUND_IF, probeIPv6
+		aliDNSIP, ipVersion = "2400:3200::1", 6
+	}
+	// An empty HEAD request receives HTTP 400 from AliDNS without sending a DNS question.
+	aliDNS := pathProbeEndpoint{
+		url: "https://" + aliDNSProbeHost + "/dns-query", provider: "alidns", family: ipVersion,
+		additionalHTTPSStatus: http.StatusBadRequest,
 	}
 	dialer := &net.Dialer{ControlContext: func(_ context.Context, _, _ string, conn syscall.RawConn) error {
 		var bindErr error
@@ -111,8 +127,12 @@ func physicalProbeDial(network originalNetwork) (contextDial, []pathProbeEndpoin
 		return bindErr
 	}}
 	return func(ctx context.Context, _, address string) (net.Conn, error) {
+		// Dial the literal IP on the physical interface while TLS validates the hostname.
+		if address == aliDNSProbeHost+":443" {
+			address = net.JoinHostPort(aliDNSIP, "443")
+		}
 		return dialer.DialContext(ctx, family, address)
-	}, endpoints
+	}, append([]pathProbeEndpoint{aliDNS}, endpoints...)
 }
 
 func newPathProbeClient(dial contextDial) *http.Client {
@@ -224,7 +244,7 @@ func checkProbeEndpoint(ctx context.Context, client *http.Client, endpoint pathP
 	attempt.HTTPStatus = resp.StatusCode
 	if !dns {
 		attempt.Reason = "http_status"
-		if resp.StatusCode >= 200 && resp.StatusCode < 400 {
+		if (resp.StatusCode >= 200 && resp.StatusCode < 400) || resp.StatusCode == endpoint.additionalHTTPSStatus {
 			attempt.Reason = "ok"
 		}
 		return
