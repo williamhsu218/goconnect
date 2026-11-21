@@ -6,16 +6,16 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/williamhsu218/goconnect/releases</link>
     <description>GoConnect signed updates</description>
     <item>
-      <title>GoConnect 1.0.19</title>
-      <pubDate>Fri, 20 Nov 2026 07:20:47 +0000</pubDate>
-      <sparkle:version>79</sparkle:version>
-      <sparkle:shortVersionString>1.0.19</sparkle:shortVersionString>
+      <title>GoConnect 2.0.0</title>
+      <pubDate>Sat, 21 Nov 2026 09:48:54 +0000</pubDate>
+      <sparkle:version>80</sparkle:version>
+      <sparkle:shortVersionString>2.0.0</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
-      <description>改进公司 DNS、切网恢复和分阶段线路探测。检查和下载更新期间可以保持 VPN 连接。</description>
-      <enclosure url="https://github.com/williamhsu218/goconnect/releases/download/v1.0.19/GoConnect-1.0.19-macos-arm64.zip" length="32445749" type="application/octet-stream" sparkle:edSignature="reWId/DYVjVPfGSvKcPf42aS/ne+PybrJqu8UWJSzz0gBpgNBBW960CtkcVhu6bLZSxU3lWkTOrunF/vN1kRDg=="></enclosure>
+      <description>全新的原生标签页、连接动效、节点卡片及可悬停的流量柱状图。可使用 VPN 检查和下载更新，确认安装重启后才正常断开。</description>
+      <enclosure url="https://github.com/williamhsu218/goconnect/releases/download/v2.0.0/GoConnect-2.0.0-macos-arm64.zip" length="32553938" type="application/octet-stream" sparkle:edSignature="ttYTjOS+KXjIWwrrkv+4gNTMj2NayxlqRzHlCqvFoBJ0+XUqiz8KCtKrS2YgIpyaAErHhOqctkeXavY9QCA+DA=="></enclosure>
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: d6SgkubYIxZGWu1/H1VQgyjRBZgBpLExVq7sw6JIl9wA7zLA+uPgt4Fi/qotx2lhikbo3dTB+SVaqJHf5m+oCg==
-length: 1320
+edSignature: 6I9XpIlsaJYU+nP30O5m/f6vDRnVIMux722RszsU9ivMN5xEmbTxdbjH05S4iiIx3IHn/80nK6niMWmyu84LAg==
+length: 1369
 -->
