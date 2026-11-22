@@ -18,7 +18,7 @@ let package = Package(
     targets: [
         .target(name: "GoConnectCore"),
         .executableTarget(name: "GoConnect", dependencies: ["GoConnectCore", .product(name: "Sparkle", package: "Sparkle")],
-                          linkerSettings: [.linkedFramework("SwiftUI"), .linkedFramework("Security"), .linkedLibrary("sqlite3"), .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]),
+                          linkerSettings: [.linkedFramework("SwiftUI"), .linkedFramework("Security"), .linkedFramework("ServiceManagement"), .linkedLibrary("sqlite3"), .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]),
         .testTarget(name: "GoConnectCoreTests", dependencies: ["GoConnectCore"]),
         .testTarget(name: "GoConnectAppTests", dependencies: ["GoConnect", "GoConnectCore"])
     ]

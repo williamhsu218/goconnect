@@ -402,25 +402,3 @@ struct NetworkServiceCard: View {
         } message: { Text("再次连接前需要重新安装并授权。保存的线路与名单会保留。") }
     }
 }
-
-struct PreferencesView: View {
-    var store: AppStore? = nil
-    var showMenuBar: () -> Void = {}
-    var updater: AppUpdater? = nil
-    var body: some View {
-        Form {
-            MenuBarSettings(showMenuBar: showMenuBar)
-            if let store { CompanyFeatureSettings(store: store) }
-            if let updater { AppUpdateSettings(updater: updater) }
-            Section("关于 GoConnect") {
-                LabeledContent("版本", value: Product.version)
-                LabeledContent("连接协议", value: "AnyConnect / Clash 订阅节点")
-                LabeledContent("运行方式", value: "透明 App 分流")
-            }
-            Section("隐私与存储") {
-                Text("AnyConnect 密码保存在内存或钥匙串；订阅地址及节点凭据保存在仅当前用户可读的本机缓存。订阅更新会访问服务商地址，不记录访问网址。连接期间公网 DNS 由主线路接管；启用公司副连接时，仅配置的公司域名交由公司 DNS 处理。")
-                    .font(.callout).foregroundStyle(.secondary)
-            }
-        }.formStyle(.grouped)
-    }
-}
