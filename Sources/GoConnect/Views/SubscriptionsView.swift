@@ -267,8 +267,8 @@ private struct SubscriptionNodesView: View {
         let nodes = item.payload.nodes.filter { search.isEmpty || $0.name.localizedCaseInsensitiveContains(search) || $0.type.localizedCaseInsensitiveContains(search) }
         guard sortByLatency && !store.nodeLatency.isRunning else { return nodes }
         return nodes.enumerated().sorted { a, b in
-            let left = store.nodeLatency.result(a.element, in: item.id)?.milliseconds ?? Int.max
-            let right = store.nodeLatency.result(b.element, in: item.id)?.milliseconds ?? Int.max
+            let left = store.nodeLatency.result(a.element, in: item.id)?.independentMilliseconds ?? Int.max
+            let right = store.nodeLatency.result(b.element, in: item.id)?.independentMilliseconds ?? Int.max
             return left == right ? a.offset < b.offset : left < right
         }.map(\.element)
     }
@@ -302,7 +302,7 @@ private struct SubscriptionNodesView: View {
                 Spacer(minLength: 8)
                 Toggle("按延迟排序", isOn: $sortByLatency).toggleStyle(.checkbox)
             }
-            Text("HTTPS 响应延迟 · gstatic.com · 单次最长 8 秒。开启排序后，测试完成时按延迟排列；结果代表测试时的网络状况。")
+            Text("经物理网卡测试 gstatic.com 的 HTTPS 响应，每次最长 8 秒。成功率统计最近 5 次有效测试。")
                 .font(.caption).foregroundStyle(.secondary)
             if store.busy && store.usesCompanyRoutes {
                 Label("公司内网已开启，请结束本次连接后再测试节点。", systemImage: "info.circle").font(.caption).foregroundStyle(.secondary)

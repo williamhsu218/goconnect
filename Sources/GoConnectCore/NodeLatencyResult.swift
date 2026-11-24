@@ -1,10 +1,12 @@
 import Foundation
 
 public struct NodeLatencyResult: Codable, Equatable, Sendable {
-    public enum Outcome: String, Codable, Sendable { case success, timeout, unavailable, cancelled }
+    public enum Outcome: String, Codable, Sendable { case success, timeout, unavailable, cancelled, unmeasured }
     public var outcome: Outcome
     public var milliseconds: Int?
     public var detail: String?
+    public var physicalInterface: String?
+    public var recentSuccesses: [Bool]?
     public var checkedAt: Date
     public init(outcome: Outcome, milliseconds: Int? = nil, checkedAt: Date = Date(), detail: String? = nil) {
         self.outcome = outcome; self.milliseconds = milliseconds; self.checkedAt = checkedAt; self.detail = detail
@@ -15,7 +17,26 @@ public struct NodeLatencyResult: Codable, Equatable, Sendable {
         case .timeout: "超时"
         case .unavailable: "不可用"
         case .cancelled: "已取消"
+        case .unmeasured: "未测得"
         }
+    }
+    public func recordingHistory(after previous: Self?) -> Self {
+        var result = self
+        var history = previous?.recentSuccesses ?? []
+        if physicalInterface != nil, [.success, .timeout, .unavailable].contains(outcome) {
+            history.append(outcome == .success)
+        }
+        result.recentSuccesses = Array(history.suffix(5))
+        return result
+    }
+
+    public var independentMilliseconds: Int? { physicalInterface == nil ? nil : milliseconds }
+
+    public var historyLabel: String? {
+        guard let recentSuccesses, !recentSuccesses.isEmpty else { return nil }
+        let successes = recentSuccesses.filter { $0 }.count
+        let percent = Int((100 * Double(successes) / Double(recentSuccesses.count)).rounded())
+        return "最近 \(recentSuccesses.count) 次成功率 \(percent)%"
     }
     // curl's total time includes proxy negotiation, TLS and the HTTP response.
     public static func parse(curlExitCode: Int32, output: String, checkedAt: Date = Date()) -> Self {

@@ -17,6 +17,16 @@ public struct RouteCommandResult: Codable, Sendable {
 public struct NetworkPathCheck: Codable, Equatable, Sendable {
     public var result: String
     public var durationMs: Int64
+    public var attempts: [NetworkProbeAttempt]?
+
+    public var summary: String {
+        let count = attempts?.count ?? 0
+        guard count > 0 else {
+            return result == "unavailable" ? "无法检测" : "\(result == "ok" ? "可用" : "探测失败") · 整轮 \(durationMs) ms"
+        }
+        let status = result == "ok" ? (count > 1 ? "备用目标可用" : "可用") : "探测失败"
+        return "\(status) · \(count) 次共 \(durationMs) ms"
+    }
 }
 
 public struct NetworkPathHealth: Codable, Equatable, Sendable {

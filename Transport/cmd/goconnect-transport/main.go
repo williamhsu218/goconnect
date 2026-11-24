@@ -111,6 +111,8 @@ func main() {
 		err = errors.New("separate company VPN sessions are disabled")
 	case "subscription-session":
 		err = subscriptionSession(ctx)
+	case "cli-probe":
+		err = cliProbeCommand(ctx)
 	case "public-ip":
 		err = publicIPCommand(ctx)
 	case "session":

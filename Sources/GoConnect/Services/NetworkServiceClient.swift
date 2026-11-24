@@ -201,19 +201,33 @@ final class NetworkServiceClient {
         return try JSONDecoder().decode(NetworkServiceStatus.self, from: data)
     }
 
-    nonisolated private static func readTransportReply(_ executable: URL, command: String, failure: String) async throws -> Data {
+    nonisolated static func probeCLI(_ executable: URL, host: String, port: UInt16, token: String) async throws -> NetworkProbeAttempt {
+        struct Request: Encodable { let host: String; let port: UInt16; let token: String }
+        let input = try JSONEncoder().encode(Request(host: host, port: port, token: token))
+        return try await boundedRead(timeout: .seconds(12), timeoutMessage: "CLI 服务检测超时。") {
+            let data = try await readTransportReply(executable, command: "cli-probe", input: input, failure: "无法检测 CLI 服务。")
+            return try JSONDecoder().decode(NetworkProbeAttempt.self, from: data)
+        }
+    }
+
+    nonisolated private static func readTransportReply(_ executable: URL, command: String, input: Data? = nil, failure: String) async throws -> Data {
         let control = TransportReadProcess()
         let result = try await withTaskCancellationHandler {
             try await Task.detached {
                 let process = Process(), output = Pipe()
                 process.executableURL = executable; process.arguments = [command]
                 process.environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "en_US.UTF-8"]
-                process.standardInput = FileHandle.nullDevice
+                let stdin = input.map { _ in Pipe() }
+                process.standardInput = stdin.map { $0 as Any } ?? FileHandle.nullDevice
                 process.standardOutput = output; process.standardError = FileHandle.nullDevice
                 try control.launch(process)
                 defer {
                     if process.isRunning { control.cancel() }
                     control.finished()
+                }
+                if let stdin, let input {
+                    defer { try? stdin.fileHandleForWriting.close() }
+                    try stdin.fileHandleForWriting.write(contentsOf: input)
                 }
                 defer { try? output.fileHandleForReading.close() }
                 // The helper's reply is at most 4096 bytes. No unbounded pipe

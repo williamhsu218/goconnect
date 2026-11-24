@@ -10,7 +10,7 @@ from prepare_release_sources import collect_patched_mihomo
 class PatchedCoreSourceTests(unittest.TestCase):
     def fixture(self, directory):
         scripts = Path(__file__).parent
-        component = directory / "app" / "mihomo-v1.19.30-goconnect2"
+        component = directory / "app" / "mihomo-v1.19.34-goconnect1"
         component.mkdir(parents=True)
         shutil.copy2(scripts / "mihomo.lock.json", component / "mihomo.lock.json")
         shutil.copytree(scripts / "patches", component / "patches")
@@ -26,8 +26,8 @@ class PatchedCoreSourceTests(unittest.TestCase):
             root = Path(temp); component = self.fixture(root); output = root / "sources"
             record = collect_patched_mihomo(component, output)
             copied = output / "components" / component.name
-            self.assertEqual((copied / "patches/mihomo-1.19.30-goconnect.patch").read_bytes(),
-                             (component / "patches/mihomo-1.19.30-goconnect.patch").read_bytes())
+            self.assertEqual((copied / "patches/mihomo-1.19.34-goconnect.patch").read_bytes(),
+                             (component / "patches/mihomo-1.19.34-goconnect.patch").read_bytes())
             self.assertTrue((copied / "build_mihomo.py").is_file())
             self.assertEqual(record["file"], str(Path("components") / component.name / "upstream.tar.gz"))
 
@@ -43,7 +43,7 @@ class PatchedCoreSourceTests(unittest.TestCase):
     def test_tampered_shipped_patch_rejected(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); component = self.fixture(root)
-            (component / "patches/mihomo-1.19.30-goconnect.patch").write_text("wrong patch")
+            (component / "patches/mihomo-1.19.34-goconnect.patch").write_text("wrong patch")
             with self.assertRaises(ValueError): collect_patched_mihomo(component, root / "sources")
 
 

@@ -649,6 +649,17 @@ final class AppStore {
         default: break
         }
     }
+    func probeCLI(host: String) async throws -> NetworkProbeAttempt {
+        guard phase == "connected", socksPort > 0 else { throw CancellationError() }
+        let session = connectionGeneration
+        let result = try await NetworkServiceClient.probeCLI(
+            transport.runtimeURL.appendingPathComponent("bin/GoConnectTransport"),
+            host: host, port: socksPort, token: token
+        )
+        guard session == connectionGeneration, phase == "connected" else { throw CancellationError() }
+        return result
+    }
+
     func refreshPublicIP() {
         guard connectedAt != nil, ["authorizing", "connected", "testing"].contains(phase), socksPort > 0 else { return }
         publicIPChecking = true; publicIPFailed = false; publicIP = nil; publicIPCheckedAt = nil

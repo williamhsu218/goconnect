@@ -62,6 +62,7 @@ final class PreviewDelegate: NSObject, NSApplicationDelegate {
 @MainActor @Observable
 final class PreviewController {
     let store: AppStore
+    private let route = RouteClient()
     var theme: ColorScheme? = .light
     var increasedContrast = false
     var reduceTransparency = false
@@ -74,7 +75,7 @@ final class PreviewController {
             NetworkServiceStatus(state: "notInstalled", message: "QA 预览使用示例数据。")
         })
         store = AppStore(dataDirectory: root, diagnostics: FaultDiagnostics(directory: root.appendingPathComponent("logs")),
-                         refreshRuntime: false, networkServiceClient: service)
+                         refreshRuntime: false, routeClient: route, networkServiceClient: service)
         seed("connected")
     }
     func seed(_ name: String) {
@@ -192,6 +193,11 @@ final class PreviewController {
               let command = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
         lastCommand = data
         if let requested = command["scenario"] as? String, requested != scenario { seed(requested) }
+        if let raw = command["pathHealth"], JSONSerialization.isValidJSONObject(raw),
+           let data = try? JSONSerialization.data(withJSONObject: ["state":"ready", "updatedAt":0, "vpn":0, "direct":0, "unknown":0, "vpnObserved":false, "pathHealth":raw]),
+           let snapshot = try? JSONDecoder().decode(RouteSnapshot.self, from: data) {
+            route.onSnapshot?(snapshot)
+        }
         if let state = command["controlState"] as? String, let control = VPNControlState(rawValue: state) {
             setenv("GOCONNECT_PREVIEW_CONTROL_STATE", state, 1)
             let phases: [VPNControlState: String] = [.off: "idle", .waitingForPassword: "idle", .preparingService: "preparingService", .maintainingService: "serviceMaintenance", .connecting: "connecting", .authorizing: "authorizing", .connected: "connected", .needsRestart: "connected", .reconnecting: "reconnecting", .interrupted: "protected", .disconnecting: "stopping", .diagnostic: "testing", .endingDiagnostic: "stopping", .failed: "failed"]

@@ -45,14 +45,14 @@ final class NodeLatencyStore {
                             let node = nodes[index], key = Self.key(nodes[index], subscriptionID: subscription)
                             self.pending[key] = .testing
                             let result = await tester.measure(node, runtime: runtime)
-                            self.results[key] = result; self.pending.removeValue(forKey: key)
+                            self.results[key] = result.recordingHistory(after: self.results[key]); self.pending.removeValue(forKey: key)
                             self.completed += 1
                             index += 3
                         }
                     }
                 }
             }
-            for key in pending.keys { results[key] = NodeLatencyResult(outcome: .cancelled) }
+            for key in pending.keys { results[key] = NodeLatencyResult(outcome: .cancelled).recordingHistory(after: results[key]) }
             pending = [:]; testers = []; isRunning = false; task = nil
             persist()
         }

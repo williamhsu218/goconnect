@@ -39,7 +39,7 @@ struct NodeLatencyBadge: View {
             return .red
         case .unavailable, .timeout:
             return .red
-        case .cancelled:
+        case .cancelled, .unmeasured:
             return .secondary
         }
     }
@@ -89,8 +89,8 @@ struct NodeLatencyBadge: View {
                             .font(.system(size: 10))
                         Text(result.label)
                             .font(.callout.weight(.semibold))
-                    case .cancelled:
-                        Image(systemName: "slash.circle")
+                    case .cancelled, .unmeasured:
+                        Image(systemName: result.outcome == .cancelled ? "slash.circle" : "questionmark.circle")
                             .font(.system(size: 10))
                         Text(result.label)
                             .font(.callout.weight(.semibold))
@@ -102,6 +102,11 @@ struct NodeLatencyBadge: View {
                 .background(color.opacity(0.1), in: Capsule())
                 .overlay(Capsule().strokeBorder(color.opacity(0.25), lineWidth: 0.5))
 
+                if let history = result.historyLabel {
+                    Text(history).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                } else if result.recentSuccesses == nil && result.physicalInterface == nil {
+                    Text("旧版记录 · 可重测").font(.caption2).foregroundStyle(.secondary)
+                }
                 Text(result.checkedAt.formatted(date: .abbreviated, time: .shortened))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -117,6 +122,6 @@ struct NodeLatencyBadge: View {
                 .background(Color.secondary.opacity(0.08), in: Capsule())
             }
         }
-        .help(result?.detail ?? "HTTPS 响应延迟，非下载速度。每次测试的网络状况可能不同。")
+        .help(result?.detail ?? result?.physicalInterface.map { "物理出口 \($0) · HTTPS 响应延迟" } ?? "HTTPS 响应延迟")
     }
 }

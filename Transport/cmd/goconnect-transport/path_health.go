@@ -20,9 +20,9 @@ import (
 )
 
 type pathCheck struct {
-	Result     string `json:"result"`
-	DurationMS int64  `json:"durationMs"`
-	attempts   []diagnosticDetails
+	Result     string              `json:"result"`
+	DurationMS int64               `json:"durationMs"`
+	Attempts   []diagnosticDetails `json:"attempts,omitempty"`
 }
 
 type pathHealth struct {
@@ -106,10 +106,10 @@ func physicalProbeDial(network originalNetwork) (contextDial, []pathProbeEndpoin
 	if err != nil || nic.Index <= 0 || nic.Flags&net.FlagUp == 0 {
 		return nil, nil
 	}
-	family, level, option, endpoints := "tcp4", unix.IPPROTO_IP, unix.IP_BOUND_IF, probeIPv4
+	family, endpoints := "tcp4", probeIPv4
 	aliDNSIP, ipVersion := "223.5.5.5", 4
 	if gateway.Is6() {
-		family, level, option, endpoints = "tcp6", unix.IPPROTO_IPV6, unix.IPV6_BOUND_IF, probeIPv6
+		family, endpoints = "tcp6", probeIPv6
 		aliDNSIP, ipVersion = "2400:3200::1", 6
 	}
 	// An empty HEAD request receives HTTP 400 from AliDNS without sending a DNS question.
@@ -117,15 +117,7 @@ func physicalProbeDial(network originalNetwork) (contextDial, []pathProbeEndpoin
 		url: "https://" + aliDNSProbeHost + "/dns-query", provider: "alidns", family: ipVersion,
 		additionalHTTPSStatus: http.StatusBadRequest,
 	}
-	dialer := &net.Dialer{ControlContext: func(_ context.Context, _, _ string, conn syscall.RawConn) error {
-		var bindErr error
-		if err := conn.Control(func(fd uintptr) {
-			bindErr = unix.SetsockoptInt(int(fd), level, option, nic.Index)
-		}); err != nil {
-			return err
-		}
-		return bindErr
-	}}
+	dialer := physicalSocketDialer(nic.Index, gateway.Is6())
 	return func(ctx context.Context, _, address string) (net.Conn, error) {
 		// Dial the literal IP on the physical interface while TLS validates the hostname.
 		if address == aliDNSProbeHost+":443" {
@@ -133,6 +125,22 @@ func physicalProbeDial(network originalNetwork) (contextDial, []pathProbeEndpoin
 		}
 		return dialer.DialContext(ctx, family, address)
 	}, append([]pathProbeEndpoint{aliDNS}, endpoints...)
+}
+
+func physicalSocketDialer(index int, ipv6 bool) *net.Dialer {
+	level, option := unix.IPPROTO_IP, unix.IP_BOUND_IF
+	if ipv6 {
+		level, option = unix.IPPROTO_IPV6, unix.IPV6_BOUND_IF
+	}
+	return &net.Dialer{ControlContext: func(_ context.Context, _, _ string, conn syscall.RawConn) error {
+		var bindErr error
+		if err := conn.Control(func(fd uintptr) {
+			bindErr = unix.SetsockoptInt(int(fd), level, option, index)
+		}); err != nil {
+			return err
+		}
+		return bindErr
+	}}
 }
 
 func newPathProbeClient(dial contextDial) *http.Client {
@@ -148,6 +156,7 @@ func newPathProbeClient(dial contextDial) *http.Client {
 
 type probeTrace struct {
 	started    time.Time
+	firstByte  atomic.Pointer[time.Time]
 	tlsStarted atomic.Pointer[time.Time]
 	tlsDone    atomic.Pointer[probeTLSCompletion]
 }
@@ -159,6 +168,7 @@ type probeTLSCompletion struct {
 
 func (s *probeTrace) hooks() *httptrace.ClientTrace {
 	return &httptrace.ClientTrace{
+		GotFirstResponseByte: func() { now := time.Now(); s.firstByte.Store(&now) },
 		TLSHandshakeStart: func() {
 			now := time.Now()
 			s.tlsStarted.Store(&now)
@@ -175,6 +185,9 @@ func (s *probeTrace) finish(attempt *diagnosticDetails) {
 	duration := func(d time.Duration) *int64 {
 		ms := d.Milliseconds()
 		return &ms
+	}
+	if at := s.firstByte.Load(); at != nil {
+		attempt.FirstByteMS = duration(at.Sub(s.started))
 	}
 	begin := s.tlsStarted.Load()
 	if begin == nil {
@@ -277,7 +290,7 @@ func checkPath(ctx context.Context, dial contextDial, endpoints []pathProbeEndpo
 			break
 		}
 		attempt := checkProbeEndpoint(ctx, client, endpoint, dns)
-		result.attempts = append(result.attempts, attempt)
+		result.Attempts = append(result.Attempts, attempt)
 		result.Result = attempt.Reason
 		if result.Result == "ok" {
 			break

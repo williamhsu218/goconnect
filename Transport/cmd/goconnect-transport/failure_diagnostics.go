@@ -21,6 +21,7 @@ type diagnosticDetails struct {
 	ProbeTarget       string              `json:"probeTarget,omitempty"`
 	ConnectMS         *int64              `json:"connectMs,omitempty"`
 	TLSMS             *int64              `json:"tlsMs,omitempty"`
+	FirstByteMS       *int64              `json:"firstByteMs,omitempty"`
 	ResponseMS        *int64              `json:"responseMs,omitempty"`
 	TimedOut          bool                `json:"timedOut,omitempty"`
 	TimeoutMS         int64               `json:"timeoutMs,omitempty"`
@@ -61,7 +62,7 @@ func sanitizeDiagnosticDetails(d diagnosticDetails) diagnosticDetails {
 	d.Reason = allowedDiagnosticLabel(d.Reason, reasons)
 	d.Check = allowedDiagnosticLabel(d.Check, reasons)
 	d.ProbeTarget = allowedDiagnosticLabel(d.ProbeTarget, "cloudflare google alidns")
-	for _, field := range []**int64{&d.ConnectMS, &d.TLSMS, &d.ResponseMS} {
+	for _, field := range []**int64{&d.ConnectMS, &d.TLSMS, &d.ResponseMS, &d.FirstByteMS} {
 		if *field != nil {
 			n := **field
 			*field = &n

@@ -226,8 +226,9 @@ func subscriptionSession(parent context.Context) (err error) {
 		return errors.New("invalid request")
 	}
 	var r struct {
-		Node  subscriptionNode `json:"node"`
-		Token string           `json:"token"`
+		Node          subscriptionNode `json:"node"`
+		Token         string           `json:"token"`
+		TestInterface string           `json:"testInterface,omitempty"`
 	}
 	if json.Unmarshal(line, &r) != nil || len(r.Token) < 32 {
 		return errors.New("invalid node")
@@ -248,7 +249,17 @@ func subscriptionSession(parent context.Context) (err error) {
 	host := proxy["server"].(string)
 	lookupCtx, lookupCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer lookupCancel()
-	ips, e := net.DefaultResolver.LookupIP(lookupCtx, "ip", host)
+	var ips []net.IP
+	if r.TestInterface != "" {
+		ips, e = physicalNodeAddresses(lookupCtx, host, r.TestInterface)
+		if e != nil {
+			emit(map[string]string{"event": "error", "code": "probe_path_unavailable"})
+			return e
+		}
+		proxy["interface-name"] = r.TestInterface
+	} else {
+		ips, e = net.DefaultResolver.LookupIP(lookupCtx, "ip", host)
+	}
 	if e != nil || len(ips) == 0 {
 		return errors.New("resolve node")
 	}

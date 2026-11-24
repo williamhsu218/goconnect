@@ -16,7 +16,7 @@ class MihomoPinTests(unittest.TestCase):
 
     def test_real_pinned_patch_matches_lock(self):
         lock, patch = load_lock(Path(__file__).with_name("mihomo.lock.json"))
-        self.assertEqual(lock["buildVersion"], "v1.19.30-goconnect2")
+        self.assertEqual(lock["buildVersion"], "v1.19.34-goconnect1")
         self.assertIn("goconnect-native-addresses", patch.read_text())
         self.assertIn("GOCONNECT-APP-CHILD", patch.read_text())
         self.assertIn("anchor apple generic", patch.read_text())

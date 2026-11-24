@@ -18,8 +18,8 @@ def digest(path):
 
 def load_lock(path):
     lock = json.loads(path.read_text())
-    if (lock["version"] != "1.19.30" or lock["buildVersion"] != "v1.19.30-goconnect2"
-            or lock["url"] != "https://codeload.github.com/MetaCubeX/mihomo/tar.gz/refs/tags/v1.19.30"
+    if (lock["version"] != "1.19.34" or lock["buildVersion"] != "v1.19.34-goconnect1"
+            or lock["url"] != "https://codeload.github.com/MetaCubeX/mihomo/tar.gz/refs/tags/v1.19.34"
             or lock["tags"] != ["with_gvisor"]):
         raise ValueError("Unexpected Mihomo source/build identity")
     patch = (path.parent / lock["patch"]).resolve()

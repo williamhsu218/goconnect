@@ -354,6 +354,30 @@ final class NodeLatencyResultTests: XCTestCase {
         XCTAssertEqual(NodeLatencyResult.parse(curlExitCode: 60, output: "204 0.2").outcome, .unavailable)
         XCTAssertEqual(NodeLatencyResult.parse(curlExitCode: 28, output: "000 8.0").outcome, .timeout)
     }
+    func testIndependentHistoryExcludesLegacyAndCancelledAndKeepsFive() throws {
+        let old = try JSONDecoder().decode(NodeLatencyResult.self, from: Data(#"{"outcome":"success","milliseconds":7,"checkedAt":0}"#.utf8))
+        XCTAssertNil(old.independentMilliseconds)
+        var last = old
+        for outcome: NodeLatencyResult.Outcome in [.timeout, .success, .success, .timeout, .success, .success] {
+            var sample = NodeLatencyResult(outcome: outcome)
+            sample.physicalInterface = "en7"
+            last = sample.recordingHistory(after: last)
+        }
+        let cancelled = NodeLatencyResult(outcome: .cancelled).recordingHistory(after: last)
+        XCTAssertEqual(cancelled.recentSuccesses, [true, true, false, true, true])
+        XCTAssertEqual(cancelled.historyLabel, "最近 5 次成功率 80%")
+        XCTAssertEqual(NodeLatencyResult(outcome: .unmeasured).recordingHistory(after: cancelled).recentSuccesses, cancelled.recentSuccesses)
+    }
+
+    func testPathSummarySeparatesLegacyRoundFromIndividualAttempts() throws {
+        let old = try JSONDecoder().decode(NetworkPathCheck.self, from: Data(#"{"result":"tls","durationMs":12001}"#.utf8))
+        XCTAssertEqual(old.summary, "探测失败 · 整轮 12001 ms")
+        let json = #"{"result":"ok","durationMs":4020,"attempts":[{"probeTarget":"cloudflare","family":4,"reason":"tls","timedOut":true,"durationMs":4000},{"probeTarget":"google","family":4,"reason":"ok","durationMs":20,"firstByteMs":19}]}"#
+        let check = try JSONDecoder().decode(NetworkPathCheck.self, from: Data(json.utf8))
+        XCTAssertEqual(check.summary, "备用目标可用 · 2 次共 4020 ms")
+        XCTAssertEqual(check.attempts?.first?.resultLabel, "TLS 握手超时")
+        XCTAssertEqual(check.attempts?.last?.firstByteMs, 19)
+    }
     func testStoredResultsPreserveTimeAndOutcome() throws {
         let result = NodeLatencyResult(outcome: .success, milliseconds: 123, checkedAt: Date(timeIntervalSince1970: 123456))
         XCTAssertEqual(try JSONDecoder().decode(NodeLatencyResult.self, from: JSONEncoder().encode(result)), result)

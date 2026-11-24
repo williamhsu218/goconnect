@@ -15,7 +15,7 @@ brew install go openconnect
 
 当前检查环境：Apple Silicon、macOS 27、Swift 6.4、Go 1.26.6。Homebrew 的组件版本会变化；打包结果会记录实际版本和最低 macOS 要求。较老系统或 Intel 构建需要单独验证。
 
-本版使用 `script/mihomo.lock.json` 锁定 Mihomo v1.19.30 源码归档和 GoConnect 补丁的 SHA-256，由 `script/build_mihomo.py` 在临时目录编译为 `v1.19.30-goconnect2`（`with_gvisor`）。名单模式的按应用 DNS 地址重匹配依赖该补丁，打包器拒绝替换成未修复的本机/Homebrew 内核。源码、补丁、构建配方及许可证随包记录，并纳入第三方源码附件；详见 [分流修复记录](ROUTING_MODE_FIX_2026-11-10.md)。v1.0.14 tag 使用其当时的 Homebrew 内核，不包含此修复。
+本版使用 `script/mihomo.lock.json` 锁定 Mihomo v1.19.34 源码归档和 GoConnect 补丁的 SHA-256，由 `script/build_mihomo.py` 在临时目录编译为 `v1.19.34-goconnect1`（`with_gvisor`）。名单模式的按应用 DNS 地址重匹配依赖该补丁，打包器拒绝替换成未修复的本机/Homebrew 内核。源码、补丁、构建配方及许可证随包记录，并纳入第三方源码附件；详见 [分流修复记录](ROUTING_MODE_FIX_2026-11-10.md)。v1.0.14 tag 使用其当时的 Homebrew 内核，不包含此修复。
 
 Sparkle、Go 模块和 Mihomo 源码有版本及完整性约束，但 OpenConnect 和其动态依赖仍取自本机安装环境，尚不是完整锁定的可复现构建。相同源码重新打包不保证与正式 ZIP 逐字节一致；依赖或工具链升级后须重新执行适用检查，不能复用旧版本的验收结论。
 

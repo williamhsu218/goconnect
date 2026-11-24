@@ -24,7 +24,11 @@ final class NodeLatencyTester {
             files.forEach { try? $0.close() }
             try? FileManager.default.removeItem(at: directory)
         }
-        var result = NodeLatencyResult(outcome: .unavailable)
+        let executable = runtime.appendingPathComponent("bin/GoConnectTransport")
+        guard let path = await NetworkServiceClient.readRecoveryPath(executable, timeout: .seconds(2)) else {
+            return NodeLatencyResult(outcome: Task.isCancelled ? .cancelled : .unmeasured, detail: "无法确认当前物理出口，请在网络稳定后重测")
+        }
+        var result = NodeLatencyResult(outcome: .unmeasured)
         do {
             try Task.checkCancellation()
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
@@ -36,14 +40,14 @@ final class NodeLatencyTester {
             let (statusURL, statusOutput) = try outputFile("status")
             let p = Process(), pipe = Pipe()
             helper = p; input = pipe
-            p.executableURL = runtime.appendingPathComponent("bin/GoConnectTransport")
+            p.executableURL = executable
             p.arguments = ["subscription-session"]
             p.environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "en_US.UTF-8"]
             p.standardInput = pipe; p.standardOutput = statusOutput; p.standardError = FileHandle.nullDevice
             try p.run()
             let token = UUID().uuidString + UUID().uuidString
-            struct Request: Encodable { let node: SubscriptionNode; let token: String }
-            var data = try JSONEncoder().encode(Request(node: node, token: token)); data.append(10)
+            struct Request: Encodable { let node: SubscriptionNode; let token: String; let testInterface: String }
+            var data = try JSONEncoder().encode(Request(node: node, token: token, testInterface: path.interface)); data.append(10)
             guard data.count <= 65_536 else { throw CocoaError(.fileReadTooLarge) }
             try pipe.fileHandleForWriting.write(contentsOf: data)
             var port: UInt16?
@@ -87,10 +91,18 @@ final class NodeLatencyTester {
                 }
                 if request.isRunning { result = NodeLatencyResult(outcome: .timeout) }
                 else { result = .parse(curlExitCode: request.terminationStatus, output: String(decoding: (try? Data(contentsOf: responseURL)) ?? Data(), as: UTF8.self)) }
-            } else { result = NodeLatencyResult(outcome: p.isRunning ? .timeout : .unavailable, detail: "节点代理未能启动") }
+                let current = await NetworkServiceClient.readRecoveryPath(executable, timeout: .seconds(2))
+                if current == path {
+                    result.physicalInterface = path.interface
+                } else {
+                    result = NodeLatencyResult(outcome: .unmeasured, detail: "测试期间物理出口变化，请重测")
+                }
+            } else {
+                result = NodeLatencyResult(outcome: .unmeasured, detail: "未能建立独立测试路径，请检查物理网络及节点地址")
+            }
         } catch is CancellationError { result = NodeLatencyResult(outcome: .cancelled) }
         catch {
-            result = NodeLatencyResult(outcome: .unavailable, detail: "本机测试进程未能完成请求")
+            result = NodeLatencyResult(outcome: .unmeasured, detail: "本机测试进程未能完成请求")
         }
         stop()
         // Let subscription-session revoke its stdin lease and reap its child core.

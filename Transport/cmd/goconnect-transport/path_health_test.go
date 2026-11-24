@@ -150,10 +150,10 @@ func TestPathHealthRecordsEachAttemptAndOnlyReachedStages(t *testing.T) {
 		_ = back.Close()
 	default:
 	}
-	if len(check.attempts) != 2 || check.Result != "tls" {
+	if len(check.Attempts) != 2 || check.Result != "tls" {
 		t.Fatalf("missing ordered probe attempts: %+v", check)
 	}
-	first, second := check.attempts[0], check.attempts[1]
+	first, second := check.Attempts[0], check.Attempts[1]
 	if first.ProbeTarget != "cloudflare" || first.Reason != "connect" ||
 		first.ConnectMS == nil || first.TLSMS != nil || first.ResponseMS != nil || first.TimedOut {
 		t.Fatalf("unexpected connect timing: %+v", first)

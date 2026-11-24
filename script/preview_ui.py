@@ -82,6 +82,19 @@ struct KeychainStore {
         raise RuntimeError("Cannot replace the real connection button action in the preview.")
     control.write_text("import Foundation\n" + text.replace(connection_action, ""))
 
+    # Preview uses the same CLI result view but never opens a real session proxy.
+    store = app / "Stores/AppStore.swift"
+    text = store.read_text()
+    start = text.index("    func probeCLI(host: String)")
+    end = text.index("\n    }\n", start) + len("\n    }\n")
+    store.write_text(text[:start] + '''    func probeCLI(host: String) async throws -> NetworkProbeAttempt {
+        try await Task.sleep(for: .milliseconds(250))
+        let row: [String: Any] = ["probeTarget": host, "reason": "http_status", "httpStatus": 403,
+                                  "durationMs": 82, "connectMs": 20, "tlsMs": 42, "responseMs": 20, "firstByteMs": 81]
+        return try JSONDecoder().decode(NetworkProbeAttempt.self, from: JSONSerialization.data(withJSONObject: row))
+    }
+''' + text[end:])
+
     company = app / "Stores/CompanyConnectionStore.swift"
     with company.open("a") as file:
         file.write("""
