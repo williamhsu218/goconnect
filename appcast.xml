@@ -6,16 +6,16 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/williamhsu218/goconnect/releases</link>
     <description>GoConnect signed updates</description>
     <item>
-      <title>GoConnect 2.1.1</title>
-      <pubDate>Sun, 22 Nov 2026 12:50:55 +0000</pubDate>
-      <sparkle:version>84</sparkle:version>
-      <sparkle:shortVersionString>2.1.1</sparkle:shortVersionString>
+      <title>GoConnect 2.2.0</title>
+      <pubDate>Tue, 24 Nov 2026 23:30:07 +0000</pubDate>
+      <sparkle:version>85</sparkle:version>
+      <sparkle:shortVersionString>2.2.0</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
-      <description>修复设置标签页在打开或鼠标操作时多出的焦点圈，键盘导航与切换动画继续保留。确认安装后应用会正常断开 VPN 并重启。</description>
-      <enclosure url="https://github.com/williamhsu218/goconnect/releases/download/v2.1.1/GoConnect-2.1.1-macos-arm64.zip" length="32635937" type="application/octet-stream" sparkle:edSignature="/AEYzqqRD8TXG9GR74TZ3pHrxTCPUR9pCRlNDr2TZC9q4qQxt4oYWco6omRaSzmhAygK4UXVYBv1afpvgDHXDQ=="></enclosure>
+      <description>节点经物理网卡独立测速，诊断可查看逐目标耗时和 CLI 服务响应。内置 Mihomo 升级至 v1.19.34。请先保存线路草稿，确认安装时应用将正常断开并重启。</description>
+      <enclosure url="https://github.com/williamhsu218/goconnect/releases/download/v2.2.0/GoConnect-2.2.0-macos-arm64.zip" length="36457035" type="application/octet-stream" sparkle:edSignature="H8nY6aWVvisNcb+ERyKzpbOgUi8P5sd7NSLzis8cvU6Q0AcbiBbZi43Z0xxsnAAW5MW+Kk+5JuaIFZqiNwySBw=="></enclosure>
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: HNMi/qW9J2gS+pcolOooL6AYGJ5Gcj+1fvAZbv4plsY88niEBiMwBcFSO0DDtAsGaO30ec4dBso1ZtedGdTDAQ==
-length: 1369
+edSignature: ojvL9ARdJrAkcNlJvf10pKBmdv9rIfrq6KwWelgYNW2kHG4kHwPxSpG8j5vb6RQXHfueyrd6ThrqXvKna6IgAQ==
+length: 1404
 -->
