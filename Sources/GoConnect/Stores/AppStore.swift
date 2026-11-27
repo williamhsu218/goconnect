@@ -85,6 +85,7 @@ final class AppStore {
     private var disconnectRecoverySuggestion: String?
     private var unexpectedDisconnectReported = false
     private var transportRecovering = false
+    @ObservationIgnored private var sessionSubscriptionNode: SubscriptionNode?
     private let transport: TransportClient
     private let publicIPChecker: PublicIPChecker
     private let route: RouteClient
@@ -220,7 +221,7 @@ final class AppStore {
         // If preparation fails, installation/quit remains protected until a new
         // trusted read confirms idle; unknown/unauthorized replies are not idle.
         networkService.requireIdleConfirmation()
-        if updateNetworkRuntimeActive { disconnect() }
+        if updateNetworkRuntimeActive { disconnect(source: .updatePreparation) }
         while clock.now < deadline {
             guard !Task.isCancelled else { return false }
             if let reason = updateSafetyState.preparationBlockingReason {
@@ -274,7 +275,7 @@ final class AppStore {
     }
     var statusSubtitle: String {
         if networkRecoveryActive { return "正在等待原网络稳定并重新连接。你可以随时停止恢复。" }
-        if phase == "connected", pathHealth?.state == "degraded" { return "代理探测连续失败，可在诊断中查看各路径结果。" }
+        if phase == "connected", let detail = pathHealth?.statusDetail { return detail }
         return switch phase {
         case "connected": accessExplanation
         case "reconnecting": "隧道暂时不可用，正在自动恢复；分流规则保持，可随时关闭连接。"
@@ -467,10 +468,10 @@ final class AppStore {
         hasOtherRouter = false
     }
     func connect(test: Bool = false) {
-        _ = startConnection(test: test, restoringNetwork: false)
+        _ = startConnection(test: test, restoringNetwork: false, node: selectedSubscriptionNode)
     }
     @discardableResult
-    private func startConnection(test: Bool, restoringNetwork: Bool) -> Bool {
+    private func startConnection(test: Bool, restoringNetwork: Bool, node: SubscriptionNode?) -> Bool {
         guard !Product.isIsolatedTestApp else { show("此隔离测试包仅验收界面与配置，不接管系统网络。", error: true); return false }
         guard allowsOperationDuringUpdate() else { return false }
         if Product.isNetworkTestApp, let reason = networkService.testHostMessage { show(reason, error: true); networkService.refresh(); return false }
@@ -480,7 +481,7 @@ final class AppStore {
         guard !nodeLatency.isRunning else { show("请先停止节点测试，再连接 VPN。", error: true); return false }
         do {
             if configuration.activeConnection.subscription == nil { _ = try configuration.profile.validatedServer() }
-            else if selectedSubscriptionNode == nil { show("当前节点已不存在，请在订阅管理中重新选择。", error: true); page = .subscriptions; return false }
+            else if node == nil { show("当前节点已不存在，请在订阅管理中重新选择。", error: true); page = .subscriptions; return false }
             guard localReady else { show("运行组件不完整，请重新运行项目构建脚本。", error: true); return false }
             if !test { _ = try ApplicationRoutingSupport.routingPaths(for: configuration.routingApplications) }
 
@@ -506,8 +507,8 @@ final class AppStore {
             connectionGeneration = UUID()
             let attempt = connectionGeneration
             let startingLine = configuration.activeConnection
-            let startingNode = selectedSubscriptionNode
             let startingCompany = companyConfiguration
+            sessionSubscriptionNode = node
             phase = test ? "connecting" : "preparingService"
             show("正在准备透明 App 分流服务。")
             password = ""
@@ -518,13 +519,14 @@ final class AppStore {
                     if !test {
                         if companyConfiguration.enabled {
                             guard companyConfigurationReadable else { throw CompanyConnectionError.invalid("请先处理公司连接配置读取错误。") }
-                            guard selectedSubscriptionNode?.type == "hysteria2" else { throw CompanyConnectionError.invalid("双连接测试当前只支持 HY2 主线路。") }
+                            guard node?.type == "hysteria2" else { throw CompanyConnectionError.invalid("双连接测试当前只支持 HY2 主线路。") }
                             companyReservation = try await CompanyGatewayResolver.reservation(companyConfiguration, configuration: configuration)
                         } else { companyReservation = nil }
                         guard connectionGeneration == attempt, phase == "preparingService" else { return }
                         if restoringNetwork {
                             guard await networkService.refreshStatus().map({ $0.ready && !$0.busy }) == true else {
                                 guard connectionGeneration == attempt else { return }
+                                sessionSubscriptionNode = nil
                                 phase = "failed"
                                 show("本机网络服务暂未就绪。", error: true)
                                 return
@@ -536,17 +538,19 @@ final class AppStore {
                     guard connectionGeneration == attempt else { return }
                     if restoringNetwork && (
                         updateOperationBlocked || configuration.activeConnection != startingLine ||
-                        selectedSubscriptionNode != startingNode || companyConfiguration != startingCompany
+                        companyConfiguration != startingCompany
                     ) {
+                        sessionSubscriptionNode = nil
                         phase = "failed"
                         return
                     }
                     guard phase == "preparingService" || phase == "connecting" else { finishStopping(); return }
                     phase = "connecting"
-                    if let node = selectedSubscriptionNode { try transport.start(node: node, token: token) }
+                    if let node { try transport.start(node: node, token: token) }
                     else { try transport.start(profile: configuration.profile, password: secret, token: token) }
                 } catch {
                     guard connectionGeneration == attempt else { return }
+                    sessionSubscriptionNode = nil
                     phase = "failed"; show(error.localizedDescription, error: true)
                 }
             }
@@ -556,12 +560,12 @@ final class AppStore {
             return false
         }
     }
-    func disconnect() {
+    func disconnect(source: DisconnectTrigger = .unknown) {
         company?.primaryStopping()
         guard busy else { return }
         cancelNetworkRecovery()
         if passwordRequested { passwordRequested = false; return }
-        diagnostics.record(.disconnectRequested)
+        diagnostics.record(.disconnectRequested, value: source.rawValue)
         stopFailed = false
         stopAll()
     }
@@ -572,6 +576,7 @@ final class AppStore {
         trafficAvailable = false; pathHealth = nil
         connectionGeneration = UUID()
         transportRecovering = false
+        sessionSubscriptionNode = nil
         phase = "stopping"; route.stop(); transport.stop()
         finishStopping()
     }
@@ -719,7 +724,8 @@ final class AppStore {
               !updateOperationBlocked, !recoveryRequired,
               configuration.activeConnection.subscription != nil || configuration.profile.rememberPassword else { return false }
         let original = configuration
-        let originalNode = selectedSubscriptionNode
+        let originalNode = sessionSubscriptionNode
+        guard original.activeConnection.subscription == nil || originalNode != nil else { return false }
         let originalCompany = companyConfiguration
         networkRecoveryActive = true
         diagnostics.record(.networkRecoveryStarted)
@@ -738,13 +744,13 @@ final class AppStore {
                 }
                 guard !self.recoveryRequired, !self.updateOperationBlocked,
                       ["idle", "failed"].contains(self.phase), self.configuration == original,
-                      self.selectedSubscriptionNode == originalNode, self.companyConfiguration == originalCompany else { return false }
+                      self.companyConfiguration == originalCompany else { return false }
                 return await NetworkRecovery.waitForPhysicalPath(until: limit, runtime: self.transport.runtimeURL)
             }, attempt: {
-                guard self.configuration == original, self.selectedSubscriptionNode == originalNode,
+                guard self.configuration == original,
                       self.companyConfiguration == originalCompany,
                       !self.updateOperationBlocked, !self.recoveryRequired,
-                      self.startConnection(test: false, restoringNetwork: true) else { return .stop }
+                      self.startConnection(test: false, restoringNetwork: true, node: originalNode) else { return .stop }
                 self.diagnostics.record(.networkRecoveryAttempt)
                 while !Task.isCancelled, clock.now < deadline {
                     if self.phase == "connected" { return .connected }
@@ -770,7 +776,8 @@ final class AppStore {
             let connected = self.phase == "connected"
             self.diagnostics.record(.networkRecoveryFinished, value: connected ? 1 : 0)
             if connected {
-                self.show(self.pathHealth?.state == "reachable" ? "原线路已恢复，代理 HTTPS 与 DoH 均可用。" : "原线路已重建，公网可用性正在复核。")
+                let proxyAvailable = self.pathHealth?.proxyHTTPS.result == "ok" && self.pathHealth?.proxyDoH.result == "ok"
+                self.show(proxyAvailable ? "原线路已恢复，代理 HTTPS 与 DoH 均可用。" : "原线路已重建，公网可用性正在复核。")
             } else {
                 if self.busy && self.phase != "stopping" { self.stopFailed = true; self.stopAll() }
                 if self.phase == "idle" { self.phase = "failed" }

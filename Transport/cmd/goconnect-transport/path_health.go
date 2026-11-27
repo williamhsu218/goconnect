@@ -27,28 +27,55 @@ type pathCheck struct {
 
 type pathHealth struct {
 	State       string    `json:"state"`
+	Issue       string    `json:"issue,omitempty"`
 	SampledAt   int64     `json:"sampledAt"`
 	ProxyHTTPS  pathCheck `json:"proxyHTTPS"`
 	ProxyDoH    pathCheck `json:"proxyDoH"`
 	DirectHTTPS pathCheck `json:"directHTTPS"`
 }
 
-const pathHealthInterval = 45 * time.Second
+const (
+	pathHealthInterval        = 45 * time.Second
+	pathHealthRecheck         = 3 * time.Second
+	pathHealthDegradedRecheck = 15 * time.Second
+)
 
-type pathHealthTracker struct{ failures int }
+type pathHealthTracker struct{ previousIssue string }
 
 func (s *pathHealthTracker) observe(sample pathHealth) pathHealth {
-	if sample.ProxyHTTPS.Result == "ok" && sample.ProxyDoH.Result == "ok" {
-		s.failures = 0
+	issue := pathHealthIssue(sample)
+	sample.Issue = issue
+	switch {
+	case issue == "":
 		sample.State = "reachable"
-	} else {
-		s.failures++
+	case s.previousIssue == "":
 		sample.State = "checking"
-		if s.failures >= 2 {
-			sample.State = "degraded"
+	default:
+		sample.State = "degraded"
+		if s.previousIssue != issue {
+			sample.Issue = "unstable"
 		}
 	}
+	s.previousIssue = issue
 	return sample
+}
+
+func pathHealthIssue(sample pathHealth) string {
+	httpsOK := sample.ProxyHTTPS.Result == "ok"
+	dohOK := sample.ProxyDoH.Result == "ok"
+	direct := sample.DirectHTTPS.Result
+	switch {
+	case httpsOK && dohOK:
+		return ""
+	case httpsOK:
+		return "proxy_doh"
+	case dohOK:
+		return "proxy_https"
+	case direct == "ok":
+		return "proxy_path"
+	default:
+		return "network"
+	}
 }
 
 type contextDial func(context.Context, string, string) (net.Conn, error)
@@ -313,28 +340,71 @@ func runPathHealthSample(ctx context.Context, viaProxy, viaDirect contextDial, p
 }
 
 func monitorPathHealth(ctx context.Context, r routeRequest, original originalNetwork) <-chan pathHealth {
-	samples := make(chan pathHealth, 1)
 	proxyDial, err := sessionSOCKSDialer(r.SOCKSPort, r.Token)
 	if err != nil {
 		return nil
 	}
 	directDial, directEndpoints := physicalProbeDial(original)
 	proxyEndpoints := append(append([]pathProbeEndpoint{}, probeIPv4...), probeIPv6...)
+	return pathHealthSamples(ctx, pathHealthInterval, pathHealthRecheck, pathHealthDegradedRecheck, func(ctx context.Context) pathHealth {
+		return runPathHealthSample(ctx, proxyDial, directDial, proxyEndpoints, directEndpoints)
+	})
+}
+
+func sleepPathHealth(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return ctx.Err() == nil
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func pathHealthSamples(ctx context.Context, interval, recheck, degradedInterval time.Duration, probe func(context.Context) pathHealth) <-chan pathHealth {
+	if degradedInterval <= 0 {
+		degradedInterval = interval
+	}
+	samples := make(chan pathHealth, 1)
 	go func() {
 		defer close(samples)
-		ticker := time.NewTicker(pathHealthInterval)
-		defer ticker.Stop()
-		for ctx.Err() == nil {
-			sample := runPathHealthSample(ctx, proxyDial, directDial, proxyEndpoints, directEndpoints)
-			select {
-			case <-ctx.Done():
-				return
-			case samples <- sample:
+		var tracker pathHealthTracker
+		publish := func() (state string, sent bool) {
+			if ctx.Err() != nil {
+				return "", false
 			}
+			sample := tracker.observe(probe(ctx))
 			select {
 			case <-ctx.Done():
+				return "", false
+			case samples <- sample:
+				return sample.State, true
+			}
+		}
+		for {
+			state, sent := publish()
+			if !sent {
 				return
-			case <-ticker.C:
+			}
+			if state == "checking" {
+				if !sleepPathHealth(ctx, recheck) {
+					return
+				}
+				state, sent = publish()
+				if !sent {
+					return
+				}
+			}
+			wait := interval
+			if state == "degraded" {
+				wait = degradedInterval
+			}
+			if !sleepPathHealth(ctx, wait) {
+				return
 			}
 		}
 	}()

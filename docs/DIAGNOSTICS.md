@@ -94,7 +94,9 @@ build 55 的历史验证包括 87 项 Swift 测试、Go race/真实组件集成�
 
 ## 线路可用性与切网恢复
 
-- `path_health.proxy_https`、`path_health.proxy_doh`、`path_health.direct_https` 每 45 秒记录最近的结果和耗时。代理探测使用本次会话的认证 SOCKS 入口，原网络 HTTPS 绑定会话开始时确认的物理接口。HTTPS 探测用服务 IP，DoH 探测另外验证 TLS 和 DNS 响应。
-- 两次连续代理探测失败显示「线路降级」。下一次代理 HTTPS 与 DoH 同时成功时恢复可用状态。单次探测、目标站点抖动和已有的真正路由故障仍按各自层级处理。
+- `path_health.proxy_https`、`path_health.proxy_doh`、`path_health.direct_https` 常规每 45 秒采样；首轮异常完成后等 3 秒复测一次，确认降级后每 15 秒复测以加速恢复提示。`path_health.state` 记录最终归类状态。代理探测使用本次会话的认证 SOCKS 入口，原网络 HTTPS 绑定会话开始时确认的物理接口。HTTPS 探测用服务 IP，DoH 探测另外验证 TLS 和 DNS 响应。
+- 首轮代理异常显示「正在复测」。同类异常连续出现会提示对应路径，异常类型变化时显示「网络波动」。当代理 HTTPS 与 DoH 均正常时，原网络 HTTPS 异常仅在诊断页展示提示，不把正常 VPN 连接标为降级。实际路由故障仍由原有的连接恢复流程处理。
 - 1.0.19 的 `path_health.*_attempt` 记录每轮各目标的次序、供应商和 IPv4／IPv6。代理探测的连接耗时计到 SOCKS 连接建立，原网络探测计到 TCP 连接建立。TLS 和响应各自计时。只有已到达的阶段才有耗时，同时记录超时和收到的 HTTP 状态。日志只使用固定探测目标的标签。
+- 系统 DNS 保护巡检发现临时 `SCDynamicStore` 租约失效时，会先核对物理网卡、外层网关、透明路由和本地 DNS 监听。确认旧解析器已移除且会话授权仍有效后，才在 5 分钟最多 3 次的限额内重建。验证新租约后再次确认会话有效，才记录 `transparent.dns_repaired`。授权撤销会结束会话并清理已创建的租约。超限或重建失败会停止连接（`transparent.dns_repair_throttled` / `dns_unavailable`）。未确认 DNS 清理时保留恢复记录并发出 `transparent.dns_restore_failed`。
+- `connection.disconnect_requested` 的 `value` 记录触发来源：`0` 未知、`1` 主窗口、`2` 菜单栏、`3` 停止诊断、`4` 更新安装准备、`5` 应用退出。
 - `connection.network_recovery_started`、`connection.network_recovery_attempt` 和 `connection.network_recovery_finished` 用于核对恢复过程。自动恢复基于服务报告的原网络变化，要求上一会话完成清理，订阅最多尝试三次，使用已保存凭据的 AnyConnect 最多一次。

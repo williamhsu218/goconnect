@@ -296,19 +296,19 @@ func managedDNSReady(port uint16) error {
 	return nil
 }
 
-func installManagedDNS(p *managedDNSPlan) (managedDNSLease, error) {
+// The caller closes any returned lease, including on failed publication.
+func installManagedDNS(p *managedDNSPlan, checkSession func() error) (managedDNSLease, error) {
 	if err := managedDNSReady(p.port); err != nil {
 		return nil, fmt.Errorf("DNS 接管前验证失败: %w", err)
+	}
+	if err := checkSession(); err != nil {
+		return nil, err
 	}
 	lease, err := acquireManagedDNS(p.port, "")
 	if err != nil {
 		return nil, err
 	}
-	if err = waitManagedDNS(p.port, "", true); err != nil {
-		lease.close()
-		return nil, err
-	}
-	return lease, nil
+	return lease, waitManagedDNS(p.port, "", true)
 }
 
 // Store acceptance alone is insufficient: wait until macOS publishes the

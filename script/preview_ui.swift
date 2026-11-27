@@ -250,7 +250,7 @@ final class PreviewController {
 @MainActor
 extension AppStore {
     /// The preview power button changes its fixture without opening a connection.
-    func setConnectionEnabled(_ enabled: Bool) {
+    func setPreviewConnectionEnabled(_ enabled: Bool) {
         guard connectionControlState.canToggle, enabled != connectionControlState.isOn else { return }
         if enabled {
             guard localReady, configurationReadable, !recoveryRequired else { return }

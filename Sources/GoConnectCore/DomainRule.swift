@@ -35,8 +35,11 @@ public enum DomainRuleError: LocalizedError {
     public var errorDescription: String? { "请输入域名、IP 或 CIDR，例如 example.com、192.168.2.10、10.211.55.0/24；不含协议和端口，不支持默认路由、回环或组播。" }
 }
 
-public struct SubscriptionSelection: Codable, Equatable, Sendable {
+public struct SubscriptionSelection: Codable, Hashable, Sendable {
     public var subscriptionID: UUID
     public var nodeName: String
-    public init(subscriptionID: UUID, nodeName: String) { self.subscriptionID = subscriptionID; self.nodeName = nodeName }
+    public init(subscriptionID: UUID, nodeName: String) {
+        self.subscriptionID = subscriptionID
+        self.nodeName = nodeName
+    }
 }

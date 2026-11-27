@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import GoConnectCore
 
 indirect enum JSONValue: Codable, Equatable, Sendable {
@@ -38,9 +39,64 @@ struct SubscriptionPayload: Codable, Sendable {
     var userInfo: String
     var unsupportedCount: Int?
 }
+
+struct CatalogRefreshSummary: Equatable, Sendable {
+    var retainedRemovedNames: [String] = []
+    var updatedNodeNames: [String] = []
+}
+
 struct Subscription: Codable, Identifiable, Sendable {
     var id = UUID()
     var payload: SubscriptionPayload
+    private(set) var retainedNodes: [SubscriptionNode]?
+
+    func node(for selection: SubscriptionSelection) -> SubscriptionNode? {
+        guard selection.subscriptionID == id else { return nil }
+        return payload.nodes.first { $0.name == selection.nodeName } ?? retainedNode(for: selection)
+    }
+
+    func retainedNode(for selection: SubscriptionSelection) -> SubscriptionNode? {
+        guard selection.subscriptionID == id,
+              !payload.nodes.contains(where: { $0.name == selection.nodeName }) else { return nil }
+        return retainedNodes?.first { $0.name == selection.nodeName }
+    }
+
+    /// Explicit refresh adopts updated parameters for surviving same-named nodes
+    /// (active sessions keep their own in-flight snapshot), while retaining
+    /// removed nodes so saved lines remain usable until the user switches.
+    mutating func replaceCatalog(with updated: SubscriptionPayload, selections: [SubscriptionSelection]) -> CatalogRefreshSummary {
+        var seen: Set<String> = []
+        var retained: [SubscriptionNode] = []
+        var summary = CatalogRefreshSummary()
+        for selection in selections where selection.subscriptionID == id {
+            guard seen.insert(selection.nodeName).inserted, let previous = node(for: selection) else { continue }
+            if let replacement = updated.nodes.first(where: { $0.name == selection.nodeName }) {
+                if previous != replacement {
+                    summary.updatedNodeNames.append(selection.nodeName)
+                }
+            } else {
+                retained.append(previous)
+                summary.retainedRemovedNames.append(selection.nodeName)
+            }
+        }
+        payload = updated
+        retainedNodes = retained.isEmpty ? nil : retained
+        return summary
+    }
+
+    /// Drops retained snapshots that are no longer referenced by any saved line
+    /// or have reappeared in the live catalog.
+    @discardableResult
+    mutating func pruneRetainedNodes(keeping selections: [SubscriptionSelection]) -> Bool {
+        guard let existing = retainedNodes, !existing.isEmpty else { return false }
+        let activeNames = Set(selections.filter { $0.subscriptionID == id }.map(\.nodeName))
+        let catalogNames = Set(payload.nodes.map(\.name))
+        let kept = existing.filter { activeNames.contains($0.name) && !catalogNames.contains($0.name) }
+        guard kept != existing else { return false }
+        retainedNodes = kept.isEmpty ? nil : kept
+        return true
+    }
+
     var quotaValues: [String: Int64] {
         var result: [String: Int64] = [:]
         for field in payload.userInfo.split(separator: ";") {
@@ -72,9 +128,17 @@ struct SubscriptionLibrary {
         return try JSONDecoder().decode([Subscription].self, from: Data(contentsOf: url))
     }
     func save(_ items: [Subscription]) throws {
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        try JSONEncoder().encode(items).write(to: url, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        let data = try JSONEncoder().encode(items)
+        let directory = url.deletingLastPathComponent()
+        let manager = FileManager.default
+        try manager.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let staging = directory.appendingPathComponent(".subscriptions-" + UUID().uuidString)
+        guard manager.createFile(atPath: staging.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        defer { try? manager.removeItem(at: staging) }
+        try data.write(to: staging)
+        guard rename(staging.path, url.path) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
     }
     static func request(runtime: URL, importing: Bool, url: String = "", fileContent: String? = nil, name: String = "") async throws -> [SubscriptionPayload] {
         try await Task.detached {

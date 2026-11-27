@@ -135,4 +135,65 @@ final class NetworkRecoveryTests: XCTestCase {
         XCTAssertTrue(store.menuBarControlPolicy.actionEnabled)
         XCTAssertTrue(store.updateSafetyState.connectionOrServiceActive)
     }
+
+    func testPathHealthPresentsDNSFailureWithoutChangingConnectionPhase() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let route = RouteClient()
+        let store = AppStore(dataDirectory: base, diagnostics: FaultDiagnostics(directory: base), refreshRuntime: false, routeClient: route)
+        store.phase = "connected"
+        let payload = #"""
+        {
+          "updatedAt":0,"vpn":0,"direct":0,"unknown":0,"vpnObserved":false,"state":"ready",
+          "pathHealth":{
+            "state":"degraded","issue":"proxy_doh","sampledAt":0,
+            "proxyHTTPS":{"result":"ok","durationMs":172},
+            "proxyDoH":{"result":"tls","durationMs":2000},
+            "directHTTPS":{"result":"ok","durationMs":48}
+          }
+        }
+        """#
+        let snapshot = try JSONDecoder().decode(RouteSnapshot.self, from: Data(payload.utf8))
+        route.onSnapshot?(snapshot)
+        XCTAssertEqual(store.connectionDisplayTitle, "代理 DNS 异常")
+        XCTAssertEqual(store.connectionControlSubtitle, "代理 HTTPS 可用，代理 DoH 连续异常。")
+        XCTAssertEqual(store.connectionControlState, .connected)
+    }
+
+    func testDirectProbeFailureDoesNotDegradeHealthyProxyConnection() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let route = RouteClient()
+        let store = AppStore(dataDirectory: base, diagnostics: FaultDiagnostics(directory: base), refreshRuntime: false, routeClient: route)
+        store.phase = "connected"
+        let payload = #"""
+        {
+          "updatedAt":0,"vpn":0,"direct":0,"unknown":0,"vpnObserved":false,"state":"ready",
+          "pathHealth":{
+            "state":"reachable","sampledAt":0,
+            "proxyHTTPS":{"result":"ok","durationMs":120},
+            "proxyDoH":{"result":"ok","durationMs":140},
+            "directHTTPS":{"result":"connect","durationMs":4000}
+          }
+        }
+        """#
+        let snapshot = try JSONDecoder().decode(RouteSnapshot.self, from: Data(payload.utf8))
+        route.onSnapshot?(snapshot)
+        XCTAssertEqual(store.connectionDisplayTitle, "已连接")
+        XCTAssertNil(store.pathHealth?.warningTitle)
+        XCTAssertNil(store.pathHealth?.statusDetail)
+        XCTAssertEqual(store.pathHealth?.diagnosticDetail, "代理通道可用；原网络 HTTPS 探测异常，直连规则可能受限。")
+    }
+
+    func testDisconnectRecordsTriggerSourceInDiagnostics() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let diagnostics = FaultDiagnostics(directory: base.appendingPathComponent("Logs"))
+        let store = AppStore(dataDirectory: base, diagnostics: diagnostics, refreshRuntime: false)
+        store.phase = "connected"
+        store.disconnect(source: .menuBar)
+        let exported = await diagnostics.export()
+        XCTAssertTrue(exported.contains("\"event\":\"connection.disconnect_requested\""))
+        XCTAssertTrue(exported.contains("\"value\":\(DisconnectTrigger.menuBar.rawValue)"))
+    }
 }

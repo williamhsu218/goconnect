@@ -31,10 +31,45 @@ public struct NetworkPathCheck: Codable, Equatable, Sendable {
 
 public struct NetworkPathHealth: Codable, Equatable, Sendable {
     public var state: String
+    public var issue: String?
     public var sampledAt: Int64
     public var proxyHTTPS: NetworkPathCheck
     public var proxyDoH: NetworkPathCheck
     public var directHTTPS: NetworkPathCheck
+
+    public var warningTitle: String? {
+        guard state == "degraded" else { return nil }
+        return switch issue {
+        case "proxy_doh": "代理 DNS 异常"
+        case "proxy_https": "代理 HTTPS 异常"
+        case "proxy_path": "代理线路异常"
+        case "network": "网络探测异常"
+        case "unstable": "网络波动"
+        default: "线路降级"
+        }
+    }
+
+    public var statusDetail: String? {
+        if state == "checking" { return "检测到网络异常，正在复测。" }
+        guard state == "degraded" else { return nil }
+        return switch issue {
+        case "proxy_doh": "代理 HTTPS 可用，代理 DoH 连续异常。"
+        case "proxy_https": "代理 DoH 可用，代理 HTTPS 连续异常。"
+        case "proxy_path": "原网络 HTTPS 可用，代理 HTTPS 和 DoH 连续异常。"
+        case "network": "代理 HTTPS 和 DoH 连续异常，原网络可用性待确认。"
+        case "unstable": "两次探测均有异常，异常路径发生了变化。"
+        default: "代理探测连续失败，可在诊断中查看各路径结果。"
+        }
+    }
+
+    /// Secondary diagnostic note shown only in DiagnosticsView; never alarms a healthy VPN tunnel.
+    public var diagnosticDetail: String? {
+        if let statusDetail { return statusDetail }
+        if state == "reachable", !["", "ok", "unavailable"].contains(directHTTPS.result) {
+            return "代理通道可用；原网络 HTTPS 探测异常，直连规则可能受限。"
+        }
+        return nil
+    }
 }
 
 public struct RouteSnapshot: Codable, Sendable {

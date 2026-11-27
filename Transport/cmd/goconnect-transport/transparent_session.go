@@ -27,7 +27,7 @@ type transparentRuntime struct {
 	now             func() time.Time
 	poll            func(*controlFiles, *http.Client, uint16) error
 	removeDirectory func(string) error
-	installDNS      func(*managedDNSPlan) (managedDNSLease, error)
+	installDNS      func(*managedDNSPlan, func() error) (managedDNSLease, error)
 	checkDNS        func(uint16) error
 	monitorHealth   func(context.Context, routeRequest, originalNetwork) <-chan pathHealth
 }
@@ -64,6 +64,11 @@ func defaultTransparentRuntime() transparentRuntime {
 var (
 	errSessionEnded           = errors.New("session lease ended")
 	errPhysicalNetworkChanged = errors.New("原网络已改变或暂不可用，旧连接已结束")
+)
+
+const (
+	dnsRepairWindow      = 5 * time.Minute
+	dnsRepairMaxInWindow = 3
 )
 
 type transparentConnection struct {
@@ -111,7 +116,21 @@ func (connection *transparentConnection) run(ctx context.Context) (result error)
 	var child *exec.Cmd
 	var done chan error
 	var dnsLease managedDNSLease
+	var dnsRestoreErr error
 	var companyGate *companyGate
+	installDNS := func(reason string) error {
+		lease, err := ops.installDNS(r.managedDNS, checkLease)
+		// Keep ownership even if publication could not be confirmed. Unwind
+		// removes the resolver and records any failure to confirm its removal.
+		dnsLease = lease
+		if err != nil {
+			return exitLog.fail(reason, err)
+		}
+		if dnsLease == nil || !dnsLease.intact() {
+			return exitLog.fail(reason, errors.New("系统未确认 DNS 接管状态"))
+		}
+		return checkLease()
+	}
 	defer exitLog.unwind(&result, func() {
 		if errors.Is(result, errSessionEnded) {
 			result = nil
@@ -126,9 +145,8 @@ func (connection *transparentConnection) run(ctx context.Context) (result error)
 			companyGate.blockLocked()
 			companyGate.mu.Unlock()
 		}
-		var dnsRestoreErr error
 		if companyGate != nil {
-			dnsRestoreErr = companyGate.releaseDNS()
+			dnsRestoreErr = errors.Join(dnsRestoreErr, companyGate.releaseDNS())
 		}
 		if dnsLease != nil {
 			dnsRestoreErr = errors.Join(dnsRestoreErr, dnsLease.close())
@@ -227,10 +245,10 @@ func (connection *transparentConnection) run(ctx context.Context) (result error)
 	lastHealth := time.Time{}
 	failures := 0
 	var uncertain healthTimeoutWindow
+	var dnsRepairTimes []time.Time
 	probeContext, stopProbes := context.WithCancel(ctx)
 	defer stopProbes()
 	var samples <-chan pathHealth
-	var health pathHealthTracker
 	for {
 		select {
 		case <-ctx.Done():
@@ -249,8 +267,12 @@ func (connection *transparentConnection) run(ctx context.Context) (result error)
 				samples = nil
 				continue
 			}
-			sample = health.observe(sample)
 			c.snapshot.PathHealth = &sample
+			stateReason := sample.Issue
+			if stateReason == "" {
+				stateReason = sample.State
+			}
+			traceDetails("path_health.state", 0, diagnosticDetails{Stage: "path_health", Reason: stateReason})
 			for _, leg := range []struct {
 				name  string
 				check pathCheck
@@ -352,9 +374,8 @@ func (connection *transparentConnection) run(ctx context.Context) (result error)
 				}
 				if r.managedDNS != nil {
 					exitLog.stage = "dns_install"
-					dnsLease, e = ops.installDNS(r.managedDNS)
-					if e != nil {
-						return exitLog.fail("dns_install_failed", e)
+					if e = installDNS("dns_install_failed"); e != nil {
+						return e
 					}
 				}
 				if companyGate != nil {
@@ -396,7 +417,6 @@ func (connection *transparentConnection) run(ctx context.Context) (result error)
 					traceDetails("transparent.health_deferred", 0, details)
 					return true
 				}
-				dnsUnavailable := (dnsLease != nil && (!dnsLease.intact() || ops.checkDNS(r.managedDNS.port) != nil)) || (companyGate != nil && !companyGate.dnsIntact())
 				var networkErr error
 				if !r.ProbeOnly {
 					exitLog.stage = "health_network"
@@ -411,7 +431,7 @@ func (connection *transparentConnection) run(ctx context.Context) (result error)
 						return errPhysicalNetworkChanged
 					}
 				}
-				if dnsUnavailable {
+				if (companyGate != nil && !companyGate.dnsIntact()) || (dnsLease != nil && ops.checkDNS(r.managedDNS.port) != nil) {
 					exitLog.stage = "health_dns"
 					return exitLog.fail("dns_unavailable", errors.New("系统 DNS 保护失效，已停止本次连接并恢复原解析"))
 				}
@@ -445,6 +465,41 @@ func (connection *transparentConnection) run(ctx context.Context) (result error)
 					}
 					exitLog.capture("route_missing", err, details)
 					return err
+				}
+				// Physical interface, outer gateway, capture routes and local DNS listener
+				// are all intact. If only the temporary SCDynamicStore lease was cleared
+				// (e.g. wake or DHCP renew), re-acquire and verify it locally up to a cap.
+				if dnsLease != nil && !dnsLease.intact() {
+					exitLog.stage = "health_dns"
+					now := ops.now()
+					kept := dnsRepairTimes[:0]
+					for _, at := range dnsRepairTimes {
+						if now.Sub(at) < dnsRepairWindow {
+							kept = append(kept, at)
+						}
+					}
+					dnsRepairTimes = kept
+					if len(dnsRepairTimes) >= dnsRepairMaxInWindow {
+						traceDetails("transparent.dns_repair_throttled", int64(len(dnsRepairTimes)), diagnosticDetails{Stage: "health_dns", Reason: "dns_repair_throttled"})
+						return exitLog.fail("dns_unavailable", errors.New("系统 DNS 保护反复失效，已停止本次连接并恢复原解析"))
+					}
+					if e := checkLease(); e != nil {
+						return e
+					}
+					closeErr := dnsLease.close()
+					dnsLease = nil
+					if closeErr != nil {
+						dnsRestoreErr = fmt.Errorf("系统未确认旧的 DNS 接管已解除: %w", closeErr)
+						return exitLog.fail("dns_restore_failed", dnsRestoreErr)
+					}
+					if e := checkLease(); e != nil {
+						return e
+					}
+					if e := installDNS("dns_unavailable"); e != nil {
+						return e
+					}
+					dnsRepairTimes = append(dnsRepairTimes, now)
+					traceDetails("transparent.dns_repaired", int64(len(dnsRepairTimes)), diagnosticDetails{Stage: "health_dns", Reason: "dns_lease_repaired"})
 				}
 				exitLog.stage = "health_core"
 				healthy, health := ops.readiness(client, port, r.Token, device)

@@ -275,6 +275,8 @@ private struct SubscriptionNodesView: View {
 
     var body: some View {
         let updated = Date(timeIntervalSince1970: Double(item.payload.updated)).formatted(date: .abbreviated, time: .shortened)
+        let selection = store.configuration.activeConnection.subscription
+        let retainedNode = selection.flatMap { item.retainedNode(for: $0) }
         VStack(alignment: .leading, spacing: 12) {
             PageHeading(title: item.payload.name, subtitle: "\(item.payload.nodes.count) 个节点 · 更新于 \(updated)")
             HStack(spacing: 10) {
@@ -304,6 +306,11 @@ private struct SubscriptionNodesView: View {
             }
             Text("经物理网卡测试 gstatic.com 的 HTTPS 响应，每次最长 8 秒。成功率统计最近 5 次有效测试。")
                 .font(.caption).foregroundStyle(.secondary)
+            if let retainedNode {
+                Label("当前线路节点「\(retainedNode.name)」已从最新订阅移除，现继续保留原配置。可在下方选择新节点切换。", systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             if store.busy && store.usesCompanyRoutes {
                 Label("公司内网已开启，请结束本次连接后再测试节点。", systemImage: "info.circle").font(.caption).foregroundStyle(.secondary)
             } else if !store.canTestNodes, let reason = testingUnavailableReason {
@@ -316,7 +323,9 @@ private struct SubscriptionNodesView: View {
             } else {
                 ScrollView {
                     LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
-                        ForEach(nodes) { node in nodeCard(node) }
+                        ForEach(nodes) { node in
+                            nodeCard(node, selected: selection == SubscriptionSelection(subscriptionID: item.id, nodeName: node.name))
+                        }
                     }
                     .padding(2)
                 }
@@ -333,8 +342,7 @@ private struct SubscriptionNodesView: View {
         }
     }
 
-    private func nodeCard(_ node: SubscriptionNode) -> some View {
-        let selected = store.configuration.activeConnection.subscription == SubscriptionSelection(subscriptionID: item.id, nodeName: node.name)
+    private func nodeCard(_ node: SubscriptionNode, selected: Bool) -> some View {
         return VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 10) {
                 NodeFlagIcon(flag: RegionFlagHelper.detectFlag(in: node.name))

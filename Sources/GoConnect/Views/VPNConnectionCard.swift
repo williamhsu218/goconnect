@@ -53,7 +53,7 @@ struct VPNConnectionCard: View {
 
     private var stateExplanation: String? {
         switch state {
-        case .connected: degraded ? store.connectionControlSubtitle : nil
+        case .connected: store.pathHealth?.statusDetail
         case .off: nil
         default: store.connectionControlSubtitle
         }
@@ -156,7 +156,7 @@ struct VPNConnectionCard: View {
 
                     if hasSession { sessionMetrics }
                     if state == .diagnostic {
-                        Button("停止诊断", systemImage: "stop.circle") { store.disconnect() }
+                        Button("停止诊断", systemImage: "stop.circle") { store.disconnect(source: .diagnosticStop) }
                             .appActionStyle()
                     }
                 }
@@ -213,7 +213,7 @@ struct VPNConnectionCard: View {
     private var powerButton: some View {
         let actionTitle = state.isOn ? "断开主线路" : "连接主线路"
         return Button {
-            store.setConnectionEnabled(!state.isOn)
+            store.setConnectionEnabled(!state.isOn, source: .mainWindow)
         } label: {
             Image(systemName: "power")
                 .font(.system(size: 25, weight: .medium))
@@ -247,6 +247,12 @@ struct VPNConnectionCard: View {
                     SavedConnectionsView(store: store)
                         .labelsHidden()
                         .controlSize(.regular)
+                }
+                if let retained = store.activeRetainedSubscriptionNode {
+                    Label("节点「\(retained.name)」已从订阅移除，正使用保留配置", systemImage: "info.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

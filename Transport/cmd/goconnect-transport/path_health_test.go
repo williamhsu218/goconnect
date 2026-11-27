@@ -28,6 +28,87 @@ func TestPathHealthDegradesOnlyAfterConsecutiveProxyFailure(t *testing.T) {
 	}
 }
 
+func TestPathHealthIssueSeparatesProbePaths(t *testing.T) {
+	for _, scenario := range []struct {
+		https, doh, direct, issue string
+	}{
+		{"ok", "ok", "unavailable", ""},
+		{"ok", "ok", "connect", ""},
+		{"ok", "dns_response", "ok", "proxy_doh"},
+		{"tls", "ok", "ok", "proxy_https"},
+		{"tls", "connect", "ok", "proxy_path"},
+		{"connect", "connect", "unavailable", "network"},
+	} {
+		sample := pathHealth{
+			ProxyHTTPS: pathCheck{Result: scenario.https}, ProxyDoH: pathCheck{Result: scenario.doh},
+			DirectHTTPS: pathCheck{Result: scenario.direct},
+		}
+		if got := pathHealthIssue(sample); got != scenario.issue {
+			t.Errorf("results %q/%q/%q: issue %q, want %q", scenario.https, scenario.doh, scenario.direct, got, scenario.issue)
+		}
+	}
+}
+
+func TestPathHealthRechecksFirstAnomalyBeforeNextRegularSample(t *testing.T) {
+	first := pathHealth{ProxyHTTPS: pathCheck{Result: "ok"}, ProxyDoH: pathCheck{Result: "tls"}, DirectHTTPS: pathCheck{Result: "ok"}}
+	for _, confirmation := range []struct {
+		title, https, doh, wantState, wantIssue string
+	}{
+		{"transient", "ok", "ok", "reachable", ""},
+		{"confirmed", "ok", "tls", "degraded", "proxy_doh"},
+		{"changed", "connect", "ok", "degraded", "unstable"},
+	} {
+		t.Run(confirmation.title, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			probes := 0
+			samples := pathHealthSamples(ctx, time.Hour, 0, time.Hour, func(context.Context) pathHealth {
+				probes++
+				if probes == 1 {
+					return first
+				}
+				next := first
+				next.ProxyHTTPS.Result = confirmation.https
+				next.ProxyDoH.Result = confirmation.doh
+				return next
+			})
+			if sample := <-samples; sample.State != "checking" || sample.Issue != "proxy_doh" {
+				t.Fatalf("first sample: %+v", sample)
+			}
+			if sample := <-samples; sample.State != confirmation.wantState || sample.Issue != confirmation.wantIssue {
+				t.Fatalf("confirmation: %+v", sample)
+			}
+			cancel()
+			if _, open := <-samples; open {
+				t.Fatal("unexpected extra confirmation probe")
+			}
+		})
+	}
+}
+
+func TestPathHealthRechecksDegradedFasterForRecovery(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	probes := 0
+	samples := pathHealthSamples(ctx, time.Hour, 0, 5*time.Millisecond, func(context.Context) pathHealth {
+		probes++
+		if probes <= 2 {
+			return pathHealth{ProxyHTTPS: pathCheck{Result: "tls"}, ProxyDoH: pathCheck{Result: "connect"}, DirectHTTPS: pathCheck{Result: "ok"}}
+		}
+		return pathHealth{ProxyHTTPS: pathCheck{Result: "ok"}, ProxyDoH: pathCheck{Result: "ok"}, DirectHTTPS: pathCheck{Result: "ok"}}
+	})
+	if sample := <-samples; sample.State != "checking" || sample.Issue != "proxy_path" {
+		t.Fatalf("first sample: %+v", sample)
+	}
+	if sample := <-samples; sample.State != "degraded" || sample.Issue != "proxy_path" {
+		t.Fatalf("degraded sample: %+v", sample)
+	}
+	if sample := <-samples; sample.State != "reachable" || sample.Issue != "" {
+		t.Fatalf("recovery sample: %+v", sample)
+	}
+	cancel()
+}
+
 func TestPathHealthActualHTTPSAndValidatedDoH(t *testing.T) {
 	for _, mode := range []string{"valid", "wrong-question", "wrong-id", "invalid-message", "redirect"} {
 		t.Run(mode, func(t *testing.T) {

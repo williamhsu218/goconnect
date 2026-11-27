@@ -73,6 +73,13 @@ struct DiagnosticsView: View {
                             statusRow("网络接管", value: store.routeSnapshot?.captureMode == "transparent-routes" ? "系统路由 → TUN" : "暂无接管数据", good: nil)
                                 .padding(.vertical, 8)
                             if let health = store.pathHealth {
+                                if let detail = health.diagnosticDetail {
+                                    Text(detail)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(.vertical, 8)
+                                }
                                 Divider()
                                 PathCheckRow(title: "代理 HTTPS", check: health.proxyHTTPS)
                                 Divider()
@@ -134,7 +141,7 @@ struct DiagnosticsView: View {
                                 store.testOnly && store.busy ? "结束测试" : "测试隧道",
                                 systemImage: store.testOnly && store.busy ? "stop.fill" : "play.fill"
                             ) {
-                                store.testOnly && store.busy ? store.disconnect() : store.connect(test: true)
+                                store.testOnly && store.busy ? store.disconnect(source: .diagnosticStop) : store.connect(test: true)
                             }
                             .appActionStyle()
                             .disabled(store.busy && !store.testOnly)

@@ -89,7 +89,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     func toggleConnection() {
         guard store.menuBarControlPolicy.actionEnabled else { return }
         if !store.connectionControlState.isOn { openMainWindow() }
-        store.setConnectionEnabled(!store.connectionControlState.isOn)
+        store.setConnectionEnabled(!store.connectionControlState.isOn, source: .menuBar)
     }
 
     func tearDown() {

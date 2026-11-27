@@ -132,7 +132,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         if !Self.isUpdateQA {
             FaultDiagnostics.shared.record(.appStopping)
-            menuBar?.tearDown(); store.nodeLatency.stop(); store.disconnect()
+            menuBar?.tearDown(); store.nodeLatency.stop(); store.disconnect(source: .appTermination)
         }
         store.trafficHistory.flush()
     }

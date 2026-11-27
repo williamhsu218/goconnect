@@ -14,7 +14,8 @@ extension AppStore {
                         hasUnmanagedApps: false)
     }
     var connectionDisplayTitle: String {
-        connectionControlState == .connected && pathHealth?.state == "degraded" ? "线路降级" : connectionControlState.title
+        let state = connectionControlState
+        return state == .connected ? pathHealth?.warningTitle ?? state.title : state.title
     }
 
     var connectionControlSubtitle: String {
@@ -28,14 +29,14 @@ extension AppStore {
         default: statusSubtitle
         }
     }
-    func setConnectionEnabled(_ enabled: Bool) {
+    func setConnectionEnabled(_ enabled: Bool, source: DisconnectTrigger = .unknown) {
         guard connectionControlState.canToggle else { return }
         if enabled {
             guard !connectionControlState.isOn else { return }
             connect()
         } else {
             guard connectionControlState.isOn else { return }
-            disconnect()
+            disconnect(source: source)
         }
     }
 }

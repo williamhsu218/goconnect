@@ -67,20 +67,17 @@ struct KeychainStore {
     text = text.replace("    var connectionControlState: VPNControlState {\n        VPNControlState(", '''    var connectionControlState: VPNControlState {
         if let raw = ProcessInfo.processInfo.environment["GOCONNECT_PREVIEW_CONTROL_STATE"], let state = VPNControlState(rawValue: raw) { return state }
         return VPNControlState(''')
-    connection_action = """    func setConnectionEnabled(_ enabled: Bool) {
-        guard connectionControlState.canToggle else { return }
-        if enabled {
-            guard !connectionControlState.isOn else { return }
-            connect()
-        } else {
-            guard connectionControlState.isOn else { return }
-            disconnect()
-        }
-    }
-"""
-    if text.count(connection_action) != 1:
+    # Keep the real declaration so new arguments do not drift from the views.
+    action = "\n    func setConnectionEnabled(_ enabled: Bool"
+    if text.count(action) != 1:
         raise RuntimeError("Cannot replace the real connection button action in the preview.")
-    control.write_text("import Foundation\n" + text.replace(connection_action, ""))
+    start = text.index(action)
+    declaration_end = text.index("\n", start + len(action))
+    if not text[start:declaration_end].endswith(") {"):
+        raise RuntimeError("Unexpected connection action declaration in the preview.")
+    body_end = text.index("\n    }\n", declaration_end)
+    control.write_text("import Foundation\n" + text[:declaration_end]
+                       + "\n        setPreviewConnectionEnabled(enabled)" + text[body_end:])
 
     # Preview uses the same CLI result view but never opens a real session proxy.
     store = app / "Stores/AppStore.swift"

@@ -107,6 +107,7 @@ extension AppStore {
             try file.save(updated)
             let wasActive = configuration.activeProfileID == id
             configuration = updated
+            pruneRetainedSubscriptionNodes(for: updated)
             if profileDraft?.id == id { closeProfileEditor() }
             if wasActive {
                 password = ""

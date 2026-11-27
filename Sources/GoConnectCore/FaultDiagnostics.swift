@@ -35,6 +35,15 @@ public enum FaultEvent: String, Sendable {
     case checking = "phase.checking", serviceMaintenance = "phase.serviceMaintenance"
 }
 
+public enum DisconnectTrigger: Int, Sendable {
+    case unknown = 0
+    case mainWindow = 1
+    case menuBar = 2
+    case diagnosticStop = 3
+    case updatePreparation = 4
+    case appTermination = 5
+}
+
 // Background-only bounded disk I/O. No strings from configuration, errors or core output.
 public final class FaultDiagnostics: @unchecked Sendable {
     public static let shared = FaultDiagnostics()

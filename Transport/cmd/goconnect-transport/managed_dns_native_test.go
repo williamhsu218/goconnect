@@ -180,11 +180,13 @@ func TestNativeManagedDNSLive(t *testing.T) {
 	if len(directResolvers) == 0 {
 		t.Fatal("baseline authoritative observation unavailable")
 	}
-	lease, err := installManagedDNS(p)
+	lease, err := installManagedDNS(p, func() error { return nil })
+	if lease != nil {
+		defer lease.close()
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lease.close()
 	for _, name := range []string{"api.anthropic.com", "api.openai.com", "generativelanguage.googleapis.com", "www.baidu.com", "www.taobao.com", "www.qq.com"} {
 		if out := lookup(name); !strings.Contains(out, "ip_address:") && !strings.Contains(out, "ipv6_address:") {
 			t.Fatalf("native lookup returned no address for %s", name)

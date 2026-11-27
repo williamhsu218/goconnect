@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/netip"
@@ -101,13 +102,27 @@ func (n *lifecycleNetwork) command(name string, args ...string) ([]byte, error) 
 	return nil, nil
 }
 
-type fixtureDNSLease struct{ installed, removed, replaced bool }
+type fixtureDNSLease struct {
+	removed, replaced bool
+	closeErr          error
+}
 
-func (l *fixtureDNSLease) intact() bool { return l.installed && !l.removed && !l.replaced }
-func (l *fixtureDNSLease) close() error { l.removed = true; return nil }
+func (l *fixtureDNSLease) intact() bool { return !l.removed && !l.replaced }
+func (l *fixtureDNSLease) close() error {
+	l.removed = true
+	return l.closeErr
+}
 
 func TestTransparentProductionLifecycleFaults(t *testing.T) {
-	for _, outcome := range []string{"disconnect", "secondary-interface-still-up", "lease-revoked", "cancel-during-route", "lease-revoked-during-route", "network-changed-before-ready", "network-changed-after-ready", "network-lost-after-ready", "network-changed-cleanup-failed", "ipv6-next-hop-changed", "capture-missing", "borrowed-direct-missing", "core-exit", "core-health-failed", "intermittent-health", "startup-timeout", "core-start-failed", "config-write-failed", "cleanup-no-effect", "cleanup-query-timeout", "directory-remove-failed", "core-stop-failed", "panic-after-ready", "dns-install-failed", "dns-owner-lost", "dns-listener-failed"} {
+	for _, outcome := range []string{
+		"disconnect", "secondary-interface-still-up", "lease-revoked", "cancel-during-route", "lease-revoked-during-route",
+		"network-changed-before-ready", "network-changed-after-ready", "network-lost-after-ready", "network-changed-cleanup-failed", "ipv6-next-hop-changed",
+		"capture-missing", "borrowed-direct-missing", "core-exit", "core-health-failed", "intermittent-health", "startup-timeout",
+		"core-start-failed", "config-write-failed", "cleanup-no-effect", "cleanup-query-timeout", "directory-remove-failed", "core-stop-failed", "panic-after-ready",
+		"dns-install-failed", "dns-owner-lost", "dns-owner-repaired", "dns-repair-throttled", "dns-listener-failed",
+		"dns-repair-close-timeout", "dns-repair-install-unconfirmed",
+		"dns-repair-revoked-during-check", "dns-repair-revoked-before-install", "dns-repair-revoked-during-install",
+	} {
 		t.Run(outcome, func(t *testing.T) {
 			controlDir := controlFixture(t)
 			control, err := openControl(filepath.Join(controlDir, "session.json"))
@@ -120,7 +135,13 @@ func TestTransparentProductionLifecycleFaults(t *testing.T) {
 			control.request.AppPaths = nil
 			control.request.Gateway = "2001:db8::20"
 			control.request.managedDNS = &managedDNSPlan{port: 15353, resolvers: []nativeResolver{{servers: []netip.Addr{netip.MustParseAddr("192.168.1.1")}, port: 53}}}
-			dnsLease := &fixtureDNSLease{}
+			var dnsLease *fixtureDNSLease
+			dnsInstalls := 0
+			revokeLease := func() {
+				if err := os.Remove(filepath.Join(controlDir, "lease")); err != nil {
+					t.Fatal(err)
+				}
+			}
 			state := transparentState{Device: "utun100", State: "starting"}
 			dir := recoveryFixture(t, state)
 			path := filepath.Join(dir, "state.json")
@@ -153,16 +174,43 @@ func TestTransparentProductionLifecycleFaults(t *testing.T) {
 			ops := defaultTransparentRuntime()
 			ops.command = network.command
 			ops.monitorHealth = nil // The fixture never contacts public probe endpoints.
-			ops.installDNS = func(*managedDNSPlan) (managedDNSLease, error) {
+			ops.installDNS = func(_ *managedDNSPlan, checkSession func() error) (managedDNSLease, error) {
+				if dnsInstalls == 1 && outcome == "dns-repair-revoked-before-install" {
+					revokeLease()
+				}
+				if err := checkSession(); err != nil {
+					return nil, err
+				}
+				dnsInstalls++
 				if outcome == "dns-install-failed" {
 					return nil, syscall.EIO
 				}
-				dnsLease.installed = true
+				if dnsLease != nil && !dnsLease.removed {
+					t.Fatal("replaced DNS without closing the previous lease")
+				}
+				dnsLease = &fixtureDNSLease{}
+				if outcome == "dns-repair-close-timeout" {
+					dnsLease.closeErr = syscall.ETIMEDOUT
+				}
+				if dnsInstalls > 1 {
+					switch outcome {
+					case "dns-owner-lost":
+						dnsLease.replaced = true
+					case "dns-repair-install-unconfirmed":
+						dnsLease.closeErr = syscall.ETIMEDOUT
+						return dnsLease, syscall.EIO
+					case "dns-repair-revoked-during-install":
+						revokeLease()
+					}
+				}
 				return dnsLease, nil
 			}
 			ops.checkDNS = func(uint16) error {
 				if outcome == "dns-listener-failed" {
 					return syscall.ECONNREFUSED
+				}
+				if outcome == "dns-repair-revoked-during-check" && dnsLease.replaced {
+					revokeLease()
 				}
 				return nil
 			}
@@ -204,7 +252,7 @@ func TestTransparentProductionLifecycleFaults(t *testing.T) {
 				return core, core.Start()
 			}
 			ops.stopCore = func(cmd *exec.Cmd, done <-chan error) error {
-				if dnsLease.installed && !dnsLease.removed {
+				if dnsLease != nil && !dnsLease.removed {
 					t.Error("core stopped before removing system DNS")
 				}
 				coreDone = done
@@ -235,6 +283,12 @@ func TestTransparentProductionLifecycleFaults(t *testing.T) {
 					if outcome == "secondary-interface-still-up" {
 						cancel()
 					}
+					if outcome == "dns-owner-repaired" && dnsInstalls >= 2 {
+						cancel()
+					}
+					if outcome == "dns-repair-throttled" {
+						dnsLease.replaced = true
+					}
 					return nil
 				}
 				switch outcome {
@@ -256,7 +310,8 @@ func TestTransparentProductionLifecycleFaults(t *testing.T) {
 					core.Process.Kill()
 				case "panic-after-ready":
 					panic("SECRET_PANIC")
-				case "dns-owner-lost":
+				case "dns-owner-lost", "dns-owner-repaired", "dns-repair-throttled", "dns-repair-close-timeout", "dns-repair-install-unconfirmed",
+					"dns-repair-revoked-during-check", "dns-repair-revoked-before-install", "dns-repair-revoked-during-install":
 					dnsLease.replaced = true
 				}
 				return nil
@@ -278,7 +333,8 @@ func TestTransparentProductionLifecycleFaults(t *testing.T) {
 			first, final := records[0].Details, records[len(records)-1].Details
 			want := "context_canceled"
 			switch outcome {
-			case "lease-revoked", "lease-revoked-during-route":
+			case "lease-revoked", "lease-revoked-during-route",
+				"dns-repair-revoked-during-check", "dns-repair-revoked-before-install", "dns-repair-revoked-during-install":
 				want = "lease_missing"
 			case "network-changed-before-ready", "network-changed-after-ready", "network-changed-cleanup-failed":
 				want = "network_changed"
@@ -300,13 +356,38 @@ func TestTransparentProductionLifecycleFaults(t *testing.T) {
 				want = "panic"
 			case "dns-install-failed":
 				want = "dns_install_failed"
-			case "dns-owner-lost", "dns-listener-failed":
+			case "dns-owner-lost", "dns-repair-throttled", "dns-listener-failed", "dns-repair-install-unconfirmed":
 				want = "dns_unavailable"
+			case "dns-repair-close-timeout":
+				want = "dns_restore_failed"
+			}
+			var wantDNSInstalls int
+			switch outcome {
+			case "dns-owner-repaired", "dns-owner-lost", "dns-repair-install-unconfirmed", "dns-repair-revoked-during-install":
+				wantDNSInstalls = 2
+			case "dns-repair-throttled":
+				wantDNSInstalls = 1 + dnsRepairMaxInWindow
+			case "dns-listener-failed", "dns-repair-close-timeout", "dns-repair-revoked-during-check", "dns-repair-revoked-before-install":
+				wantDNSInstalls = 1
+			}
+			if wantDNSInstalls > 0 && dnsInstalls != wantDNSInstalls {
+				t.Fatalf("got %d DNS installs, want %d", dnsInstalls, wantDNSInstalls)
+			}
+			if dnsLease != nil && !dnsLease.removed {
+				t.Fatal("unwinding did not close the DNS lease")
+			}
+			if strings.HasPrefix(outcome, "dns-repair-revoked-") && (polls != 1 || result != nil) {
+				t.Fatalf("revocation did not cleanly stop further polling: polls=%d, result=%v", polls, result)
 			}
 			if first.Reason != want || final.Reason != want {
 				t.Fatalf("wrong first/final cause: %+v %+v, %v", first, final, result)
 			}
-			retained := outcome == "network-changed-cleanup-failed" || outcome == "cleanup-no-effect" || outcome == "cleanup-query-timeout" || outcome == "directory-remove-failed" || outcome == "core-stop-failed"
+			dnsCleanupFailed := outcome == "dns-repair-close-timeout" || outcome == "dns-repair-install-unconfirmed"
+			if dnsCleanupFailed && (!errors.Is(result, syscall.ETIMEDOUT) || final.CleanupFailures != 1 ||
+				len(final.Cleanup) != 1 || final.Cleanup[0].Reason != "dns_restore_failed") {
+				t.Fatalf("DNS cleanup failure was lost: %+v, %v", final, result)
+			}
+			retained := dnsCleanupFailed || outcome == "network-changed-cleanup-failed" || outcome == "cleanup-no-effect" || outcome == "cleanup-query-timeout" || outcome == "directory-remove-failed" || outcome == "core-stop-failed"
 			_, statErr := os.Stat(dir)
 			if retained == os.IsNotExist(statErr) {
 				t.Fatal("wrong journal retention", outcome, statErr)

@@ -103,6 +103,7 @@ if [[ "$VERIFY" == 1 ]]; then
   python3 script/test_app_child_core_scope.py
   python3 script/test_build_mihomo.py
   python3 script/test_prepare_release_sources.py
+  python3 script/test_preview_ui.py
   swift test "${SWIFT_TEST_ARGS[@]}"
   (cd Transport && go test -race -timeout 60s ./...)
 fi
