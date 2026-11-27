@@ -870,3 +870,195 @@
  			continue
  		}
  		return proxies["DIRECT"], nil, nil
+--- a/adapter/outbound/vless.go
++++ b/adapter/outbound/vless.go
+@@ -14,6 +14,7 @@
+ 	N "github.com/metacubex/mihomo/common/net"
+ 	"github.com/metacubex/mihomo/common/utils"
+ 	"github.com/metacubex/mihomo/component/ca"
++	"github.com/metacubex/mihomo/component/dialer"
+ 	"github.com/metacubex/mihomo/component/ech"
+ 	tlsC "github.com/metacubex/mihomo/component/tls"
+ 	C "github.com/metacubex/mihomo/constant"
+@@ -75,6 +76,7 @@
+ 	RestlsOpts        RestlsOptions     `proxy:"restls-opts,omitempty"`
+ 	JLSOpts           JLSOptions        `proxy:"jls-opts,omitempty"`
+ 	RealityOpts       RealityOptions    `proxy:"reality-opts,omitempty"`
++	TCPReceiveBuffer  int               `proxy:"tcp-receive-buffer,omitempty"`
+ 	HTTPOpts          HTTPOptions       `proxy:"http-opts,omitempty"`
+ 	HTTP2Opts         HTTP2Options      `proxy:"h2-opts,omitempty"`
+ 	GrpcOpts          GrpcOptions       `proxy:"grpc-opts,omitempty"`
+@@ -506,7 +508,21 @@
+ 		client: client,
+ 		option: &option,
+ 	}
+-	v.dialer = option.NewDialer(v.DialOptions())
++	dialOptions := v.DialOptions()
++	if option.TCPReceiveBuffer != 0 {
++		if !option.TLS || option.RealityOpts.PublicKey == "" || (option.Network != "" && option.Network != "tcp") {
++			return nil, errors.New("tcp-receive-buffer requires VLESS TCP with REALITY")
++		}
++		if option.DialerProxy != "" || option.DialerForAPI != nil {
++			return nil, errors.New("tcp-receive-buffer requires a direct system dialer")
++		}
++		receiveBuffer, err := dialer.WithTCPReceiveBuffer(option.TCPReceiveBuffer)
++		if err != nil {
++			return nil, err
++		}
++		dialOptions = append(dialOptions, receiveBuffer)
++	}
++	v.dialer = option.NewDialer(dialOptions)
+ 
+ 	v.encryption, err = encryption.NewClient(option.Encryption)
+ 	if err != nil {
+--- /dev/null
++++ b/component/dialer/tcp_receive_buffer_darwin.go
+@@ -0,0 +1,47 @@
++package dialer
++
++import (
++	"context"
++	"fmt"
++	"net"
++	"syscall"
++
++	"golang.org/x/sys/unix"
++)
++
++// WithTCPReceiveBuffer sets and checks SO_RCVBUF before the socket connects.
++func WithTCPReceiveBuffer(size int) (Option, error) {
++	const maximum = 8 << 20
++	if size < 1 || size > maximum {
++		return nil, fmt.Errorf("tcp-receive-buffer must be between 1 and %d bytes", maximum)
++	}
++
++	d := &net.Dialer{}
++	addControlToDialer(d, func(_ context.Context, network, _ string, conn syscall.RawConn) error {
++		switch network {
++		case "tcp", "tcp4", "tcp6":
++		default:
++			return nil
++		}
++
++		var bufferErr error
++		if err := conn.Control(func(fd uintptr) {
++			if err := unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_RCVBUF, size); err != nil {
++				bufferErr = fmt.Errorf("set tcp-receive-buffer to %d bytes: %w", size, err)
++				return
++			}
++			actual, err := unix.GetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_RCVBUF)
++			if err != nil {
++				bufferErr = fmt.Errorf("read back tcp-receive-buffer: %w", err)
++				return
++			}
++			if actual != size {
++				bufferErr = fmt.Errorf("tcp-receive-buffer requested %d bytes, got %d bytes", size, actual)
++			}
++		}); err != nil {
++			return fmt.Errorf("access socket for tcp-receive-buffer: %w", err)
++		}
++		return bufferErr
++	})
++	return WithNetDialer(d), nil
++}
+--- /dev/null
++++ b/component/dialer/tcp_receive_buffer_other.go
+@@ -0,0 +1,9 @@
++//go:build !darwin
++
++package dialer
++
++import "errors"
++
++func WithTCPReceiveBuffer(int) (Option, error) {
++	return nil, errors.New("tcp-receive-buffer requires a Darwin TCP socket")
++}
+--- /dev/null
++++ b/component/dialer/tcp_receive_buffer_darwin_test.go
+@@ -0,0 +1,86 @@
++package dialer
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"io"
++	"net"
++	"syscall"
++	"testing"
++	"time"
++
++	"golang.org/x/sys/unix"
++)
++
++func TestGoConnectTCPReceiveBufferBeforeConnect(t *testing.T) {
++	const size = 1 << 20
++
++	for _, mode := range []struct {
++		name     string
++		fastOpen bool
++	}{
++		{name: "TCP"},
++		{name: "FastOpen", fastOpen: true},
++	} {
++		t.Run(mode.name, func(t *testing.T) {
++			listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
++			if err != nil {
++				t.Fatal(err)
++			}
++			defer listener.Close()
++			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
++			defer cancel()
++			deadline, _ := ctx.Deadline()
++			if err := listener.SetDeadline(deadline); err != nil {
++				t.Fatal(err)
++			}
++
++			buffer, err := WithTCPReceiveBuffer(size)
++			if err != nil {
++				t.Fatal(err)
++			}
++			d := applyOptions(buffer).netDialer.(*net.Dialer)
++			verified := false
++			addControlToDialer(d, func(_ context.Context, _, _ string, conn syscall.RawConn) error {
++				var checkErr error
++				if err := conn.Control(func(fd uintptr) {
++					actual, err := unix.GetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_RCVBUF)
++					if err != nil || actual != size {
++						checkErr = fmt.Errorf("receive buffer before connect = %d, error = %v", actual, err)
++						return
++					}
++					if _, err := unix.Getpeername(int(fd)); !errors.Is(err, unix.ENOTCONN) {
++						checkErr = fmt.Errorf("expected an unconnected socket, getpeername returned %v", err)
++						return
++					}
++					verified = true
++				}); err != nil {
++					return err
++				}
++				return checkErr
++			})
++
++			client, err := NewDialer(buffer, WithTFO(mode.fastOpen)).DialContext(ctx, "tcp4", listener.Addr().String())
++			if err != nil {
++				t.Fatal(err)
++			}
++			defer client.Close()
++			if _, err := client.Write([]byte{1}); err != nil {
++				t.Fatal(err)
++			}
++			server, err := listener.AcceptTCP()
++			if err != nil {
++				t.Fatal(err)
++			}
++			defer server.Close()
++			if err := server.SetReadDeadline(deadline); err != nil {
++				t.Fatal(err)
++			}
++			var received [1]byte
++			if _, err := io.ReadFull(server, received[:]); err != nil || received[0] != 1 || !verified {
++				t.Fatalf("loopback transfer did not verify pre-connect receive buffer: %v, got %d, verified %v", err, received[0], verified)
++			}
++		})
++	}
++}

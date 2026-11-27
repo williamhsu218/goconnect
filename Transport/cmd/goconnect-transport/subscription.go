@@ -101,6 +101,15 @@ func parseSubscription(data []byte) ([]subscriptionNode, error) {
 				continue
 			}
 			safe["reality-opts"] = opts
+			if value, present := raw["tcp-receive-buffer"]; present && kind == "vless" && raw["network"] != "grpc" {
+				buffer, ok := subscriptionTCPReceiveBuffer(value)
+				if !ok {
+					continue
+				}
+				if buffer != 0 {
+					safe["tcp-receive-buffer"] = buffer
+				}
+			}
 			if value, present := raw["encryption"]; kind == "vless" && present {
 				encryption, ok := value.(string)
 				if !ok {
@@ -136,6 +145,20 @@ func parseSubscription(data []byte) ([]subscriptionNode, error) {
 		return nil, errNoSupportedNodes
 	}
 	return nodes, nil
+}
+
+func subscriptionTCPReceiveBuffer(value any) (int, bool) {
+	const maximum = 8 << 20
+	switch size := value.(type) {
+	case int:
+		return size, size >= 0 && size <= maximum
+	case float64:
+		// Saved JSON nodes are revalidated through YAML before a session starts.
+		if size >= 0 && size <= maximum && float64(int(size)) == size {
+			return int(size), true
+		}
+	}
+	return 0, false
 }
 
 // Decode identifiers from their YAML spelling so a numeric short ID keeps its leading zeros.

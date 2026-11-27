@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestSubscriptionReducesUntrustedConfig(t *testing.T) {
@@ -69,6 +71,63 @@ proxies:
 	}
 	if nodes[0].Proxy["encryption"] != encryption {
 		t.Error("VLESS encryption lost")
+	}
+}
+
+func TestSubscriptionVlessTCPReceiveBuffer(t *testing.T) {
+	const setting = "tcp-receive-buffer"
+	const node = "name: Test, type: vless, server: 192.0.2.1, port: 443, tls: true, reality-opts: {public-key: " + fixtureRealityPublicKey + "}"
+	for _, tc := range []struct {
+		options string
+		want    int
+		skip    bool
+	}{
+		{options: "", want: 0},
+		{options: ", tcp-receive-buffer: 0", want: 0},
+		{options: ", network: tcp, tcp-receive-buffer: 8388608", want: 8388608},
+		{options: ", network: grpc, tcp-receive-buffer: 8388608", want: 0},
+		{options: ", tcp-receive-buffer: 8388609", skip: true},
+		{options: ", tcp-receive-buffer: -1", skip: true},
+		{options: ", tcp-receive-buffer: 1.5", skip: true},
+		{options: ", tcp-receive-buffer: '8388608'", skip: true},
+	} {
+		t.Run(tc.options, func(t *testing.T) {
+			nodes, err := parseSubscription([]byte("proxies: [{" + node + tc.options + "}]"))
+			if tc.skip {
+				if !errors.Is(err, errNoSupportedNodes) {
+					t.Fatalf("accepted invalid receive buffer: %v", err)
+				}
+				return
+			}
+			if err != nil || len(nodes) != 1 {
+				t.Fatalf("failed to import node: %v", err)
+			}
+			if tc.want == 0 {
+				if _, present := nodes[0].Proxy[setting]; present {
+					t.Error("unexpected receive buffer override")
+				}
+				return
+			}
+			if nodes[0].Proxy[setting] != tc.want {
+				t.Fatal("receive buffer not retained at import")
+			}
+			encoded, err := json.Marshal(nodes[0].Proxy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var saved map[string]any
+			if err := json.Unmarshal(encoded, &saved); err != nil {
+				t.Fatal(err)
+			}
+			data, err := yaml.Marshal(map[string]any{"proxies": []map[string]any{saved}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			nodes, err = parseSubscription(data)
+			if err != nil || len(nodes) != 1 || nodes[0].Proxy[setting] != tc.want {
+				t.Fatalf("receive buffer not retained from saved node: %v", err)
+			}
+		})
 	}
 }
 

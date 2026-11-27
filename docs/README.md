@@ -1,5 +1,6 @@
 # 技术记录索引
 
+- [2.2.3 VLESS TCP + REALITY 接收缓冲配置](RELEASE_2.2.3.md)
 - [2.2.2 签名、隔离更新与公开回验](PUBLISH_2.2.2_2026-11-27.md)
 
 - [2.2.2 VLESS + REALITY 订阅导入与兼容性](RELEASE_2.2.2.md)

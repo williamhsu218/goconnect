@@ -53,8 +53,9 @@ def main():
     source = work / ("mihomo-" + lock["version"])
     subprocess.run(["/usr/bin/patch", "-s", "-N", "-p1", "-i", str(patch)], cwd=source, env=env, check=True)
     subprocess.run(["go", "mod", "verify"], cwd=source, env=env, check=True)
-    # These tests verify resolver selection and refusal of implicit OS fallback.
-    subprocess.run(["go", "test", "-tags", "with_gvisor", "./tunnel", "./component/process", "./rules/common", "./rules", "-run", "^TestGoConnect", "-count=1"],
+    # Verify resolver selection, OS fallback behavior and per-socket TCP configuration.
+    subprocess.run(["go", "test", "-tags", "with_gvisor", "./tunnel", "./component/process",
+                    "./component/dialer", "./rules/common", "./rules", "-run", "^TestGoConnect", "-count=1"],
                    cwd=source, env=env, check=True)
     output.parent.mkdir(parents=True, exist_ok=True)
     flags = "-s -w -X github.com/metacubex/mihomo/constant.Version=" + lock["buildVersion"]

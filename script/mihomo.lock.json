@@ -4,7 +4,7 @@
   "url": "https://codeload.github.com/MetaCubeX/mihomo/tar.gz/refs/tags/v1.19.34",
   "sha256": "e3284a44f1052f1c454c90d418faa244516c2470bf232b455ea18fc4f5fa6028",
   "patch": "patches/mihomo-1.19.34-goconnect.patch",
-  "patchSHA256": "df40af021f4d2e65f52ac0dd06257463f4f5fb552ea5d588d376f4a3ea437506",
+  "patchSHA256": "4e9a8bfeb4db899de81ed434bf8662b943a413eec643678a8708f7cf73cd9f9a",
   "tags": [
     "with_gvisor"
   ]
