@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/williamhsu218/goconnect/v2.2.1/Packaging/GoConnect.png" alt="GoConnect Logo" width="96" height="96" />
+  <img src="https://raw.githubusercontent.com/williamhsu218/goconnect/v2.2.2/Packaging/GoConnect.png" alt="GoConnect Logo" width="96" height="96" />
 </p>
 
 <h1 align="center">GoConnect</h1>
 
 <p align="center">
   面向 Apple Silicon Mac 的原生网络代理与 AnyConnect 客户端<br />
-  <strong>当前版本 v2.2.1（Build 86）</strong>
+  <strong>当前版本 v2.2.2（Build 87）</strong>
 </p>
 
 ---
@@ -15,7 +15,7 @@
 
 GoConnect 是一款使用原生 SwiftUI 构建的 macOS 网络连接与分流工具，当前发布包面向 Apple Silicon Mac，要求 macOS 26.0 及以上。
 
-应用支持接入用户自备的 AnyConnect VPN 服务凭据，或 Clash YAML 格式的 HTTPS 订阅（Hysteria 2 订阅已完成真机实测）。**GoConnect 不提供 VPN 服务、节点、账号或订阅**，需要使用你自己的服务。
+应用支持接入用户自备的 AnyConnect VPN 服务凭据，或 Clash YAML 格式的 HTTPS 订阅，也可导入本地 Clash YAML 文件。支持 VLESS + REALITY 的 TCP（含 Vision）和 gRPC 线路。**GoConnect 不提供 VPN 服务、节点、账号或订阅**，需要使用你自己的服务。
 
 ## 核心特性
 
@@ -46,7 +46,7 @@ GoConnect 是一款使用原生 SwiftUI 构建的 macOS 网络连接与分流工
 
 ### 获取应用
 
-- **最新发布包**：[GoConnect-2.2.1-macos-arm64.zip](https://github.com/williamhsu218/goconnect/releases/download/v2.2.1/GoConnect-2.2.1-macos-arm64.zip)
+- **最新发布包**：[GoConnect-2.2.2-macos-arm64.zip](https://github.com/williamhsu218/goconnect/releases/download/v2.2.2/GoConnect-2.2.2-macos-arm64.zip)
 - **完整发布页**：[GitHub Releases / Latest](https://github.com/williamhsu218/goconnect/releases/latest)
 
 ### 首次安装与权限
@@ -95,9 +95,9 @@ GoConnect 是一款使用原生 SwiftUI 构建的 macOS 网络连接与分流工
 
 ## 源码构建与许可协议
 
-- **源码构建**。检出正式版 tag，按构建说明操作。普通源码构建默认采用 ad-hoc 签名，应用内更新禁用。 [v2.2.1 源码](https://github.com/williamhsu218/goconnect/tree/v2.2.1) · [构建说明](docs/BUILD.md)
+- **源码构建**。检出正式版 tag，按构建说明操作。普通源码构建默认采用 ad-hoc 签名，应用内更新禁用。 [v2.2.2 源码](https://github.com/williamhsu218/goconnect/tree/v2.2.2) · [构建说明](docs/BUILD.md)
 - **版本与发布规范**：版本更新机制详见 [docs/UPDATES.md](docs/UPDATES.md)，发布规范详见 [docs/RELEASING.md](docs/RELEASING.md)。
-- **第三方许可**。OpenConnect、Mihomo 与 Sparkle 等组件分别适用各自许可。GoConnect 自有代码尚未指定独立开源许可证。 [THIRD_PARTY.md](https://github.com/williamhsu218/goconnect/blob/v2.2.1/THIRD_PARTY.md)
+- **第三方许可**。OpenConnect、Mihomo 与 Sparkle 等组件分别适用各自许可。GoConnect 自有代码尚未指定独立开源许可证。 [THIRD_PARTY.md](https://github.com/williamhsu218/goconnect/blob/v2.2.2/THIRD_PARTY.md)
 
 ## 问题与反馈
 
