@@ -6,16 +6,16 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/williamhsu218/goconnect/releases</link>
     <description>GoConnect signed updates</description>
     <item>
-      <title>GoConnect 2.2.0</title>
-      <pubDate>Tue, 24 Nov 2026 23:30:07 +0000</pubDate>
-      <sparkle:version>85</sparkle:version>
-      <sparkle:shortVersionString>2.2.0</sparkle:shortVersionString>
+      <title>GoConnect 2.2.1</title>
+      <pubDate>Fri, 27 Nov 2026 03:48:37 +0000</pubDate>
+      <sparkle:version>86</sparkle:version>
+      <sparkle:shortVersionString>2.2.1</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
-      <description>节点经物理网卡独立测速，诊断可查看逐目标耗时和 CLI 服务响应。内置 Mihomo 升级至 v1.19.34。请先保存线路草稿，确认安装时应用将正常断开并重启。</description>
-      <enclosure url="https://github.com/williamhsu218/goconnect/releases/download/v2.2.0/GoConnect-2.2.0-macos-arm64.zip" length="36457035" type="application/octet-stream" sparkle:edSignature="H8nY6aWVvisNcb+ERyKzpbOgUi8P5sd7NSLzis8cvU6Q0AcbiBbZi43Z0xxsnAAW5MW+Kk+5JuaIFZqiNwySBw=="></enclosure>
+      <description>改进线路探测复测、订阅快照与系统 DNS 恢复。可保持 VPN 下载，确认安装重启后才断开。请先保存线路草稿。</description>
+      <enclosure url="https://github.com/williamhsu218/goconnect/releases/download/v2.2.1/GoConnect-2.2.1-macos-arm64.zip" length="36477888" type="application/octet-stream" sparkle:edSignature="xZPQ/ygysNph1yUCDI/NiXtGnFXWgZQXYSLKLtWnFsCwBrkS9HOPghNIikFoIg9wvnwHsyunsUcEYp4otoIeAQ=="></enclosure>
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: ojvL9ARdJrAkcNlJvf10pKBmdv9rIfrq6KwWelgYNW2kHG4kHwPxSpG8j5vb6RQXHfueyrd6ThrqXvKna6IgAQ==
-length: 1404
+edSignature: V5Or26aIQm7GdgtPPFHfjDGlkcwdItrdCfNG7iXw5C6oACR40VYv9+ZTDtwydXi4TCYoZq5hVhsH1SwWj/W8Bw==
+length: 1350
 -->
