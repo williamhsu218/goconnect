@@ -6,16 +6,16 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/williamhsu218/goconnect/releases</link>
     <description>GoConnect signed updates</description>
     <item>
-      <title>GoConnect 2.2.1</title>
-      <pubDate>Fri, 27 Nov 2026 03:48:37 +0000</pubDate>
-      <sparkle:version>86</sparkle:version>
-      <sparkle:shortVersionString>2.2.1</sparkle:shortVersionString>
+      <title>GoConnect 2.2.2</title>
+      <pubDate>Fri, 27 Nov 2026 15:46:01 +0000</pubDate>
+      <sparkle:version>87</sparkle:version>
+      <sparkle:shortVersionString>2.2.2</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
-      <description>改进线路探测复测、订阅快照与系统 DNS 恢复。可保持 VPN 下载，确认安装重启后才断开。请先保存线路草稿。</description>
-      <enclosure url="https://github.com/williamhsu218/goconnect/releases/download/v2.2.1/GoConnect-2.2.1-macos-arm64.zip" length="36477888" type="application/octet-stream" sparkle:edSignature="xZPQ/ygysNph1yUCDI/NiXtGnFXWgZQXYSLKLtWnFsCwBrkS9HOPghNIikFoIg9wvnwHsyunsUcEYp4otoIeAQ=="></enclosure>
+      <description>支持从 Clash YAML 导入 VLESS + REALITY 的 TCP（含 Vision）和 gRPC 线路。旧版跳过的节点可通过刷新订阅或重新导入文件恢复。可保持 VPN 下载，保存草稿后再确认安装重启。</description>
+      <enclosure url="https://github.com/williamhsu218/goconnect/releases/download/v2.2.2/GoConnect-2.2.2-macos-arm64.zip" length="36482660" type="application/octet-stream" sparkle:edSignature="wpZksAP4Hll3ajkbSi5HDYcMVp+Ma1aIymNmxVfTJCOpzdGQI3np9akyIYezAEWC+CdqRhilkXj8puDqpsBtCg=="></enclosure>
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: V5Or26aIQm7GdgtPPFHfjDGlkcwdItrdCfNG7iXw5C6oACR40VYv9+ZTDtwydXi4TCYoZq5hVhsH1SwWj/W8Bw==
-length: 1350
+edSignature: N/7baodN/0U1Fwz1oPlN0CrrSA+DxA94yfjpQAn/N7sQriZwleOy5lav5mWvgB9amPhKUPupIBPKyuI7sQTgDw==
+length: 1424
 -->
