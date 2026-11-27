@@ -3,6 +3,8 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -43,19 +45,25 @@ type subscriptionOperation struct {
 
 const subscriptionLimit = 8 << 20
 
+var errNoSupportedNodes = errors.New("no supported nodes")
+
 func parseSubscription(data []byte) ([]subscriptionNode, error) {
 	if len(data) > subscriptionLimit {
 		return nil, errors.New("subscription too large")
 	}
 	var doc struct {
-		Proxies []map[string]any `yaml:"proxies"`
+		Proxies []struct {
+			Fields  map[string]any `yaml:",inline"`
+			Reality yaml.Node      `yaml:"reality-opts"`
+		} `yaml:"proxies"`
 	}
 	if yaml.Unmarshal(data, &doc) != nil || len(doc.Proxies) == 0 || len(doc.Proxies) > 5000 {
 		return nil, errors.New("invalid Clash subscription")
 	}
 	nodes := []subscriptionNode{}
 	names := map[string]bool{}
-	for _, raw := range doc.Proxies {
+	for _, entry := range doc.Proxies {
+		raw := entry.Fields
 		name, _ := raw["name"].(string)
 		kind, _ := raw["type"].(string)
 		if name == "" || names[name] {
@@ -68,9 +76,6 @@ func parseSubscription(data []byte) ([]subscriptionNode, error) {
 		if plugin, ok := raw["plugin"].(string); ok && plugin != "" {
 			continue
 		}
-		if _, ok := raw["reality-opts"]; ok {
-			continue
-		}
 		if network, ok := raw["network"].(string); ok && network != "" && network != "tcp" && network != "ws" && network != "grpc" {
 			continue
 		}
@@ -78,6 +83,30 @@ func parseSubscription(data []byte) ([]subscriptionNode, error) {
 		for _, key := range strings.Fields("name type server port username password uuid alterId cipher network udp tls servername sni skip-cert-verify client-fingerprint fingerprint alpn up down obfs obfs-password flow packet-encoding") {
 			if v, ok := raw[key]; ok {
 				safe[key] = v
+			}
+		}
+		if !entry.Reality.IsZero() {
+			if kind != "vless" && kind != "trojan" {
+				continue
+			}
+			// The bundled core wires REALITY into TCP and gRPC, and VLESS opts into TLS explicitly.
+			if network, present := raw["network"]; present && network != "" && network != "tcp" && network != "grpc" {
+				continue
+			}
+			if kind == "vless" && raw["tls"] != true {
+				continue
+			}
+			opts, ok := subscriptionRealityOptions(&entry.Reality)
+			if !ok {
+				continue
+			}
+			safe["reality-opts"] = opts
+			if value, present := raw["encryption"]; kind == "vless" && present {
+				encryption, ok := value.(string)
+				if !ok {
+					continue
+				}
+				safe["encryption"] = encryption
 			}
 		}
 		if ws, ok := raw["ws-opts"].(map[string]any); ok {
@@ -104,10 +133,41 @@ func parseSubscription(data []byte) ([]subscriptionNode, error) {
 		nodes = append(nodes, subscriptionNode{name, kind, safe})
 	}
 	if len(nodes) == 0 {
-		return nil, errors.New("no supported nodes")
+		return nil, errNoSupportedNodes
 	}
 	return nodes, nil
 }
+
+// Decode identifiers from their YAML spelling so a numeric short ID keeps its leading zeros.
+func subscriptionRealityOptions(node *yaml.Node) (map[string]any, bool) {
+	var opts struct {
+		PublicKey             string  `yaml:"public-key"`
+		ShortID               *string `yaml:"short-id"`
+		SupportX25519MLKEM768 *bool   `yaml:"support-x25519mlkem768"`
+	}
+	if err := node.Decode(&opts); err != nil || len(opts.PublicKey) != base64.RawURLEncoding.EncodedLen(32) {
+		return nil, false
+	}
+	if key, err := base64.RawURLEncoding.DecodeString(opts.PublicKey); err != nil || len(key) != 32 {
+		return nil, false
+	}
+	safe := map[string]any{"public-key": opts.PublicKey}
+	if opts.ShortID != nil {
+		id := *opts.ShortID
+		if len(id) > 16 {
+			return nil, false
+		}
+		if _, err := hex.DecodeString(id); err != nil {
+			return nil, false
+		}
+		safe["short-id"] = id
+	}
+	if opts.SupportX25519MLKEM768 != nil {
+		safe["support-x25519mlkem768"] = *opts.SupportX25519MLKEM768
+	}
+	return safe, true
+}
+
 func subscriptionUnsupported(data []byte, nodes []subscriptionNode) int {
 	var doc struct {
 		Proxies []map[string]any `yaml:"proxies"`

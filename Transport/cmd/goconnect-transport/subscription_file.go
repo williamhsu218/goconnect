@@ -31,7 +31,11 @@ func subscriptionFileCommand(ctx context.Context) error {
 func localSubscriptionPayload(ctx context.Context, content, name string) (subscriptionData, error) {
 	nodes, err := parseSubscription([]byte(content))
 	if err != nil {
-		fail("需要包含 proxies 的 Clash YAML 文件。")
+		if errors.Is(err, errNoSupportedNodes) {
+			fail("文件中没有受支持的代理节点。")
+		} else {
+			fail("需要包含 proxies 的 Clash YAML 文件。")
+		}
 		return subscriptionData{}, err
 	}
 	var extension struct {

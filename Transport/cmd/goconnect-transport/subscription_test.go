@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -36,6 +38,75 @@ proxies:
 		t.Fatal("WS transport lost")
 	}
 }
+
+const fixtureRealityPublicKey = "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA"
+
+func TestSubscriptionRetainsSafeVlessRealityOpts(t *testing.T) {
+	const encryption = "mlkem768x25519plus.native.1rtt." + fixtureRealityPublicKey
+	data := []byte(`defaults: &reality
+  public-key: ` + fixtureRealityPublicKey + `
+  short-id: 01234567
+  support-x25519mlkem768: true
+  private-key: must-strip
+  certificate: /private/file
+proxies:
+  - {name: TCP, type: vless, uuid: 11111111-1111-4111-8111-111111111111, server: 192.0.2.1, port: 443, tls: true, encryption: ` + encryption + `, reality-opts: *reality}
+  - {name: RPC, type: vless, uuid: 11111111-1111-4111-8111-111111111111, server: 192.0.2.1, port: 443, tls: true, network: grpc, grpc-opts: {grpc-service-name: qa}, reality-opts: {<<: *reality, short-id: "0123ABCD", support-x25519mlkem768: false}}
+  - {name: Trojan, type: trojan, server: 192.0.2.1, port: 443, password: test, reality-opts: {public-key: ` + fixtureRealityPublicKey + `}}
+`)
+	nodes, err := parseSubscription(data)
+	if err != nil || len(nodes) != 3 {
+		t.Fatalf("expected three supported REALITY nodes, got %d: %v", len(nodes), err)
+	}
+	for i, want := range []map[string]any{
+		{"public-key": fixtureRealityPublicKey, "short-id": "01234567", "support-x25519mlkem768": true},
+		{"public-key": fixtureRealityPublicKey, "short-id": "0123ABCD", "support-x25519mlkem768": false},
+		{"public-key": fixtureRealityPublicKey},
+	} {
+		if got := nodes[i].Proxy["reality-opts"]; !reflect.DeepEqual(got, want) {
+			t.Errorf("%s REALITY options = %#v, want %#v", nodes[i].Name, got, want)
+		}
+	}
+	if nodes[0].Proxy["encryption"] != encryption {
+		t.Error("VLESS encryption lost")
+	}
+}
+
+func TestSubscriptionSkipsInvalidRealityWithoutDowngrade(t *testing.T) {
+	const valid = "{name: Reality, type: vless, server: 192.0.2.1, port: 443, network: tcp, tls: true, reality-opts: {public-key: " + fixtureRealityPublicKey + ", short-id: 'ab'}}"
+	const plain = "{name: Plain, type: socks5, server: 192.0.2.1, port: 1080}"
+	for _, tc := range []struct{ name, from, to string }{
+		{"short key", fixtureRealityPublicKey, "abc"},
+		{"invalid key alphabet", fixtureRealityPublicKey, strings.Repeat("+", 43)},
+		{"padded key", fixtureRealityPublicKey, fixtureRealityPublicKey + "="},
+		{"missing key", "public-key:", "unknown-key:"},
+		{"odd short id", "'ab'", "'abc'"},
+		{"nonhex short id", "'ab'", "'ag'"},
+		{"oversize short id", "'ab'", "'001122334455667788'"},
+		{"malformed hybrid option", "short-id: 'ab'", "support-x25519mlkem768: invalid"},
+		{"null reality", "{public-key: " + fixtureRealityPublicKey + ", short-id: 'ab'}", "null"},
+		{"nonmapping reality", "{public-key: " + fixtureRealityPublicKey + ", short-id: 'ab'}", "bad"},
+		{"missing TLS", "tls: true, ", ""},
+		{"disabled TLS", "tls: true", "tls: false"},
+		{"WebSocket", "network: tcp", "network: ws"},
+		{"malformed network", "network: tcp", "network: []"},
+		{"wrong protocol", "type: vless", "type: ss"},
+		{"malformed encryption", "type: vless", "type: vless, encryption: []"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bad := strings.Replace(valid, tc.from, tc.to, 1)
+			data := []byte("proxies: [" + bad + ", " + plain + "]")
+			nodes, err := parseSubscription(data)
+			if err != nil || len(nodes) != 1 || nodes[0].Name != "Plain" || subscriptionUnsupported(data, nodes) != 1 {
+				t.Fatalf("expected only the plain node to survive: %#v, %v", nodes, err)
+			}
+			if _, err := parseSubscription([]byte("proxies: [" + bad + "]")); !errors.Is(err, errNoSupportedNodes) {
+				t.Fatalf("expected unsupported-node error, got %v", err)
+			}
+		})
+	}
+}
+
 func TestSubscriptionRejectsAmbiguousNamesAndUnsupported(t *testing.T) {
 	for _, s := range []string{"proxies: []", "proxies: [{name: A, type: unknown, server: x}]", "proxies: [{name: A, type: vmess, server: x}, {name: A, type: vmess, server: y}]", "proxies: [{name: A, type: socks5, server: '/tmp/socket'}]"} {
 		if _, err := parseSubscription([]byte(s)); err == nil {
