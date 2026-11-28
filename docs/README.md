@@ -1,5 +1,6 @@
 # 技术记录索引
 
+- [2.2.4 签名、隔离更新与公开回验](PUBLISH_2.2.4_2026-11-28.md)
 - [2.2.4 VLESS 主线路支持 AnyConnect 公司副连接](RELEASE_2.2.4.md)
 - [2.2.3 签名、隔离更新与公开回验](PUBLISH_2.2.3_2026-11-28.md)
 - [2.2.3 VLESS TCP + REALITY 接收缓冲配置](RELEASE_2.2.3.md)
