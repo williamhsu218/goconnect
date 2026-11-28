@@ -6,16 +6,16 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/williamhsu218/goconnect/releases</link>
     <description>GoConnect signed updates</description>
     <item>
-      <title>GoConnect 2.2.3</title>
-      <pubDate>Fri, 27 Nov 2026 18:42:03 +0000</pubDate>
-      <sparkle:version>88</sparkle:version>
-      <sparkle:shortVersionString>2.2.3</sparkle:shortVersionString>
+      <title>GoConnect 2.2.4</title>
+      <pubDate>Sat, 28 Nov 2026 12:22:38 +0000</pubDate>
+      <sparkle:version>89</sparkle:version>
+      <sparkle:shortVersionString>2.2.4</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
-      <description>VLESS TCP + REALITY 节点可按需设置外层 TCP 接收缓冲。保存线路草稿后再确认安装重启。</description>
-      <enclosure url="https://github.com/williamhsu218/goconnect/releases/download/v2.2.3/GoConnect-2.2.3-macos-arm64.zip" length="36484475" type="application/octet-stream" sparkle:edSignature="nd+3vRiQmYnPI3Py+hspzu56PveM6qORJDqH9XE9IMK3p9yIpVsLcq1E7d5VnEbR+feMKHPpLT8aWHzyvxGZDw=="></enclosure>
+      <description>VLESS（含 REALITY）和 HY2 主线路均可搭配 AnyConnect 公司副连接。可以保持 VPN 连接下载更新。请先保存线路草稿，再确认安装重启。</description>
+      <enclosure url="https://github.com/williamhsu218/goconnect/releases/download/v2.2.4/GoConnect-2.2.4-macos-arm64.zip" length="36484756" type="application/octet-stream" sparkle:edSignature="JUCBCvxnmZCTdk8ZZAetGyZx5CuvrMcBnf+vaU1vx+97JbzSXnJtWy1sYCcA5qu0OV19vrAdl3rsO+nFjy1oAQ=="></enclosure>
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: DDT1l6JtqrfNwOOSXLAzCqEeaAkK/MF5s76S5pdQWcC3A9XOiLF9BcDb346/Bk3Du7QT6TQ7PahknszvVje7DA==
-length: 1317
+edSignature: kxuHdLlNhD8i/NUcgaDWH6QQ0ehmY2aQ/06eg6tv56NjupAKkf/E+hltjqUNueufq3nPHbuGWJD708sK6PySCQ==
+length: 1375
 -->
