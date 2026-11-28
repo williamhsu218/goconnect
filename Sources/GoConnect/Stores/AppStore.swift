@@ -519,8 +519,7 @@ final class AppStore {
                     if !test {
                         if companyConfiguration.enabled {
                             guard companyConfigurationReadable else { throw CompanyConnectionError.invalid("请先处理公司连接配置读取错误。") }
-                            guard node?.type == "hysteria2" else { throw CompanyConnectionError.invalid("双连接测试当前只支持 HY2 主线路。") }
-                            companyReservation = try await CompanyGatewayResolver.reservation(companyConfiguration, configuration: configuration)
+                            companyReservation = try await CompanyGatewayResolver.reservation(companyConfiguration, configuration: configuration, primaryNode: node)
                         } else { companyReservation = nil }
                         guard connectionGeneration == attempt, phase == "preparingService" else { return }
                         if restoringNetwork {

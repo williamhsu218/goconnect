@@ -19,7 +19,7 @@ public struct CompanyConnectionConfiguration: Codable, Equatable, Sendable {
               configuration.activeProfileID == primaryProfileID,
               let primary = configuration.connections.first(where: { $0.id == primaryProfileID }), primary.subscription != nil,
               let company = configuration.connections.first(where: { $0.id == companyProfileID }), company.subscription == nil else {
-            throw CompanyConnectionError.invalid("请选择不同的 HY2 主线路和 AnyConnect 公司线路。")
+            throw CompanyConnectionError.invalid("请选择 HY2 或 VLESS 订阅节点作为主线路，并选择独立的 AnyConnect 公司线路。")
         }
         _ = try company.profile.validatedServer()
         guard !networks.isEmpty, networks.count <= 32, domains.count <= 32, dnsServers.count <= 4 else {

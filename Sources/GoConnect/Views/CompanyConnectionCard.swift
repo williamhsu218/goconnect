@@ -130,9 +130,9 @@ struct CompanyConnectionSettings: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("公司副连接").font(.title2.weight(.semibold))
-            Text("在连接主线路前完成配置。公司副线路断开后，这些公司地址保持阻断。").font(.callout).foregroundStyle(.secondary)
+            Text("请在连接 HY2 或 VLESS 主线路前完成配置。公司副线路断开后，这些公司地址保持阻断。").font(.callout).foregroundStyle(.secondary)
             Form {
-                LabeledContent("HY2 主线路", value: store.configuration.activeConnection.displayName)
+                LabeledContent("主线路", value: store.configuration.activeConnection.displayName)
                 Toggle("启用公司副连接", isOn: $draft.enabled)
                 Picker("AnyConnect 公司线路", selection: $draft.companyProfileID) {
                     Text("请选择").tag(nil as UUID?)

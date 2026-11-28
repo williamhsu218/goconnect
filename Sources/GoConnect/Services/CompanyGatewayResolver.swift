@@ -3,8 +3,12 @@ import Darwin
 import GoConnectCore
 
 enum CompanyGatewayResolver {
-    static func reservation(_ company: CompanyConnectionConfiguration, configuration: Configuration) async throws -> CompanyReservation {
+    static func reservation(_ company: CompanyConnectionConfiguration, configuration: Configuration, primaryNode: SubscriptionNode?) async throws -> CompanyReservation {
         let value = try company.validated(in: configuration)
+        guard let primaryNode, ["hysteria2", "vless"].contains(primaryNode.type),
+              primaryNode.proxy["type"] == .string(primaryNode.type) else {
+            throw CompanyConnectionError.invalid("公司副连接需要 HY2 或 VLESS 主线路，请检查所选订阅节点。")
+        }
         guard let id = value.companyProfileID, let profile = configuration.connections.first(where: { $0.id == id })?.profile,
               let url = URLComponents(string: try profile.validatedServer()), let host = url.host else {
             throw CompanyConnectionError.invalid("公司网关配置无效。")
